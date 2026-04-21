@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { AnalysisListCards } from "@/features/credit-analyses/components/analysis-list-cards";
 import { AnalysisListSkeleton } from "@/features/credit-analyses/components/analysis-list-skeleton";
 import { useCreditAnalysesQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-query";
@@ -34,5 +36,17 @@ export function AnalysesPageView() {
     );
   }
 
-  return <AnalysisListCards analyses={analyses} />;
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <Link
+          href="/analises/nova"
+          className="inline-flex h-9 items-center rounded-[6px] bg-[#1a2b5e] px-3 text-[12px] font-medium text-white hover:bg-[#233a7d]"
+        >
+          Nova análise de crédito
+        </Link>
+      </div>
+      <AnalysisListCards analyses={analyses} />
+    </div>
+  );
 }

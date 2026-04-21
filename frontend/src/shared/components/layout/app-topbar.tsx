@@ -1,13 +1,27 @@
-"use client";
+﻿"use client";
 
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
 
 function resolveTopbarMeta(pathname: string): { title: string; subtitle: string } {
+  if (pathname.startsWith("/dashboard")) {
+    return {
+      title: "Dashboard",
+      subtitle: "Visão operacional e ponto de partida"
+    };
+  }
+
   if (pathname.startsWith("/dados-externos")) {
     return {
       title: "Dados Externos",
-      subtitle: "Evidencias de consulta externa por analise"
+      subtitle: "Evidências de consulta externa por análise"
+    };
+  }
+
+  if (pathname.startsWith("/analises/nova")) {
+    return {
+      title: "Nova Análise de Crédito",
+      subtitle: "Cadastro inicial, coleta de insumos e consolidação"
     };
   }
 
@@ -19,7 +33,7 @@ function resolveTopbarMeta(pathname: string): { title: string; subtitle: string 
   }
 
   return {
-    title: "Log de Decisões · Auditoria",
+    title: "Análises de Crédito",
     subtitle: "Acompanhamento das análises realizadas"
   };
 }

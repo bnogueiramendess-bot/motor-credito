@@ -10,6 +10,7 @@ from app.schemas.external_data import (
     ExternalDataFileMetadataCreate,
     ExternalDataFileSummaryRead,
 )
+from app.schemas.external_cnpj import ExternalCnpjData, ExternalCnpjLookupResponse
 from app.schemas.final_decision import FinalDecisionApplyRequest, FinalDecisionResponse
 from app.schemas.score import ScoreCalculationResponse, ScoreResultResponse
 
@@ -27,6 +28,8 @@ __all__ = [
     "ExternalDataEntryRead",
     "ExternalDataFileMetadataCreate",
     "ExternalDataFileSummaryRead",
+    "ExternalCnpjData",
+    "ExternalCnpjLookupResponse",
     "FinalDecisionApplyRequest",
     "FinalDecisionResponse",
     "ScoreCalculationResponse",

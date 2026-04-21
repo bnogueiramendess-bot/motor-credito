@@ -34,5 +34,10 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
-  get: <T>(url: string) => request<T>(url, { method: "GET" })
+  get: <T>(url: string) => request<T>(url, { method: "GET" }),
+  post: <TResponse, TBody>(url: string, body: TBody) =>
+    request<TResponse>(url, {
+      method: "POST",
+      body: JSON.stringify(body)
+    })
 };

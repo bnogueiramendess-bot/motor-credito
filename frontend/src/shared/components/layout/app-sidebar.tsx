@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -21,7 +21,8 @@ const navSections: NavSection[] = [
   {
     label: "Principal",
     items: [
-      { href: "/analises", label: "Análise de Crédito", icon: LayoutGrid },
+      { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
+      { href: "/analises", label: "Análise de Crédito", icon: ClipboardList },
       { label: "Fila de Análises", icon: ClipboardList }
     ]
   },
