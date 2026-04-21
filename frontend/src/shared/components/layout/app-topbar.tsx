@@ -4,6 +4,13 @@ import { useMemo } from "react";
 import { usePathname } from "next/navigation";
 
 function resolveTopbarMeta(pathname: string): { title: string; subtitle: string } {
+  if (pathname.startsWith("/dados-externos")) {
+    return {
+      title: "Dados Externos",
+      subtitle: "Evidencias de consulta externa por analise"
+    };
+  }
+
   if (/^\/analises\/\d+$/.test(pathname)) {
     return {
       title: "Análise de Crédito",

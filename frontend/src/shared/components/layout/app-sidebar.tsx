@@ -30,7 +30,7 @@ const navSections: NavSection[] = [
     items: [
       { label: "Regras de Crédito", icon: Cog },
       { label: "Importação Auto.", icon: Files },
-      { label: "Dados Externos", icon: CircleDot }
+      { href: "/dados-externos", label: "Dados Externos", icon: CircleDot }
     ]
   },
   {
