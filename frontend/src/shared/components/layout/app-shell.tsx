@@ -9,12 +9,12 @@ type AppShellProps = {
 
 export function AppShell({ children }: AppShellProps) {
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_right,_#e2e8f0,_transparent_35%),linear-gradient(180deg,#f8fafc_0%,#f1f5f9_100%)]">
-      <div className="mx-auto flex min-h-screen max-w-[1600px]">
+    <div className="min-h-screen bg-[#f0f2f5] text-[#111827]">
+      <div className="flex min-h-screen">
         <AppSidebar />
-        <div className="flex min-h-screen flex-1 flex-col">
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
           <AppTopbar />
-          <main className="flex-1 p-4 md:p-6">{children}</main>
+          <main className="flex-1 overflow-y-auto px-3 py-4 sm:px-4 lg:px-6">{children}</main>
         </div>
       </div>
     </div>

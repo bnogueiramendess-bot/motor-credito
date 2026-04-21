@@ -7,7 +7,7 @@ export function analysisStatusLabel(status: AnalysisStatus): string {
     case "in_progress":
       return "Em andamento";
     case "completed":
-      return "Concluida";
+      return "Concluída";
     default:
       return status;
   }
@@ -20,7 +20,7 @@ export function decisionLabel(decision: MotorResult | FinalDecision): string {
     case "rejected":
       return "Rejeitada";
     case "manual_review":
-      return "Revisao manual";
+      return "Revisão manual";
     default:
       return decision;
   }

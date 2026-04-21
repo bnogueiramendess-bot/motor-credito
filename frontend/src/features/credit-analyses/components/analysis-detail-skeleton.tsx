@@ -1,41 +1,27 @@
-import { Card, CardContent, CardHeader } from "@/shared/components/ui/card";
 import { Skeleton } from "@/shared/components/ui/skeleton";
 
 export function AnalysisDetailSkeleton() {
   return (
-    <div className="space-y-6">
-      <div className="grid gap-6 xl:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <Skeleton className="h-5 w-40" />
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </CardContent>
-        </Card>
-        <Card className="xl:col-span-2">
-          <CardHeader>
-            <Skeleton className="h-5 w-52" />
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Skeleton className="h-28 w-full" />
-            <Skeleton className="h-28 w-full" />
-          </CardContent>
-        </Card>
+    <div className="space-y-4">
+      <Skeleton className="h-8 w-40" />
+
+      <div className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
+        <div className="flex gap-3">
+          <Skeleton className="h-11 w-11 rounded-[8px]" />
+          <div className="w-full space-y-2">
+            <Skeleton className="h-5 w-64" />
+            <Skeleton className="h-4 w-full" />
+          </div>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <Skeleton className="h-5 w-48" />
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
-        </CardContent>
-      </Card>
+      <div className="grid gap-3 xl:grid-cols-3">
+        <Skeleton className="h-64 w-full rounded-[10px]" />
+        <Skeleton className="h-64 w-full rounded-[10px]" />
+        <Skeleton className="h-64 w-full rounded-[10px]" />
+      </div>
+
+      <Skeleton className="h-80 w-full rounded-[10px]" />
     </div>
   );
 }

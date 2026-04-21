@@ -24,29 +24,29 @@ export function toNumber(value: number | string | null | undefined): number | nu
 export function formatCurrency(value: number | string | null | undefined): string {
   const parsed = toNumber(value);
   if (parsed === null) {
-    return "Nao informado";
+    return "Não informado";
   }
   return currencyFormatter.format(parsed);
 }
 
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) {
-    return "Nao informado";
+    return "Não informado";
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return "Nao informado";
+    return "Não informado";
   }
   return dateTimeFormatter.format(date);
 }
 
 export function formatDate(value: string | null | undefined): string {
   if (!value) {
-    return "Nao informado";
+    return "Não informado";
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return "Nao informado";
+    return "Não informado";
   }
   return dateFormatter.format(date);
 }

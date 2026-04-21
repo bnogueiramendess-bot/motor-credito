@@ -33,6 +33,6 @@ export async function GET() {
     if (error instanceof BackendError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Falha ao carregar analises de credito." }, { status: 500 });
+    return NextResponse.json({ detail: "Falha ao carregar análises de crédito." }, { status: 500 });
   }
 }

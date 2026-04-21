@@ -22,7 +22,7 @@ function resolveVariant(value: StatusBadgeProps["value"]) {
 
 export function StatusBadge({ type, value }: StatusBadgeProps) {
   if (!value) {
-    return <Badge variant="outline">Nao definido</Badge>;
+    return <Badge variant="outline">Não definido</Badge>;
   }
 
   const label = type === "analysis" ? analysisStatusLabel(value as AnalysisStatus) : decisionLabel(value as MotorResult | FinalDecision);

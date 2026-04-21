@@ -2,53 +2,89 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, LayoutDashboard } from "lucide-react";
+import { CircleDot, ClipboardList, Cog, FileClock, Files, LayoutGrid, LucideIcon } from "lucide-react";
 
 import { cn } from "@/shared/lib/utils";
 
-const navItems = [
+type NavItem = {
+  label: string;
+  icon: LucideIcon;
+  href?: string;
+};
+
+type NavSection = {
+  label: string;
+  items: NavItem[];
+};
+
+const navSections: NavSection[] = [
   {
-    href: "/analises",
-    label: "Analise de credito",
-    icon: LayoutDashboard
+    label: "Principal",
+    items: [
+      { href: "/analises", label: "Análise de Crédito", icon: LayoutGrid },
+      { label: "Fila de Análises", icon: ClipboardList }
+    ]
+  },
+  {
+    label: "Configuração",
+    items: [
+      { label: "Regras de Crédito", icon: Cog },
+      { label: "Importação Auto.", icon: Files },
+      { label: "Dados Externos", icon: CircleDot }
+    ]
+  },
+  {
+    label: "Auditoria",
+    items: [{ label: "Log / Histórico", icon: FileClock }]
   }
 ];
+
+function NavEntry({ href, label, icon: Icon, isActive }: NavItem & { isActive: boolean }) {
+  const className = cn(
+    "group flex min-h-8 items-center gap-2 rounded-none border-r-2 px-4 text-xs font-medium transition-colors",
+    isActive
+      ? "border-r-[#2ecc9b] bg-white/10 text-white"
+      : "border-r-transparent text-white/60 hover:bg-white/10 hover:text-white"
+  );
+
+  if (!href) {
+    return (
+      <div className={cn(className, "cursor-default")}>
+        <Icon className="h-3.5 w-3.5 shrink-0" />
+        <span>{label}</span>
+      </div>
+    );
+  }
+
+  return (
+    <Link href={href} className={className}>
+      <Icon className="h-3.5 w-3.5 shrink-0" />
+      <span>{label}</span>
+    </Link>
+  );
+}
 
 export function AppSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden w-64 border-r border-border/80 bg-white/70 lg:block">
-      <div className="flex h-16 items-center gap-2 border-b border-border/80 px-6">
-        <div className="rounded-md bg-slate-900 p-1.5 text-white">
-          <Building2 className="h-4 w-4" />
-        </div>
-        <div>
-          <p className="text-sm font-semibold">Motor Credito</p>
-          <p className="text-xs text-muted-foreground">Painel operacional</p>
-        </div>
+    <aside className="hidden w-[220px] min-w-[220px] flex-col bg-[#1a2b5e] lg:flex">
+      <div className="border-b border-white/10 px-4 pb-4 pt-5">
+        <p className="text-base font-medium tracking-[-0.02em] text-white">Motor de Crédito</p>
+        <p className="mt-0.5 text-[10px] text-white/45">Adfert · Indorama Corporation</p>
       </div>
-      <nav className="space-y-2 p-3">
-        {navItems.map((item) => {
-          const isActive = pathname.startsWith(item.href);
 
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                isActive
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-              )}
-            >
-              <item.icon className="h-4 w-4" />
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
+      {navSections.map((section) => (
+        <section key={section.label} className="py-3">
+          <p className="px-4 pb-1.5 text-[10px] font-medium uppercase tracking-[0.05em] text-white/35">{section.label}</p>
+          <div className="space-y-0.5">
+            {section.items.map((item) => {
+              const isActive = item.href ? pathname.startsWith(item.href) : false;
+              return <NavEntry key={item.label} {...item} isActive={isActive} />;
+            })}
+          </div>
+        </section>
+      ))}
     </aside>
   );
 }

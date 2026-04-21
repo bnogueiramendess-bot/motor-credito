@@ -16,7 +16,7 @@ export function AnalysesPageView() {
   if (analysesQuery.isError) {
     return (
       <ErrorState
-        title="Nao foi possivel carregar as analises"
+        title="Não foi possível carregar as análises"
         description={analysesQuery.error.message}
         onRetry={() => analysesQuery.refetch()}
       />
@@ -28,8 +28,8 @@ export function AnalysesPageView() {
   if (!analyses.length) {
     return (
       <EmptyState
-        title="Nenhuma analise encontrada"
-        description="Quando houver analises registradas no backend, elas aparecerao aqui automaticamente."
+        title="Nenhuma análise encontrada"
+        description="Quando houver análises registradas no backend, elas aparecerão aqui automaticamente."
       />
     );
   }
