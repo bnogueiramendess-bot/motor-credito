@@ -24,7 +24,7 @@ export function entryMethodLabel(value: EntryMethod): string {
     case "upload":
       return "Upload";
     case "automatic":
-      return "Automatico";
+      return "Automático";
     default:
       return value;
   }

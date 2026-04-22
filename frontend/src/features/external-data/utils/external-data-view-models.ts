@@ -1,4 +1,4 @@
-import { ExternalDataDashboardApiResponse, ExternalDataEntryDashboardDto } from "@/features/external-data/api/contracts";
+﻿import { ExternalDataDashboardApiResponse, ExternalDataEntryDashboardDto } from "@/features/external-data/api/contracts";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 
 export type SourceStatus = "completed" | "failed" | "no_return";
@@ -84,19 +84,19 @@ export function buildKpis(sources: SourceViewModel[]): ExternalDataKpi[] {
   return [
     {
       id: "total",
-      label: "Fontes Consultadas",
+      label: "Fontes consultadas",
       value: String(total),
       helper: `${completed} com retorno`
     },
     {
       id: "restrictions",
-      label: "Fontes com Restricoes",
+      label: "Fontes com restrições",
       value: String(restricted),
       helper: `${noReturn} sem retorno`
     },
     {
       id: "attachments",
-      label: "Registros com Arquivos",
+      label: "Registros com arquivos",
       value: String(withFiles),
       helper: `${failed} com falha de detalhamento`
     }
@@ -111,7 +111,7 @@ export function buildFindings(sources: SourceViewModel[]): ExternalDataFinding[]
       findings.push({
         id: `failed-${source.id}`,
         title: "Falha no detalhamento da fonte",
-        description: `Entrada ${source.id} nao teve detalhes carregados: ${source.detail_fetch_error ?? "erro nao informado"}.`,
+        description: `Entrada ${source.id} não teve detalhes carregados: ${source.detail_fetch_error ?? "erro não informado"}.`,
         tone: "danger"
       });
     }
@@ -120,7 +120,7 @@ export function buildFindings(sources: SourceViewModel[]): ExternalDataFinding[]
       findings.push({
         id: `no-return-${source.id}`,
         title: "Fonte sem retorno de dados",
-        description: `Entrada ${source.id} nao trouxe indicadores numericos, notas ou arquivos.`,
+        description: `Entrada ${source.id} não trouxe indicadores numéricos, notas ou arquivos.`,
         tone: "warning"
       });
     }
@@ -128,8 +128,8 @@ export function buildFindings(sources: SourceViewModel[]): ExternalDataFinding[]
     if (source.has_restrictions) {
       findings.push({
         id: `restriction-${source.id}`,
-        title: "Fonte com restricoes ativas",
-        description: `Entrada ${source.id} sinalizou restricoes, com ${source.protests_count} protesto(s), ${source.lawsuits_count} acao(oes) e ${source.bounced_checks_count} cheque(s) sem fundo.`,
+        title: "Fonte com restrições ativas",
+        description: `Entrada ${source.id} sinalizou restrições, com ${source.protests_count} protesto(s), ${source.lawsuits_count} ação(ões) e ${source.bounced_checks_count} cheque(s) sem fundo.`,
         tone: "warning"
       });
     }
@@ -139,7 +139,7 @@ export function buildFindings(sources: SourceViewModel[]): ExternalDataFinding[]
     findings.push({
       id: "no-findings",
       title: "Sem achados relevantes no retorno atual",
-      description: "Nao ha falhas de consulta nem indicadores de restricao nas fontes carregadas.",
+      description: "Não há falhas de consulta nem indicadores de restrição nas fontes carregadas.",
       tone: "info"
     });
   }

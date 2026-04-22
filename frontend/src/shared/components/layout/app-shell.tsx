@@ -1,6 +1,5 @@
-import { ReactNode } from "react";
+﻿import { ReactNode } from "react";
 
-import { AppSidebar } from "@/shared/components/layout/app-sidebar";
 import { AppTopbar } from "@/shared/components/layout/app-topbar";
 
 type AppShellProps = {
@@ -9,14 +8,14 @@ type AppShellProps = {
 
 export function AppShell({ children }: AppShellProps) {
   return (
-    <div className="min-h-screen bg-[#f0f2f5] text-[#111827]">
-      <div className="flex min-h-screen">
-        <AppSidebar />
-        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <AppTopbar />
-          <main className="flex-1 overflow-y-auto px-3 py-4 sm:px-4 lg:px-6">{children}</main>
-        </div>
+    <div className="min-h-screen bg-[#f4f6fa] text-[#111827]">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+        <AppTopbar />
+        <main className="flex-1 px-4 pb-8 pt-7 sm:px-6 lg:px-8">
+          <div className="mx-auto w-full max-w-[1520px]">{children}</div>
+        </main>
       </div>
     </div>
   );
 }
+

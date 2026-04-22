@@ -5,22 +5,38 @@ import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 
 import { useCreditAnalysesQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-query";
-import { formatCurrency } from "@/features/credit-analyses/utils/formatters";
-import { EmptyState } from "@/shared/components/states/empty-state";
+import { resolveDecision } from "@/features/credit-analyses/utils/analysis-view-models";
+import { formatCurrency, toNumber } from "@/features/credit-analyses/utils/formatters";
+import { DashboardAnalysisGrid } from "@/features/dashboard/components/dashboard-analysis-grid";
+import { prioritizeDashboardAnalyses, toDashboardAnalysisCard } from "@/features/dashboard/utils/dashboard-analysis-view-models";
 import { ErrorState } from "@/shared/components/states/error-state";
+
+type StatusFilter = "all" | "created" | "in_progress" | "completed";
 
 function textIncludes(base: string | number | null | undefined, search: string) {
   if (base === null || base === undefined) {
     return false;
   }
+
   return String(base).toLowerCase().includes(search);
 }
+
+const statusFilters: Array<{ value: StatusFilter; label: string }> = [
+  { value: "all", label: "Todas" },
+  { value: "created", label: "Criação" },
+  { value: "in_progress", label: "Em andamento" },
+  { value: "completed", label: "Concluídas" }
+];
 
 export function DashboardPageView() {
   const analysesQuery = useCreditAnalysesQuery();
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const normalizedSearch = search.trim().toLowerCase();
-  const analyses = useMemo(() => analysesQuery.data ?? [], [analysesQuery.data]);
+
+  const analyses = useMemo(() => {
+    return prioritizeDashboardAnalyses(analysesQuery.data ?? []);
+  }, [analysesQuery.data]);
 
   const kpis = useMemo(() => {
     const total = analyses.length;
@@ -45,11 +61,51 @@ export function DashboardPageView() {
     };
   }, [analyses]);
 
+  const operationSummary = useMemo(() => {
+    const stats = analyses.reduce(
+      (acc, item) => {
+        const decision = resolveDecision(item.final_decision, item.motor_result);
+        if (decision === "approved") {
+          acc.approved += 1;
+        } else if (decision === "rejected") {
+          acc.rejected += 1;
+        } else if (decision === "manual_review") {
+          acc.manualReview += 1;
+        } else {
+          acc.pendingDecision += 1;
+        }
+
+        const effectiveLimit = toNumber(item.final_limit ?? item.suggested_limit ?? item.requested_limit);
+        if (effectiveLimit !== null && effectiveLimit > 0) {
+          acc.totalLimit += effectiveLimit;
+          acc.limitCount += 1;
+        }
+
+        return acc;
+      },
+      {
+        approved: 0,
+        rejected: 0,
+        manualReview: 0,
+        pendingDecision: 0,
+        totalLimit: 0,
+        limitCount: 0
+      }
+    );
+
+    return {
+      ...stats,
+      avgLimit: stats.limitCount ? stats.totalLimit / stats.limitCount : null,
+      latestProtocol: analyses[0]?.protocol_number ?? "-"
+    };
+  }, [analyses]);
+
   if (analysesQuery.isLoading) {
     return (
-      <div className="space-y-3">
-        <div className="h-24 animate-pulse rounded-[10px] bg-white" />
-        <div className="h-64 animate-pulse rounded-[10px] bg-white" />
+      <div className="space-y-4">
+        <div className="h-28 animate-pulse rounded-2xl bg-white" />
+        <div className="h-28 animate-pulse rounded-2xl bg-white" />
+        <div className="h-80 animate-pulse rounded-2xl bg-white" />
       </div>
     );
   }
@@ -64,107 +120,154 @@ export function DashboardPageView() {
     );
   }
 
-  const filtered = normalizedSearch
-    ? analyses.filter((analysis) => {
-        return (
-          textIncludes(analysis.customer?.company_name, normalizedSearch) ||
-          textIncludes(analysis.customer?.document_number, normalizedSearch) ||
-          textIncludes(analysis.protocol_number, normalizedSearch) ||
-          textIncludes(analysis.id, normalizedSearch)
-        );
-      })
-    : analyses;
+  const filtered = analyses.filter((analysis) => {
+    if (statusFilter !== "all" && analysis.analysis_status !== statusFilter) {
+      return false;
+    }
+
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    return (
+      textIncludes(analysis.customer?.company_name, normalizedSearch) ||
+      textIncludes(analysis.customer?.document_number, normalizedSearch) ||
+      textIncludes(analysis.protocol_number, normalizedSearch) ||
+      textIncludes(analysis.id, normalizedSearch)
+    );
+  });
+
+  const highlightedAnalyses = filtered.slice(0, 12).map(toDashboardAnalysisCard);
 
   return (
-    <section className="space-y-4">
-      <div className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-        <p className="text-[18px] font-medium text-[#111827]">Dashboard operacional</p>
-        <p className="mt-1 text-[12px] text-[#6b7280]">
-          Baseado apenas nos dados reais disponíveis hoje no backend de análises, clientes e resultados já calculados.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Link
-            href="/analises/nova"
-            className="inline-flex h-9 items-center rounded-[6px] bg-[#1a2b5e] px-3 text-[12px] font-medium text-white hover:bg-[#233a7d]"
-          >
-            Nova análise de crédito
-          </Link>
-          <Link
-            href="/analises"
-            className="inline-flex h-9 items-center rounded-[6px] border border-[#d1d5db] bg-white px-3 text-[12px] font-medium text-[#374151] hover:bg-[#f9fafb]"
-          >
-            Continuar ou localizar análise
-          </Link>
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-3">
-          <p className="text-[11px] text-[#6b7280]">Análises totais</p>
-          <p className="mt-1 text-[20px] font-medium text-[#111827]">{kpis.total}</p>
+    <section className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Análises totais</p>
+          <p className="text-3xl font-semibold text-[#111827]">{kpis.total}</p>
         </article>
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-3">
-          <p className="text-[11px] text-[#6b7280]">Em criação</p>
-          <p className="mt-1 text-[20px] font-medium text-[#1a2b5e]">{kpis.created}</p>
+        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Em criação</p>
+          <p className="text-3xl font-semibold text-[#1a2b5e]">{kpis.created}</p>
         </article>
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-3">
-          <p className="text-[11px] text-[#6b7280]">Em andamento</p>
-          <p className="mt-1 text-[20px] font-medium text-[#d97706]">{kpis.inProgress}</p>
+        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Em andamento</p>
+          <p className="text-3xl font-semibold text-[#d97706]">{kpis.inProgress}</p>
         </article>
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-3">
-          <p className="text-[11px] text-[#6b7280]">Concluídas</p>
-          <p className="mt-1 text-[20px] font-medium text-[#059669]">{kpis.completed}</p>
+        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Concluídas</p>
+          <p className="text-3xl font-semibold text-[#059669]">{kpis.completed}</p>
         </article>
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-3">
-          <p className="text-[11px] text-[#6b7280]">Limite sugerido médio</p>
-          <p className="mt-1 text-[20px] font-medium text-[#111827]">{formatCurrency(kpis.avgSuggestedLimit)}</p>
+        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Limite sugerido médio</p>
+          <p className="text-2xl font-semibold text-[#111827]">{formatCurrency(kpis.avgSuggestedLimit)}</p>
         </article>
       </div>
 
-      <div className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-        <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">
-          Busca por razão social, CNPJ, protocolo ou ID da análise
+      <div className="rounded-2xl border border-[#e5e9f2] bg-white p-5 shadow-sm">
+        <label htmlFor="dashboard-search" className="mb-2 block text-sm font-medium text-[#374151]">
+          Buscar por razão social, CNPJ, protocolo ou ID da análise
         </label>
-        <div className="flex items-center gap-2 rounded-[8px] border border-[#d1d5db] bg-white px-3">
-          <Search className="h-4 w-4 text-[#9ca3af]" />
+        <div className="flex items-center gap-3 rounded-xl border border-[#d7dde8] bg-[#fbfcfe] px-4">
+          <Search className="h-4 w-4 text-[#94a3b8]" />
           <input
+            id="dashboard-search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Ex.: 12.345.678/0001-99, ACME, 42, PROTOCOLO"
-            className="h-9 w-full border-none bg-transparent text-[12px] text-[#374151] outline-none placeholder:text-[#9ca3af]"
+            placeholder="Ex.: 12.345.678/0001-99, ACME, 42 ou protocolo"
+            className="h-11 w-full border-none bg-transparent text-sm text-[#111827] outline-none placeholder:text-[#94a3b8]"
           />
+        </div>
+
+        <div className="mt-4 border-t border-[#eef2f7] pt-3">
+          <p className="mb-2 text-xs font-medium uppercase tracking-[0.05em] text-[#6b7280]">Filtrar por status</p>
+          <div className="flex flex-wrap gap-2">
+            {statusFilters.map((filter) => {
+              const active = statusFilter === filter.value;
+              return (
+                <button
+                  key={filter.value}
+                  type="button"
+                  onClick={() => setStatusFilter(filter.value)}
+                  className={
+                    active
+                      ? "rounded-full border border-[#1a2b5e] bg-[#1a2b5e] px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm"
+                      : "rounded-full border border-[#d4dbe7] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#4b5563] transition hover:border-[#c4cedd] hover:bg-[#f7f9fd]"
+                  }
+                >
+                  {filter.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
-      {!filtered.length ? (
-        <EmptyState title="Nenhum resultado encontrado" description="Ajuste o termo da busca para localizar análises existentes." />
-      ) : (
-        <div className="overflow-hidden rounded-[10px] border border-[#e2e5eb] bg-white">
-          <div className="grid grid-cols-[90px_1fr_160px_140px_140px] bg-[#f9fafb] px-4 py-2 text-[10px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">
-            <span>ID</span>
-            <span>Cliente</span>
-            <span>CNPJ</span>
-            <span>Status</span>
-            <span className="text-right">Ações</span>
-          </div>
-          {filtered.slice(0, 20).map((analysis) => (
-            <div
-              key={analysis.id}
-              className="grid grid-cols-[90px_1fr_160px_140px_140px] items-center border-t border-[#f3f4f6] px-4 py-2 text-[12px]"
-            >
-              <span className="font-medium text-[#374151]">#{analysis.id}</span>
-              <span className="truncate text-[#111827]">{analysis.customer?.company_name ?? `Cliente #${analysis.customer_id}`}</span>
-              <span className="text-[#6b7280]">{analysis.customer?.document_number ?? "Não informado"}</span>
-              <span className="text-[#6b7280]">{analysis.analysis_status}</span>
-              <div className="text-right">
-                <Link href={`/analises/${analysis.id}`} className="text-[#1a2b5e] hover:underline">
-                  Abrir análise
-                </Link>
-              </div>
-            </div>
-          ))}
+      <div className="grid gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-9">
+          <DashboardAnalysisGrid analyses={highlightedAnalyses} filteredCount={filtered.length} />
         </div>
-      )}
+
+        <aside className="space-y-4 xl:col-span-3">
+          <section className="rounded-2xl border border-[#e5e9f2] bg-white p-5 shadow-sm">
+            <p className="text-sm font-semibold text-[#111827]">Resumo da operação</p>
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
+              <p className="text-xs font-medium uppercase tracking-[0.05em] text-amber-700">Pendentes para decisão</p>
+              <p className="mt-1 text-3xl font-bold leading-none text-amber-900">{operationSummary.pendingDecision}</p>
+            </div>
+            <div className="mt-4 space-y-3 text-sm text-[#4b5563]">
+              <p className="flex items-center justify-between">
+                <span>Aprovadas</span>
+                <strong className="text-lg font-semibold text-emerald-700">{operationSummary.approved}</strong>
+              </p>
+              <p className="flex items-center justify-between">
+                <span>Recusadas</span>
+                <strong className="text-lg font-semibold text-rose-700">{operationSummary.rejected}</strong>
+              </p>
+              <p className="flex items-center justify-between">
+                <span>Revisão manual</span>
+                <strong className="text-lg font-semibold text-amber-700">{operationSummary.manualReview}</strong>
+              </p>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-[#e5e9f2] bg-white p-5 shadow-sm">
+            <p className="text-sm font-semibold text-[#111827]">Atalhos operacionais</p>
+            <div className="mt-3 grid gap-2">
+              <Link
+                href="/analises"
+                className="rounded-xl border border-[#d6dbe6] bg-[#f9fbff] px-3 py-2 text-sm font-medium text-[#1a2b5e] transition hover:bg-[#f1f5ff]"
+              >
+                Abrir fila de análises
+              </Link>
+              <Link
+                href="/analises/nova"
+                className="rounded-xl border border-[#d6dbe6] bg-[#f9fbff] px-3 py-2 text-sm font-medium text-[#1a2b5e] transition hover:bg-[#f1f5ff]"
+              >
+                Iniciar nova solicitação
+              </Link>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-[#e5e9f2] bg-white p-5 shadow-sm">
+            <p className="text-sm font-semibold text-[#111827]">Legenda de status</p>
+            <div className="mt-3 space-y-2 text-sm text-[#4b5563]">
+              <p className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                <span>Aprovado</span>
+              </p>
+              <p className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-rose-500" />
+                <span>Recusado</span>
+              </p>
+              <p className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
+                <span>Pendente ou revisão manual</span>
+              </p>
+            </div>
+          </section>
+        </aside>
+      </div>
     </section>
   );
 }

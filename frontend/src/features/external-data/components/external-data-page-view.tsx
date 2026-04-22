@@ -26,8 +26,8 @@ export function ExternalDataPageView({ analysisId }: ExternalDataPageViewProps) 
   if (!analysisId) {
     return (
       <EmptyState
-        title="Selecione uma analise"
-        description="Acesse esta tela com o parametro analysisId, por exemplo: /dados-externos?analysisId=1."
+        title="Selecione uma análise"
+        description="Acesse esta tela com o parâmetro analysisId, por exemplo: /dados-externos?analysisId=1."
       />
     );
   }
@@ -38,16 +38,16 @@ export function ExternalDataPageView({ analysisId }: ExternalDataPageViewProps) 
 
   if (dashboardQuery.isError) {
     return (
-      <div className="space-y-4">
+      <div className="readability-standard space-y-4">
         <Link
           href="/analises"
           className="inline-flex items-center gap-2 rounded-[6px] border border-[#d1d5db] bg-white px-3 py-1.5 text-[12px] text-[#374151] hover:bg-[#f9fafb]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          Voltar para analises
+          Voltar para análises
         </Link>
         <ErrorState
-          title="Nao foi possivel carregar os dados externos"
+          title="Não foi possível carregar os dados externos"
           description={dashboardQuery.error.message}
           onRetry={() => dashboardQuery.refetch()}
         />
@@ -59,8 +59,8 @@ export function ExternalDataPageView({ analysisId }: ExternalDataPageViewProps) 
   if (!payload) {
     return (
       <EmptyState
-        title="Dados externos indisponiveis"
-        description="Nao foi possivel encontrar os dados da analise informada."
+        title="Dados externos indisponíveis"
+        description="Não foi possível encontrar os dados da análise informada."
       />
     );
   }
@@ -69,18 +69,18 @@ export function ExternalDataPageView({ analysisId }: ExternalDataPageViewProps) 
 
   if (!viewModel.sources.length) {
     return (
-      <div className="space-y-4">
+      <div className="readability-standard space-y-4">
         <ExternalDataHeader analysis={viewModel.analysis} customer={viewModel.customer} />
         <EmptyState
           title="Nenhuma consulta externa registrada"
-          description="Quando o backend registrar fontes para esta analise, os dados aparecerao aqui."
+          description="Quando o backend registrar fontes para esta análise, os dados aparecerão aqui."
         />
       </div>
     );
   }
 
   return (
-    <section className="space-y-4">
+    <section className="readability-standard space-y-4">
       <ExternalDataHeader analysis={viewModel.analysis} customer={viewModel.customer} />
       <ExternalDataKpis items={viewModel.kpis} />
 
@@ -88,7 +88,7 @@ export function ExternalDataPageView({ analysisId }: ExternalDataPageViewProps) 
         <Alert>
           <Info className="h-4 w-4" />
           <AlertTitle>Dados parciais em fontes consultadas</AlertTitle>
-          <AlertDescription>{viewModel.partialDataCount} fonte(s) possuem campos nao informados no retorno.</AlertDescription>
+          <AlertDescription>{viewModel.partialDataCount} fonte(s) possuem campos não informados no retorno.</AlertDescription>
         </Alert>
       ) : null}
 

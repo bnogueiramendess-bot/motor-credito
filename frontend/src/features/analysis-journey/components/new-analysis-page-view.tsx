@@ -282,7 +282,7 @@ export function NewAnalysisPageView() {
         : true;
 
   return (
-    <section className="space-y-4">
+    <section className="readability-standard space-y-4">
       <div className="flex items-center justify-between rounded-[10px] border border-[#e2e5eb] bg-white p-4">
         <div>
           <p className="text-[16px] font-medium text-[#111827]">Nova análise de crédito</p>

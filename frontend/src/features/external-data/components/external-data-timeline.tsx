@@ -28,7 +28,7 @@ export function ExternalDataTimeline({ events }: ExternalDataTimelineProps) {
       </div>
 
       {!timelineItems.length ? (
-        <p className="text-[12px] text-[#6b7280]">Nao ha eventos de dados externos para esta analise.</p>
+        <p className="text-[12px] text-[#6b7280]">Não há eventos de dados externos para esta análise.</p>
       ) : (
         <div className="space-y-2">
           {timelineItems.map((event) => (

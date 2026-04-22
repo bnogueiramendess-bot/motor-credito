@@ -15,7 +15,7 @@ export function ExternalDataHeader({ analysis, customer }: ExternalDataHeaderPro
     <article className="rounded-[10px] border border-[#e2e5eb] bg-white px-4 py-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0 space-y-2">
-          <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Contexto da analise</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Contexto da análise</p>
           <div className="flex min-w-0 items-start gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] bg-[#e8edf7] text-[#1a2b5e]">
               <Building2 className="h-4 w-4" />
@@ -24,7 +24,7 @@ export function ExternalDataHeader({ analysis, customer }: ExternalDataHeaderPro
               <p className="truncate text-[15px] font-medium text-[#111827]">{customer?.company_name ?? `Cliente #${analysis.customer_id}`}</p>
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#6b7280]">
                 <p>
-                  CNPJ: <span className="font-medium text-[#374151]">{customer?.document_number ?? "Nao informado"}</span>
+                  CNPJ: <span className="font-medium text-[#374151]">{customer?.document_number ?? "Não informado"}</span>
                 </p>
                 <p>
                   Protocolo: <span className="font-medium text-[#374151]">{analysis.protocol_number}</span>

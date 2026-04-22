@@ -37,7 +37,7 @@ export function AnalysesPageView() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="readability-standard space-y-4">
       <div className="flex justify-end">
         <Link
           href="/analises/nova"

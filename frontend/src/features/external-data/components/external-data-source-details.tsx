@@ -21,7 +21,7 @@ function sourceStatusLabel(status: SourceViewModel["status"]) {
 
 function valueOrFallback(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") {
-    return "Nao informado";
+    return "Não informado";
   }
   return String(value);
 }
@@ -52,13 +52,13 @@ export function ExternalDataSourceDetails({ sources }: ExternalDataSourceDetails
                 {source.detail_fetch_status === "failed" ? (
                   <div className="flex items-start gap-2 rounded-[8px] border border-rose-200 bg-rose-50 p-3">
                     <FileX2 className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
-                    <p className="text-[11px] text-rose-700">Detalhe indisponivel para esta fonte: {source.detail_fetch_error ?? "erro nao informado"}.</p>
+                    <p className="text-[11px] text-rose-700">Detalhe indisponível para esta fonte: {source.detail_fetch_error ?? "erro não informado"}.</p>
                   </div>
                 ) : (
                   <>
                     <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                       <div className="rounded-[6px] bg-[#f9fafb] p-2">
-                        <p className="text-[10px] text-[#9ca3af]">Data do relatorio</p>
+                        <p className="text-[10px] text-[#9ca3af]">Data do relatório</p>
                         <p className="text-[12px] font-medium text-[#111827]">{formatDate(source.report_date)}</p>
                       </div>
                       <div className="rounded-[6px] bg-[#f9fafb] p-2">
@@ -70,8 +70,8 @@ export function ExternalDataSourceDetails({ sources }: ExternalDataSourceDetails
                         <p className="text-[12px] font-medium text-[#111827]">{valueOrFallback(source.source_rating)}</p>
                       </div>
                       <div className="rounded-[6px] bg-[#f9fafb] p-2">
-                        <p className="text-[10px] text-[#9ca3af]">Restricoes</p>
-                        <p className="text-[12px] font-medium text-[#111827]">{source.has_restrictions ? "Sim" : "Nao"}</p>
+                        <p className="text-[10px] text-[#9ca3af]">Restrições</p>
+                        <p className="text-[12px] font-medium text-[#111827]">{source.has_restrictions ? "Sim" : "Não"}</p>
                       </div>
                     </div>
 
@@ -83,7 +83,7 @@ export function ExternalDataSourceDetails({ sources }: ExternalDataSourceDetails
                         </p>
                       </div>
                       <div className="rounded-[6px] border border-[#edf0f2] p-2">
-                        <p className="text-[10px] text-[#9ca3af]">Acoes judiciais</p>
+                        <p className="text-[10px] text-[#9ca3af]">Ações judiciais</p>
                         <p className="text-[12px] text-[#111827]">
                           {source.lawsuits_count} • {formatCurrency(source.lawsuits_amount)}
                         </p>
@@ -110,7 +110,7 @@ export function ExternalDataSourceDetails({ sources }: ExternalDataSourceDetails
                     </div>
 
                     <div className="rounded-[6px] border border-[#edf0f2] p-2">
-                      <p className="text-[10px] text-[#9ca3af]">Observacoes</p>
+                      <p className="text-[10px] text-[#9ca3af]">Observações</p>
                       <p className="text-[12px] text-[#111827]">{valueOrFallback(source.notes)}</p>
                     </div>
 

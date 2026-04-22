@@ -1,4 +1,4 @@
-import { AnalysisStatus, FinalDecision, MotorResult } from "@/features/credit-analyses/api/contracts";
+﻿import { AnalysisStatus, FinalDecision, MotorResult } from "@/features/credit-analyses/api/contracts";
 
 export function analysisStatusLabel(status: AnalysisStatus): string {
   switch (status) {
