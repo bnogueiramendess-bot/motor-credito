@@ -34,6 +34,15 @@ export async function fetchBackend<T>(path: string, options?: RequestInit): Prom
     throw new BackendError(await parseErrorMessage(response), response.status);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const contentLength = response.headers.get("content-length");
+  if (contentLength === "0") {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 

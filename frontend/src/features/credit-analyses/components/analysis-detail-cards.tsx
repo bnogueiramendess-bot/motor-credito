@@ -1,6 +1,14 @@
 import { CreditAnalysisDetailApiResponse } from "@/features/credit-analyses/api/contracts";
 import { AnalysisEventsTimeline } from "@/features/credit-analyses/components/analysis-events-timeline";
-import { buildRuleSignals, decisionPill, getInitials, resolveDecision, toneStyles } from "@/features/credit-analyses/utils/analysis-view-models";
+import {
+  buildExplainabilityRuleRows,
+  buildExplainabilitySummary,
+  buildRuleSignals,
+  decisionPill,
+  getInitials,
+  resolveDecision,
+  toneStyles
+} from "@/features/credit-analyses/utils/analysis-view-models";
 import { formatCurrency, formatDate, formatDateTime, toNumber } from "@/features/credit-analyses/utils/formatters";
 
 const scoreBandLabel: Record<string, string> = {
@@ -21,15 +29,17 @@ function scorePointer(finalScore: number | null) {
 
 export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   const { analysis, customer, score, decision, final_decision: finalDecision, events } = data;
-  const resolvedDecision = decisionPill(resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result));
+
+  const resolvedDecision = decisionPill(
+    resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result)
+  );
   const decisionStyles = toneStyles(resolvedDecision.tone);
 
   const finalScore = toNumber(score?.final_score);
-  const ruleSignals = buildRuleSignals({
-    analysis,
-    score,
-    memory: decision?.decision_memory_json ?? analysis.decision_memory_json
-  });
+  const decisionMemory = decision?.decision_memory_json ?? analysis.decision_memory_json;
+  const ruleSignals = buildRuleSignals({ analysis, score, memory: decisionMemory });
+  const explainabilitySummary = buildExplainabilitySummary({ score, decisionMemory });
+  const explainabilityRows = buildExplainabilityRuleRows({ score, decisionMemory });
 
   return (
     <section className="space-y-4">
@@ -68,7 +78,9 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
           <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Score de crédito</p>
           <div className="flex flex-col items-center">
             <p className="text-[38px] font-medium leading-none text-[#1a2b5e]">{finalScore ?? "--"}</p>
-            <p className="mt-1 text-[11px] text-[#6b7280]">Faixa: {score ? scoreBandLabel[score.score_band] ?? score.score_band : "Não calculada"}</p>
+            <p className="mt-1 text-[11px] text-[#6b7280]">
+              Faixa: {score ? scoreBandLabel[score.score_band] ?? score.score_band : "Não calculada"}
+            </p>
             <div className="mt-3 w-full">
               <div className="relative h-1.5 overflow-hidden rounded bg-[#e5e7eb]">
                 <div className="h-full w-full rounded bg-[linear-gradient(90deg,#ef4444_0%,#f59e0b_40%,#10b981_70%)]" />
@@ -90,7 +102,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
         <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
           <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Limite sugerido</p>
           <p className="text-[28px] font-medium text-[#111827]">{formatCurrency(decision?.suggested_limit ?? analysis.suggested_limit)}</p>
-          <p className="mt-1 text-[11px] text-[#6b7280]">Calculado automaticamente pelo motor</p>
+          <p className="mt-1 text-[11px] text-[#6b7280]">Calculado automaticamente pelo motor.</p>
 
           <div className="mt-3 space-y-2 text-[12px]">
             <div className="flex items-center justify-between gap-3">
@@ -107,7 +119,9 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-[#6b7280]">Limite final</span>
-              <span className="text-right font-medium text-[#d97706]">{formatCurrency(finalDecision?.final_limit ?? analysis.final_limit)}</span>
+              <span className="text-right font-medium text-[#d97706]">
+                {formatCurrency(finalDecision?.final_limit ?? analysis.final_limit)}
+              </span>
             </div>
           </div>
         </article>
@@ -135,14 +149,35 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
         <div className="mb-3 flex flex-col gap-2 border-b border-[#f3f4f6] pb-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
             <p className="text-[13px] font-medium text-[#111827]">Decisão do motor</p>
-            <span className={`rounded-[6px] px-3 py-1 text-[11px] font-medium ${decisionStyles.badge}`}>{resolvedDecision.label.toUpperCase()}</span>
+            <span className={`rounded-[6px] px-3 py-1 text-[11px] font-medium ${decisionStyles.badge}`}>
+              {resolvedDecision.label.toUpperCase()}
+            </span>
           </div>
-          <p className="text-[11px] text-[#6b7280]">Processado em {formatDateTime(decision?.decision_calculated_at ?? analysis.decision_calculated_at)}</p>
+          <p className="text-[11px] text-[#6b7280]">
+            Processado em {formatDateTime(decision?.decision_calculated_at ?? analysis.decision_calculated_at)}
+          </p>
         </div>
+
+        {explainabilitySummary ? (
+          <div className="mb-4 rounded-[8px] border border-[#e5e9f2] bg-[#f8faff] p-3">
+            <p className="text-[12px] font-semibold text-[#1f2937]">Resumo da explicabilidade</p>
+            <p className="mt-1 text-[11px] text-[#4b5563]">Política usada: {explainabilitySummary.policyLabel}</p>
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+              <span className="rounded bg-white px-2 py-1 text-[#334155]">{explainabilitySummary.evaluatedRules} regras avaliadas</span>
+              <span className="rounded bg-white px-2 py-1 text-[#166534]">{explainabilitySummary.matchedRules} atendidas</span>
+              <span className="rounded bg-white px-2 py-1 text-[#92400e]">{explainabilitySummary.notMatchedRules} não atendidas</span>
+              <span className="rounded bg-white px-2 py-1 text-[#1e3a8a]">
+                Impacto total no score: {explainabilitySummary.totalImpactPoints > 0 ? "+" : ""}
+                {explainabilitySummary.totalImpactPoints}
+              </span>
+            </div>
+            <p className="mt-2 text-[11px] text-[#374151]">{explainabilitySummary.executiveReason}</p>
+          </div>
+        ) : null}
 
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_240px]">
           <div>
-            <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Regras aplicadas</p>
+            <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Sinais de decisão</p>
             <div className="space-y-1.5">
               {ruleSignals.map((rule) => {
                 const styles = toneStyles(rule.tone);
@@ -158,11 +193,36 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
               })}
             </div>
 
-            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              <button className="rounded-[8px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white">Confirmar aprovação</button>
-              <button className="rounded-[8px] bg-[#d97706] px-3 py-2 text-[12px] font-medium text-white">Solicitar exceção</button>
-              <button className="rounded-[8px] bg-[#dc2626] px-3 py-2 text-[12px] font-medium text-white">Reprovar</button>
-              <button className="rounded-[8px] border border-[#d1d5db] bg-white px-3 py-2 text-[12px] font-medium text-[#374151]">Observações</button>
+            <div className="mt-4">
+              <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">
+                Regras avaliadas com explicabilidade
+              </p>
+              <div className="space-y-2">
+                {explainabilityRows.length ? (
+                  explainabilityRows.slice(0, 20).map((row) => {
+                    const styles = toneStyles(row.tone);
+                    return (
+                      <div key={row.id} className="rounded-[8px] border border-[#e5e7eb] bg-white px-3 py-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[12px] font-medium text-[#111827]">{row.label}</p>
+                          <span className={`rounded px-2 py-0.5 text-[10px] font-medium ${styles.badge}`}>{row.statusLabel}</span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-[#6b7280]">{row.pillarLabel}</p>
+                        <div className="mt-1 grid gap-1 text-[11px] text-[#374151] sm:grid-cols-3">
+                          <p>Esperado: {row.expectedValueLabel}</p>
+                          <p>Encontrado: {row.actualValueLabel}</p>
+                          <p>Impacto: {row.impactLabel}</p>
+                        </div>
+                        <p className="mt-1 text-[11px] text-[#4b5563]">{row.reason}</p>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-[8px] border border-dashed border-[#d1d5db] bg-[#f9fafb] px-3 py-4 text-[12px] text-[#6b7280]">
+                    A explicabilidade detalhada desta análise ainda não está disponível.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

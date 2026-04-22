@@ -1,5 +1,6 @@
 ﻿
 from app.schemas.credit_analysis import CreditAnalysisCreate, CreditAnalysisRead
+from app.schemas.credit_policy import CreditPolicyRead
 from app.schemas.customer import CustomerCreate, CustomerRead
 from app.schemas.decision_event import DecisionEventCreate, DecisionEventRead
 from app.schemas.decision import DecisionCalculationResponse, DecisionResultResponse
@@ -17,6 +18,7 @@ from app.schemas.score import ScoreCalculationResponse, ScoreResultResponse
 __all__ = [
     "CreditAnalysisCreate",
     "CreditAnalysisRead",
+    "CreditPolicyRead",
     "CustomerCreate",
     "CustomerRead",
     "DecisionEventCreate",

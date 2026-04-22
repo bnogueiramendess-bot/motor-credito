@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -6,9 +6,10 @@ import { Search } from "lucide-react";
 
 import { useCreditAnalysesQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-query";
 import { resolveDecision } from "@/features/credit-analyses/utils/analysis-view-models";
-import { formatCurrency, toNumber } from "@/features/credit-analyses/utils/formatters";
+import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { DashboardAnalysisGrid } from "@/features/dashboard/components/dashboard-analysis-grid";
 import { prioritizeDashboardAnalyses, toDashboardAnalysisCard } from "@/features/dashboard/utils/dashboard-analysis-view-models";
+import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
 import { ErrorState } from "@/shared/components/states/error-state";
 
 type StatusFilter = "all" | "created" | "in_progress" | "completed";
@@ -141,27 +142,40 @@ export function DashboardPageView() {
 
   return (
     <section className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Análises totais</p>
-          <p className="text-3xl font-semibold text-[#111827]">{kpis.total}</p>
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-xl font-semibold tracking-[-0.01em] text-[#111827]">Visão geral das análises</h2>
+          <p className="mt-1 text-sm text-[#6b7280]">Acompanhe o volume, o andamento e os resultados das análises de crédito.</p>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#6b7280]">Análises totais</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#111827]">{kpis.total}</p>
         </article>
-        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Em criação</p>
-          <p className="text-3xl font-semibold text-[#1a2b5e]">{kpis.created}</p>
+
+        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-blue-200 bg-blue-50/40 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-blue-700">Em criação</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-blue-900">{kpis.created}</p>
         </article>
-        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Em andamento</p>
-          <p className="text-3xl font-semibold text-[#d97706]">{kpis.inProgress}</p>
+
+        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-amber-200 bg-amber-50/45 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-amber-700">Em andamento</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-amber-900">{kpis.inProgress}</p>
         </article>
-        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Concluídas</p>
-          <p className="text-3xl font-semibold text-[#059669]">{kpis.completed}</p>
+
+        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-emerald-200 bg-emerald-50/45 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-emerald-700">Concluídas</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-emerald-900">{kpis.completed}</p>
         </article>
-        <article className="flex min-h-[124px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-[0.04em] text-[#6b7280]">Limite sugerido médio</p>
-          <p className="text-2xl font-semibold text-[#111827]">{formatCurrency(kpis.avgSuggestedLimit)}</p>
+
+        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#dde5f3] bg-[#f8fafe] px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#64748b]">Limite sugerido médio</p>
+          <p className="whitespace-nowrap text-[32px] font-bold leading-none tracking-[-0.02em] text-[#0f172a]">
+            {formatCurrencyInThousands(kpis.avgSuggestedLimit)}
+          </p>
         </article>
+      </div>
       </div>
 
       <div className="rounded-2xl border border-[#e5e9f2] bg-white p-5 shadow-sm">

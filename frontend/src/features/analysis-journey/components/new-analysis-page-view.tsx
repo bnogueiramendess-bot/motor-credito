@@ -17,7 +17,7 @@ import {
 import { formatCurrencyBRL, resolveManualStatus, resolveUploadStatus } from "@/features/analysis-journey/utils/view-models";
 import { ErrorState } from "@/shared/components/states/error-state";
 
-const steps = ["Identificação do cliente", "Dados da solicitação", "Informações para análise", "Revisão e envio"];
+const steps = ["Identificação do cliente", "Informações para análise", "Dados da solicitação", "Revisão e envio"];
 
 type PrimarySource = "manual" | "internal" | "external";
 
@@ -168,7 +168,7 @@ export function NewAnalysisPageView() {
       if (!customer.companyName.trim()) return "Preencha a Razão social para continuar.";
     }
 
-    if (stepNumber === 2) {
+    if (stepNumber === 3) {
       if (toNumberInput(analysis.requestedLimit) <= 0) return "Preencha Limite solicitado com valor maior que zero.";
     }
 
@@ -277,7 +277,7 @@ export function NewAnalysisPageView() {
   const canContinue =
     step === 1
       ? normalizedCnpj.length === 14 && Boolean(customer.companyName)
-      : step === 2
+      : step === 3
         ? toNumberInput(analysis.requestedLimit) > 0
         : true;
 
@@ -367,7 +367,7 @@ export function NewAnalysisPageView() {
         </div>
       ) : null}
 
-      {step === 2 ? (
+      {step === 3 ? (
         <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
           <p className="text-[13px] font-medium text-[#111827]">Dados da solicitação</p>
           <p className="text-[12px] text-[#6b7280]">Informe os dados principais da solicitação de crédito antes de avançar.</p>
@@ -393,7 +393,7 @@ export function NewAnalysisPageView() {
         </article>
       ) : null}
 
-      {step === 3 ? (
+      {step === 2 ? (
         <article className="space-y-4 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
           <div>
             <p className="text-[13px] font-medium text-[#111827]">Informações para análise</p>

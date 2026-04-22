@@ -30,6 +30,15 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     throw new ApiError(await parseError(response), response.status);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const contentLength = response.headers.get("content-length");
+  if (contentLength === "0") {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 
@@ -39,5 +48,11 @@ export const apiClient = {
     request<TResponse>(url, {
       method: "POST",
       body: JSON.stringify(body)
-    })
+    }),
+  patch: <TResponse, TBody>(url: string, body: TBody) =>
+    request<TResponse>(url, {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    }),
+  delete: <TResponse = void>(url: string) => request<TResponse>(url, { method: "DELETE" })
 };

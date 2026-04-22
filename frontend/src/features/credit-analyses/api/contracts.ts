@@ -4,6 +4,97 @@ export type FinalDecision = "approved" | "rejected" | "manual_review";
 export type ActorType = "system" | "user";
 export type ScoreBand = "A" | "B" | "C" | "D";
 
+export type ExplainabilityRuleItemDto = {
+  rule_id: number | null;
+  label: string;
+  pillar: string | null;
+  score_band: ScoreBand | null;
+  field: string | null;
+  operator: string | null;
+  expected_value: unknown;
+  actual_value: unknown;
+  matched: boolean;
+  impact_points?: number;
+  impact_type: string;
+  reason: string;
+};
+
+export type ScoreExplainabilitySummaryDto = {
+  base_score: number;
+  final_score: number;
+  score_band: ScoreBand;
+  evaluated_rules: number;
+  matched_rules: number;
+  not_matched_rules: number;
+  total_impact_points: number;
+};
+
+export type ScoreExplainabilityDto = {
+  policy: {
+    policy_id: number;
+    policy_name: string;
+    policy_version: number;
+    policy_status: string;
+    published_at: string | null;
+  };
+  score_summary: ScoreExplainabilitySummaryDto;
+  rules_evaluated: ExplainabilityRuleItemDto[];
+};
+
+export type DecisionExplainabilitySummaryDto = {
+  evaluated_rules: number;
+  matched_rules: number;
+  not_matched_rules: number;
+  motor_result: MotorResult;
+  suggested_limit: string;
+  executive_reason: string;
+};
+
+export type DecisionExplainabilityDto = {
+  policy: {
+    policy_id: number;
+    policy_name: string;
+    policy_version: number;
+    policy_status: string;
+    published_at: string | null;
+  };
+  decision_summary: DecisionExplainabilitySummaryDto;
+  rules_evaluated: ExplainabilityRuleItemDto[];
+  score_explainability: ScoreExplainabilityDto | null;
+};
+
+export type ScoreCalculationMemoryDto = {
+  base_score: number;
+  applied_adjustments: Array<{
+    reason: string;
+    points: number;
+    detail: string;
+  }>;
+  final_score: number;
+  score_band: ScoreBand;
+  source_entry_id: number;
+  source_type: string;
+  summary: string;
+  explainability?: ScoreExplainabilityDto;
+};
+
+export type DecisionMemoryDto = {
+  score_band: ScoreBand;
+  score_final: number;
+  source_entry_id: number;
+  source_type: string;
+  revenue_basis_type: string;
+  revenue_basis_value: string;
+  indebtedness_ratio: string | null;
+  requested_limit: string;
+  band_limit_cap: string;
+  suggested_limit: string;
+  motor_result: MotorResult;
+  reasons: string[];
+  summary: string;
+  explainability?: DecisionExplainabilityDto;
+};
+
 export type CustomerDto = {
   id: number;
   company_name: string;

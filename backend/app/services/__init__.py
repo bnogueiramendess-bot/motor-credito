@@ -1,6 +1,7 @@
 ﻿
 from app.services.final_decision import FinalDecisionError, apply_final_decision
 from app.services.decision import DecisionCalculationError, calculate_and_apply_decision
+from app.services.credit_policy import get_active_credit_policy
 from app.services.protocol import generate_protocol_number
 from app.services.score import ScoreCalculationError, calculate_and_upsert_score
 
@@ -8,6 +9,7 @@ __all__ = [
     "FinalDecisionError",
     "DecisionCalculationError",
     "ScoreCalculationError",
+    "get_active_credit_policy",
     "apply_final_decision",
     "calculate_and_apply_decision",
     "calculate_and_upsert_score",

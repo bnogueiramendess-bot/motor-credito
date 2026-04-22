@@ -1,4 +1,13 @@
-import { CreditAnalysisDto, DecisionEventDto, FinalDecision, MotorResult, ScoreResultDto } from "@/features/credit-analyses/api/contracts";
+import {
+  CreditAnalysisDto,
+  DecisionEventDto,
+  DecisionMemoryDto,
+  ExplainabilityRuleItemDto,
+  FinalDecision,
+  MotorResult,
+  ScoreCalculationMemoryDto,
+  ScoreResultDto
+} from "@/features/credit-analyses/api/contracts";
 import { formatCurrency, formatDateTime, toNumber } from "@/features/credit-analyses/utils/formatters";
 
 type UiTone = "success" | "warning" | "danger" | "info" | "neutral";
@@ -16,6 +25,121 @@ export type Milestone = {
   meta: string;
   tone: UiTone;
 };
+
+export type ExplainabilitySummaryView = {
+  policyLabel: string;
+  evaluatedRules: number;
+  matchedRules: number;
+  notMatchedRules: number;
+  totalImpactPoints: number;
+  executiveReason: string;
+};
+
+export type ExplainabilityRuleRowView = {
+  id: string;
+  label: string;
+  pillarLabel: string;
+  expectedValueLabel: string;
+  actualValueLabel: string;
+  statusLabel: string;
+  impactLabel: string;
+  tone: UiTone;
+  reason: string;
+};
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseScoreMemory(memory: Record<string, unknown> | null): ScoreCalculationMemoryDto | null {
+  if (!memory) {
+    return null;
+  }
+  return memory as unknown as ScoreCalculationMemoryDto;
+}
+
+function parseDecisionMemory(memory: Record<string, unknown> | null): DecisionMemoryDto | null {
+  if (!memory) {
+    return null;
+  }
+  return memory as unknown as DecisionMemoryDto;
+}
+
+function normalizeRuleItem(item: unknown): ExplainabilityRuleItemDto | null {
+  const record = asObject(item);
+  if (!record) {
+    return null;
+  }
+
+  if (typeof record.label !== "string" || typeof record.reason !== "string" || typeof record.impact_type !== "string") {
+    return null;
+  }
+
+  return {
+    rule_id: typeof record.rule_id === "number" ? record.rule_id : null,
+    label: record.label,
+    pillar: typeof record.pillar === "string" ? record.pillar : null,
+    score_band: typeof record.score_band === "string" ? (record.score_band as ExplainabilityRuleItemDto["score_band"]) : null,
+    field: typeof record.field === "string" ? record.field : null,
+    operator: typeof record.operator === "string" ? record.operator : null,
+    expected_value: record.expected_value,
+    actual_value: record.actual_value,
+    matched: Boolean(record.matched),
+    impact_points: typeof record.impact_points === "number" ? record.impact_points : 0,
+    impact_type: record.impact_type,
+    reason: record.reason
+  };
+}
+
+function pillarLabel(pillar: string | null) {
+  if (pillar === "externalRisk") return "Risco externo";
+  if (pillar === "legal") return "Jurídico";
+  if (pillar === "internalHistory") return "Histórico interno";
+  if (pillar === "financialCapacity") return "Capacidade financeira";
+  return "Condição derivada";
+}
+
+function formatAnyValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "Sim" : "Não";
+  }
+
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : value.toFixed(4).replace(".", ",");
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return JSON.stringify(value);
+}
+
+function rowTone(matched: boolean): UiTone {
+  return matched ? "success" : "warning";
+}
+
+function toRuleRow(item: ExplainabilityRuleItemDto): ExplainabilityRuleRowView {
+  const impactPoints = item.impact_points ?? 0;
+  return {
+    id: item.rule_id !== null ? String(item.rule_id) : `${item.label}-${item.reason}`,
+    label: item.label,
+    pillarLabel: pillarLabel(item.pillar),
+    expectedValueLabel: formatAnyValue(item.expected_value),
+    actualValueLabel: formatAnyValue(item.actual_value),
+    statusLabel: item.matched ? "Atendida" : "Não atendida",
+    impactLabel: impactPoints === 0 ? "Sem impacto direto" : `${impactPoints > 0 ? "+" : ""}${impactPoints} pontos`,
+    tone: rowTone(item.matched),
+    reason: item.reason
+  };
+}
 
 export function getInitials(name: string | null | undefined): string {
   if (!name) {
@@ -39,10 +163,7 @@ export function resolveDecision(finalDecision: FinalDecision | null, motorResult
   return finalDecision ?? motorResult;
 }
 
-export function decisionPill(decision: FinalDecision | MotorResult | null): {
-  label: string;
-  tone: UiTone;
-} {
+export function decisionPill(decision: FinalDecision | MotorResult | null): { label: string; tone: UiTone } {
   if (decision === "approved") {
     return { label: "Aprovado", tone: "success" };
   }
@@ -50,7 +171,7 @@ export function decisionPill(decision: FinalDecision | MotorResult | null): {
     return { label: "Reprovado", tone: "danger" };
   }
   if (decision === "manual_review") {
-    return { label: "Aprovado com condição", tone: "warning" };
+    return { label: "Revisão manual", tone: "warning" };
   }
 
   return { label: "Pendente", tone: "neutral" };
@@ -61,28 +182,28 @@ function reasonLabel(reason: string): RuleSignal | null {
     case "score_band_d":
       return {
         id: reason,
-        text: "Score na faixa D detectado pelo motor",
+        text: "Score na faixa D detectado pelo motor.",
         status: "BLOQUEIO",
         tone: "danger"
       };
     case "active_restrictions_detected":
       return {
         id: reason,
-        text: "Restrições ativas em órgãos de crédito",
+        text: "Restrições ativas em órgãos de crédito.",
         status: "BLOQUEIO",
         tone: "danger"
       };
     case "approved_by_band_a_and_low_indebtedness":
       return {
         id: reason,
-        text: "Score elevado com baixo endividamento",
-        status: "PASSOU",
+        text: "Score elevado com endividamento dentro da política.",
+        status: "ATENDE",
         tone: "success"
       };
     case "manual_review_required_by_policy":
       return {
         id: reason,
-        text: "Política interna exigiu revisão manual",
+        text: "Política exigiu revisão manual para esta combinação de critérios.",
         status: "ATENÇÃO",
         tone: "warning"
       };
@@ -106,6 +227,17 @@ function parseReasonSignals(memory: Record<string, unknown> | null): RuleSignal[
     .filter((item): item is RuleSignal => item !== null);
 }
 
+function parseExplainabilityRuleRows(memory: Record<string, unknown> | null): ExplainabilityRuleRowView[] {
+  const scoreMemory = parseScoreMemory(memory);
+  const scoreExplainability = asObject(scoreMemory?.explainability);
+  const scoreRulesRaw = scoreExplainability?.rules_evaluated;
+  if (!Array.isArray(scoreRulesRaw)) {
+    return [];
+  }
+
+  return scoreRulesRaw.map(normalizeRuleItem).filter((item): item is ExplainabilityRuleItemDto => item !== null).map(toRuleRow);
+}
+
 export function buildRuleSignals({
   analysis,
   score,
@@ -117,12 +249,23 @@ export function buildRuleSignals({
 }): RuleSignal[] {
   const items: RuleSignal[] = [...parseReasonSignals(memory)];
 
-  const finalScore = score?.final_score ?? 0;
+  const explainabilityRows = parseExplainabilityRuleRows(score?.calculation_memory_json ?? null);
+  if (explainabilityRows.length) {
+    const matchedCount = explainabilityRows.filter((item) => item.statusLabel === "Atendida").length;
+    items.push({
+      id: "explainability-summary",
+      text: `${explainabilityRows.length} regras avaliadas no score (${matchedCount} atendidas).`,
+      status: "EXPLICAÇÃO",
+      tone: "info"
+    });
+  }
+
+  const finalScore = toNumber(score?.final_score) ?? 0;
   if (score) {
     items.push({
       id: "score-track",
-      text: `Score calculado em ${finalScore} (${score.score_band})`,
-      status: finalScore >= 600 ? "PASSOU" : "RISCO",
+      text: `Score calculado em ${finalScore} (${score.score_band}).`,
+      status: finalScore >= 600 ? "ATENDE" : "RISCO",
       tone: finalScore >= 600 ? "success" : "warning"
     });
   }
@@ -132,7 +275,7 @@ export function buildRuleSignals({
   if (requested !== null && suggested !== null && requested > suggested) {
     items.push({
       id: "limit-adjust",
-      text: `Limite ajustado de ${formatCurrency(requested)} para ${formatCurrency(suggested)}`,
+      text: `Limite ajustado de ${formatCurrency(requested)} para ${formatCurrency(suggested)}.`,
       status: "AJUSTE",
       tone: "warning"
     });
@@ -141,8 +284,8 @@ export function buildRuleSignals({
   if (analysis.analysis_status === "completed") {
     items.push({
       id: "completed",
-      text: "Análise finalizada e registrada no histórico",
-      status: "PASSOU",
+      text: "Análise finalizada e registrada no histórico.",
+      status: "ATENDE",
       tone: "success"
     });
   }
@@ -150,13 +293,62 @@ export function buildRuleSignals({
   if (!items.length) {
     items.push({
       id: "fallback",
-      text: "Sem regras explícitas retornadas para esta análise",
+      text: "Sem sinais estruturados de explicabilidade para esta análise.",
       status: "INFO",
       tone: "neutral"
     });
   }
 
   return items.slice(0, 6);
+}
+
+export function buildExplainabilitySummary({
+  score,
+  decisionMemory
+}: {
+  score: ScoreResultDto | null;
+  decisionMemory: Record<string, unknown> | null;
+}): ExplainabilitySummaryView | null {
+  const parsedDecisionMemory = parseDecisionMemory(decisionMemory);
+  const decisionExplainability = asObject(parsedDecisionMemory?.explainability);
+  const decisionSummary = asObject(decisionExplainability?.decision_summary);
+
+  const scoreMemory = parseScoreMemory(score?.calculation_memory_json ?? null);
+  const scoreExplainability = asObject(scoreMemory?.explainability);
+  const scoreSummary = asObject(scoreExplainability?.score_summary);
+  const policy = asObject(scoreExplainability?.policy) ?? asObject(decisionExplainability?.policy);
+
+  if (!scoreSummary || !decisionSummary || !policy) {
+    return null;
+  }
+
+  return {
+    policyLabel: `${String(policy.policy_name)} (v${String(policy.policy_version)})`,
+    evaluatedRules: Number(scoreSummary.evaluated_rules ?? 0),
+    matchedRules: Number(scoreSummary.matched_rules ?? 0),
+    notMatchedRules: Number(scoreSummary.not_matched_rules ?? 0),
+    totalImpactPoints: Number(scoreSummary.total_impact_points ?? 0),
+    executiveReason: String(decisionSummary.executive_reason ?? "Sem justificativa executiva disponível.")
+  };
+}
+
+export function buildExplainabilityRuleRows({
+  score,
+  decisionMemory
+}: {
+  score: ScoreResultDto | null;
+  decisionMemory: Record<string, unknown> | null;
+}): ExplainabilityRuleRowView[] {
+  const scoreRows = parseExplainabilityRuleRows(score?.calculation_memory_json ?? null);
+
+  const parsedDecisionMemory = parseDecisionMemory(decisionMemory);
+  const decisionExplainability = asObject(parsedDecisionMemory?.explainability);
+  const decisionRulesRaw = decisionExplainability?.rules_evaluated;
+  const decisionRows = Array.isArray(decisionRulesRaw)
+    ? decisionRulesRaw.map(normalizeRuleItem).filter((item): item is ExplainabilityRuleItemDto => item !== null).map(toRuleRow)
+    : [];
+
+  return [...scoreRows, ...decisionRows];
 }
 
 export function buildMilestones({

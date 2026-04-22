@@ -1,10 +1,13 @@
 ﻿
 from app.models.credit_analysis import CreditAnalysis
+from app.models.credit_policy import CreditPolicy
+from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.customer import Customer
 from app.models.decision_event import DecisionEvent
 from app.models.enums import (
     ActorType,
     AnalysisStatus,
+    CreditPolicyStatus,
     EntryMethod,
     FinalDecision,
     MotorResult,
@@ -19,6 +22,9 @@ __all__ = [
     "ActorType",
     "AnalysisStatus",
     "CreditAnalysis",
+    "CreditPolicy",
+    "CreditPolicyRule",
+    "CreditPolicyStatus",
     "Customer",
     "DecisionEvent",
     "EntryMethod",

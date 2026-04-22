@@ -43,3 +43,9 @@ class ScoreBand(StrEnum):
     B = "B"
     C = "C"
     D = "D"
+
+
+class CreditPolicyStatus(StrEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    ARCHIVED = "archived"

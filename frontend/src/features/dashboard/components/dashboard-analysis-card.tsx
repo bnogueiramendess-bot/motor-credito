@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 
 import { Badge } from "@/shared/components/ui/badge";
@@ -18,14 +18,20 @@ function statusVariant(tone: DashboardAnalysisCardViewModel["statusTone"]) {
   return "warning";
 }
 
-function statusAccentClass(group: DashboardAnalysisCardViewModel["statusGroup"]) {
-  if (group === "pending") {
-    return "border-l-4 border-l-amber-400";
+function scoreAccentClass(scoreBand: DashboardAnalysisCardViewModel["scoreBand"]) {
+  if (scoreBand === "A") {
+    return "border-emerald-300";
   }
-  if (group === "rejected") {
-    return "border-l-4 border-l-rose-400";
+  if (scoreBand === "B") {
+    return "border-blue-300";
   }
-  return "border-l-4 border-l-emerald-400";
+  if (scoreBand === "C") {
+    return "border-amber-300";
+  }
+  if (scoreBand === "D") {
+    return "border-rose-300";
+  }
+  return "border-slate-300";
 }
 
 function scoreToneClass(tone: DashboardAnalysisCardViewModel["scoreTone"]) {
@@ -47,7 +53,7 @@ function scoreToneClass(tone: DashboardAnalysisCardViewModel["scoreTone"]) {
 export function DashboardAnalysisCard({ analysis }: DashboardAnalysisCardProps) {
   return (
     <article
-      className={`flex h-full min-h-[252px] flex-col rounded-2xl border border-[#e5e9f2] bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${statusAccentClass(analysis.statusGroup)}`}
+      className={`flex h-full min-h-[252px] flex-col rounded-2xl border-2 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${scoreAccentClass(analysis.scoreBand)}`}
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 truncate text-base font-semibold text-[#111827]">{analysis.companyName}</p>
@@ -67,7 +73,7 @@ export function DashboardAnalysisCard({ analysis }: DashboardAnalysisCardProps) 
 
         <div className="rounded-xl border border-[#dde5f3] bg-[#f7f9fd] px-3 py-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.05em] text-[#64748b]">Limite recomendado</p>
-          <p className="mt-1 truncate text-2xl font-bold leading-tight text-[#0f172a]">{analysis.limitLabel}</p>
+          <p className="mt-1 text-xl font-bold leading-tight text-[#0f172a] md:text-2xl">{analysis.limitLabel}</p>
         </div>
       </div>
 

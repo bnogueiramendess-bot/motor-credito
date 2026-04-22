@@ -1,6 +1,7 @@
-import { CreditAnalysisListItemDto, FinalDecision, MotorResult } from "@/features/credit-analyses/api/contracts";
-import { formatCurrency, toNumber } from "@/features/credit-analyses/utils/formatters";
+﻿import { CreditAnalysisListItemDto, FinalDecision, MotorResult } from "@/features/credit-analyses/api/contracts";
+import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { resolveDecision } from "@/features/credit-analyses/utils/analysis-view-models";
+import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
 
 export type DashboardCardStatusTone = "success" | "warning" | "danger";
 export type DashboardScoreTone = "positive" | "good" | "warning" | "danger" | "neutral";
@@ -94,6 +95,6 @@ export function toDashboardAnalysisCard(item: CreditAnalysisListItemDto): Dashbo
     scoreLabel: score.label,
     scoreTone: score.tone,
     scoreBand: score.band,
-    limitLabel: formatCurrency(item.final_limit ?? item.suggested_limit ?? item.requested_limit)
+    limitLabel: formatCurrencyInThousands(item.final_limit ?? item.suggested_limit ?? item.requested_limit)
   };
 }
