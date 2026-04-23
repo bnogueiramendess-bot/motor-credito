@@ -1,30 +1,65 @@
 import { CreditAnalysisDetailApiResponse } from "@/features/credit-analyses/api/contracts";
-import { AnalysisEventsTimeline } from "@/features/credit-analyses/components/analysis-events-timeline";
 import {
   buildExplainabilityRuleRows,
   buildExplainabilitySummary,
+  buildMilestones,
   buildRuleSignals,
   decisionPill,
-  getInitials,
-  resolveDecision,
-  toneStyles
+  resolveDecision
 } from "@/features/credit-analyses/utils/analysis-view-models";
-import { formatCurrency, formatDate, formatDateTime, toNumber } from "@/features/credit-analyses/utils/formatters";
-
-const scoreBandLabel: Record<string, string> = {
-  A: "Baixo risco",
-  B: "Moderado",
-  C: "Atenção",
-  D: "Alto risco"
-};
+import { formatCurrency, formatDate, toNumber } from "@/features/credit-analyses/utils/formatters";
+import { AccordionRules } from "@/features/credit-analysis/dossier/components/accordion-rules";
+import { FactorList } from "@/features/credit-analysis/dossier/components/factor-list";
+import { KpiCard } from "@/features/credit-analysis/dossier/components/kpi-card";
+import { RatingCard } from "@/features/credit-analysis/dossier/components/rating-card";
+import { RecommendationBanner } from "@/features/credit-analysis/dossier/components/recommendation-banner";
+import { Timeline } from "@/features/credit-analysis/dossier/components/timeline";
+import { Button } from "@/shared/components/ui/button";
+import { Card } from "@/shared/components/ui/card";
 
 type AnalysisDetailCardsProps = {
   data: CreditAnalysisDetailApiResponse;
 };
 
-function scorePointer(finalScore: number | null) {
-  const normalized = Math.max(0, Math.min(1000, finalScore ?? 0));
-  return `${Math.round((normalized / 1000) * 100)}%`;
+const DOSSIER_CONTAINER = "w-full px-8 xl:px-10 2xl:px-12";
+
+const riskLabelByBand: Record<string, string> = {
+  A: "Baixo risco",
+  B: "Risco moderado",
+  C: "Atenção",
+  D: "Alto risco"
+};
+
+function inferBand(score: number | null): "A" | "B" | "C" | "D" {
+  if (score === null) return "C";
+  if (score >= 800) return "A";
+  if (score >= 650) return "B";
+  if (score >= 500) return "C";
+  return "D";
+}
+
+function normalizeText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u00A0/g, " ")
+    .trim();
+}
+
+function noInfo(value: string | null | undefined, fallback = "Dados não disponíveis") {
+  if (!value) return fallback;
+  const normalized = normalizeText(value).toLowerCase();
+  if (
+    normalized.includes("nao informado") ||
+    normalized.includes("nao informada") ||
+    normalized.includes("nao informados") ||
+    normalized.includes("nao informadas") ||
+    normalized === "r$ 0,00" ||
+    normalized === "r$0,00"
+  ) {
+    return fallback;
+  }
+  return value;
 }
 
 export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
@@ -33,207 +68,313 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   const resolvedDecision = decisionPill(
     resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result)
   );
-  const decisionStyles = toneStyles(resolvedDecision.tone);
+  const scoreNumber = toNumber(score?.final_score);
+  const scoreBand = score?.score_band ?? inferBand(scoreNumber);
+  const scoreSummary = buildExplainabilitySummary({
+    score,
+    decisionMemory: decision?.decision_memory_json ?? analysis.decision_memory_json
+  });
+  const explainabilityRows = buildExplainabilityRuleRows({
+    score,
+    decisionMemory: decision?.decision_memory_json ?? analysis.decision_memory_json
+  });
+  const ruleSignals = buildRuleSignals({
+    analysis,
+    score,
+    memory: decision?.decision_memory_json ?? analysis.decision_memory_json
+  });
+  const milestones = buildMilestones({ analysis, events });
 
-  const finalScore = toNumber(score?.final_score);
-  const decisionMemory = decision?.decision_memory_json ?? analysis.decision_memory_json;
-  const ruleSignals = buildRuleSignals({ analysis, score, memory: decisionMemory });
-  const explainabilitySummary = buildExplainabilitySummary({ score, decisionMemory });
-  const explainabilityRows = buildExplainabilityRuleRows({ score, decisionMemory });
+  const confidencePercent = scoreSummary
+    ? Math.round((scoreSummary.matchedRules / Math.max(scoreSummary.evaluatedRules, 1)) * 100)
+    : 72;
+
+  const recommendationTitle =
+    resolvedDecision.tone === "danger"
+      ? "Não recomendado no momento"
+      : resolvedDecision.tone === "success"
+        ? "Aprovação recomendada"
+        : "Revisar antes de decidir";
+
+  const recommendationLimit = noInfo(
+    formatCurrency(finalDecision?.final_limit ?? decision?.suggested_limit ?? analysis.suggested_limit)
+  );
+
+  const positiveFactorsRaw = explainabilityRows.filter((item) => item.statusLabel === "Atendida").slice(0, 3);
+  const riskFactorsRaw = explainabilityRows.filter((item) => item.statusLabel !== "Atendida").slice(0, 3);
+
+  const positiveFactors =
+    positiveFactorsRaw.length > 0
+      ? positiveFactorsRaw.map((item) => ({
+          text: item.label,
+          points: item.impactLabel.includes("Sem impacto") ? "+0 pts" : item.impactLabel.replace("pontos", "pts"),
+          tone: "positive" as const
+        }))
+      : [{ text: "Sem protestos registrados", points: "+0 pts", tone: "positive" as const }];
+
+  const riskFactors =
+    riskFactorsRaw.length > 0
+      ? riskFactorsRaw.map((item) => ({
+          text: item.label,
+          points: item.impactLabel.replace("pontos", "pts"),
+          tone: "negative" as const
+        }))
+      : [{ text: "Dados financeiros insuficientes", points: "Atenção", tone: "warning" as const }];
+
+  const insights = [
+    {
+      text: `${(scoreSummary?.evaluatedRules ?? explainabilityRows.length) || 0} regras avaliadas pelo motor`,
+      points: String((scoreSummary?.evaluatedRules ?? explainabilityRows.length) || 0),
+      tone: "positive" as const
+    },
+    {
+      text: "Fatores críticos encontrados",
+      points: String(riskFactors.length),
+      tone: "negative" as const
+    },
+    ...ruleSignals.slice(0, 2).map((signal) => ({
+      text: signal.text,
+      points: signal.status === "INFO" ? "" : signal.status,
+      tone:
+        signal.tone === "danger"
+          ? ("negative" as const)
+          : signal.tone === "warning"
+            ? ("warning" as const)
+            : ("positive" as const)
+    }))
+  ].slice(0, 4);
+
+  const rules = explainabilityRows.length
+    ? explainabilityRows.slice(0, 14).map((row) => ({
+        name: row.label,
+        condition: `${row.expectedValueLabel} → ${row.actualValueLabel}`,
+        result: row.statusLabel === "Atendida" ? ("ok" as const) : row.tone === "danger" ? ("fail" as const) : ("warn" as const),
+        label: row.statusLabel === "Atendida" ? "Passou ✓" : row.tone === "danger" ? "Falhou ✕" : "Atenção!"
+      }))
+    : [
+        { name: "Score mínimo", condition: "score >= 500", result: "warn" as const, label: "Atenção!" },
+        { name: "Sem protestos", condition: "protestos = 0", result: "ok" as const, label: "Passou ✓" }
+      ];
+
+  const operationRows = [
+    ["Valor solicitado", noInfo(formatCurrency(analysis.requested_limit), "Informação não disponível")],
+    ["Prazo", "Não disponível no momento"],
+    ["Modalidade", "Não disponível no momento"],
+    ["Mitigação", "Não disponível no momento"],
+    ["Garantias", "Não disponível no momento"],
+    ["Colateral", "Não disponível no momento"]
+  ] as const;
+
+  const timelineItems = milestones.map((item) => ({
+    title: item.title,
+    meta: item.meta,
+    tone: item.tone === "success" ? ("green" as const) : item.tone === "warning" ? ("amber" as const) : ("blue" as const)
+  }));
+
+  const kpiLimitValue = noInfo(formatCurrency(decision?.suggested_limit ?? analysis.suggested_limit));
+  const annualRevenue = noInfo(formatCurrency(analysis.annual_revenue_estimated), "Informação não disponível");
+  const annualRevenueMissing = annualRevenue === "Informação não disponível";
+  const exposureValue = noInfo(formatCurrency(analysis.exposure_amount), "Informação não disponível");
+  const exposureMissing = exposureValue === "Informação não disponível";
+  const customerMeta = [
+    customer?.segment || "Segmento não informado",
+    customer?.region || "Região não informada",
+    customer?.relationship_start_date ? `Relacionamento: ${formatDate(customer.relationship_start_date)}` : "Relacionamento não informado"
+  ];
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-col gap-3 rounded-[10px] border border-[#e2e5eb] bg-white px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] bg-[#e8edf7] text-[15px] font-semibold text-[#1a2b5e]">
-            {getInitials(customer?.company_name)}
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-[15px] font-medium text-[#111827]">{customer?.company_name ?? `Cliente #${analysis.customer_id}`}</p>
-            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#6b7280]">
-              <p>
-                CNPJ: <span className="font-medium text-[#374151]">{customer?.document_number ?? "Não informado"}</span>
-              </p>
-              <p>
-                Segmento: <span className="font-medium text-[#374151]">{customer?.segment ?? "Não informado"}</span>
-              </p>
-              <p>
-                Região: <span className="font-medium text-[#374151]">{customer?.region ?? "Não informada"}</span>
-              </p>
-              <p>
-                Relacionamento: <span className="font-medium text-[#374151]">{formatDate(customer?.relationship_start_date)}</span>
-              </p>
+    <section className="bg-[#F7F9FC] pb-10" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div className={DOSSIER_CONTAINER}>
+        <div className="bg-[#0D1B2A] px-4 py-3 sm:px-5 sm:py-3.5 lg:px-6">
+          <div className="grid grid-cols-12 items-start gap-5 xl:items-center xl:gap-4">
+            <div className="col-span-12 min-w-0 xl:col-span-9">
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded-[20px] border border-[rgba(117,212,238,0.25)] bg-[rgba(117,212,238,0.12)] px-2.5 py-1 text-[11px] text-[#75D4EE]">
+                <div className="h-1.5 w-1.5 rounded-full bg-[#75D4EE]" />
+                {(customer?.segment || "Cliente") + " · Análise em andamento"}
+              </div>
+              <div className="mb-0.5 max-w-full break-words text-[26px] font-semibold leading-[1.1] tracking-[-0.5px] text-white [overflow-wrap:anywhere]">
+                {customer?.company_name ?? `Cliente #${analysis.customer_id}`}
+              </div>
+              <div className="mb-2 break-words text-xs text-[rgba(255,255,255,0.45)] [overflow-wrap:anywhere]">
+                CNPJ {customer?.document_number ?? "Não disponível no momento"} · Protocolo {analysis.protocol_number}
+              </div>
+              <div className="flex flex-wrap gap-y-0.5">
+                {customerMeta.map((meta, index, arr) => (
+                  <div
+                    key={`${meta}-${index}`}
+                    className={
+                      index === arr.length - 1
+                        ? "mr-3 flex items-center gap-1 pr-3 text-xs text-[rgba(255,255,255,0.58)]"
+                        : "mr-3 flex items-center gap-1 border-r border-[rgba(255,255,255,0.08)] pr-3 text-xs text-[rgba(255,255,255,0.58)]"
+                    }
+                  >
+                    <span className="h-3 w-3 rounded-full border border-[rgba(255,255,255,0.45)]" />
+                    {meta}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="col-span-12 min-w-0 pt-0.5 xl:col-span-3 xl:self-center xl:pt-0">
+              <RatingCard
+                letter={scoreBand}
+                score={`${scoreNumber ?? 0} pts`}
+                rangeLabel={`Faixa ${scoreBand}`}
+                riskLabel={riskLabelByBand[scoreBand] ?? "Risco moderado"}
+                scorePill={`${scoreNumber ?? 0} / 1000`}
+                dateLabel={`Atualizado ${formatDate(analysis.decision_calculated_at ?? analysis.created_at)}`}
+              />
             </div>
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <span className="rounded bg-[#dbeafe] px-2 py-1 text-[10px] font-medium text-[#1e40af]">{analysis.protocol_number}</span>
-          <span className={`rounded px-2 py-1 text-[10px] font-medium ${decisionStyles.badge}`}>{resolvedDecision.label}</span>
-        </div>
-      </div>
-
-      <div className="grid gap-3 xl:grid-cols-3">
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-          <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Score de crédito</p>
-          <div className="flex flex-col items-center">
-            <p className="text-[38px] font-medium leading-none text-[#1a2b5e]">{finalScore ?? "--"}</p>
-            <p className="mt-1 text-[11px] text-[#6b7280]">
-              Faixa: {score ? scoreBandLabel[score.score_band] ?? score.score_band : "Não calculada"}
+        <div className="pt-6">
+          <Card className="mb-6 border border-[#D7E1EC] bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]">
+            <div className="mb-2 text-xs uppercase text-muted-foreground">Resumo executivo</div>
+            <p className="text-base leading-relaxed text-foreground">
+              {scoreSummary?.executiveReason ??
+                "Análise com sinais de risco que exigem validação humana antes da conclusão."}
             </p>
-            <div className="mt-3 w-full">
-              <div className="relative h-1.5 overflow-hidden rounded bg-[#e5e7eb]">
-                <div className="h-full w-full rounded bg-[linear-gradient(90deg,#ef4444_0%,#f59e0b_40%,#10b981_70%)]" />
-                <span
-                  className="absolute -top-1 inline-block h-3 w-3 rounded-full border-2 border-white bg-[#1a2b5e] shadow-[0_0_0_1px_#1a2b5e]"
-                  style={{ left: `calc(${scorePointer(finalScore)} - 6px)` }}
-                />
-              </div>
-              <div className="mt-1 flex justify-between text-[10px] text-[#9ca3af]">
-                <span>0</span>
-                <span>500</span>
-                <span>700</span>
-                <span>1000</span>
-              </div>
-            </div>
-          </div>
-        </article>
+          </Card>
 
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-          <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Limite sugerido</p>
-          <p className="text-[28px] font-medium text-[#111827]">{formatCurrency(decision?.suggested_limit ?? analysis.suggested_limit)}</p>
-          <p className="mt-1 text-[11px] text-[#6b7280]">Calculado automaticamente pelo motor.</p>
-
-          <div className="mt-3 space-y-2 text-[12px]">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[#6b7280]">Solicitado pelo cliente</span>
-              <span className="text-right font-medium text-[#374151]">{formatCurrency(analysis.requested_limit)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[#6b7280]">Limite atual ativo</span>
-              <span className="text-right font-medium text-[#374151]">{formatCurrency(analysis.current_limit)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[#6b7280]">Exposição total</span>
-              <span className="text-right font-medium text-[#374151]">{formatCurrency(analysis.exposure_amount)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[#6b7280]">Limite final</span>
-              <span className="text-right font-medium text-[#d97706]">
-                {formatCurrency(finalDecision?.final_limit ?? analysis.final_limit)}
-              </span>
-            </div>
-          </div>
-        </article>
-
-        <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-          <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Indicadores financeiros</p>
-          <div className="space-y-2">
-            <div className="rounded-[6px] bg-[#f9fafb] px-3 py-2">
-              <p className="text-[10px] text-[#9ca3af]">Faturamento estimado</p>
-              <p className="text-[16px] font-medium text-[#111827]">{formatCurrency(analysis.annual_revenue_estimated)}</p>
-            </div>
-            <div className="rounded-[6px] bg-[#f9fafb] px-3 py-2">
-              <p className="text-[10px] text-[#9ca3af]">Status da análise</p>
-              <p className="text-[16px] font-medium text-[#111827]">{analysis.analysis_status}</p>
-            </div>
-            <div className="rounded-[6px] bg-[#f9fafb] px-3 py-2">
-              <p className="text-[10px] text-[#9ca3af]">Analista responsável</p>
-              <p className="text-[16px] font-medium text-[#111827]">{analysis.assigned_analyst_name ?? "Não atribuído"}</p>
-            </div>
-          </div>
-        </article>
-      </div>
-
-      <article className="rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-        <div className="mb-3 flex flex-col gap-2 border-b border-[#f3f4f6] pb-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-2">
-            <p className="text-[13px] font-medium text-[#111827]">Decisão do motor</p>
-            <span className={`rounded-[6px] px-3 py-1 text-[11px] font-medium ${decisionStyles.badge}`}>
-              {resolvedDecision.label.toUpperCase()}
-            </span>
-          </div>
-          <p className="text-[11px] text-[#6b7280]">
-            Processado em {formatDateTime(decision?.decision_calculated_at ?? analysis.decision_calculated_at)}
-          </p>
-        </div>
-
-        {explainabilitySummary ? (
-          <div className="mb-4 rounded-[8px] border border-[#e5e9f2] bg-[#f8faff] p-3">
-            <p className="text-[12px] font-semibold text-[#1f2937]">Resumo da explicabilidade</p>
-            <p className="mt-1 text-[11px] text-[#4b5563]">Política usada: {explainabilitySummary.policyLabel}</p>
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
-              <span className="rounded bg-white px-2 py-1 text-[#334155]">{explainabilitySummary.evaluatedRules} regras avaliadas</span>
-              <span className="rounded bg-white px-2 py-1 text-[#166534]">{explainabilitySummary.matchedRules} atendidas</span>
-              <span className="rounded bg-white px-2 py-1 text-[#92400e]">{explainabilitySummary.notMatchedRules} não atendidas</span>
-              <span className="rounded bg-white px-2 py-1 text-[#1e3a8a]">
-                Impacto total no score: {explainabilitySummary.totalImpactPoints > 0 ? "+" : ""}
-                {explainabilitySummary.totalImpactPoints}
-              </span>
-            </div>
-            <p className="mt-2 text-[11px] text-[#374151]">{explainabilitySummary.executiveReason}</p>
-          </div>
-        ) : null}
-
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_240px]">
-          <div>
-            <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">Sinais de decisão</p>
-            <div className="space-y-1.5">
-              {ruleSignals.map((rule) => {
-                const styles = toneStyles(rule.tone);
-                return (
-                  <div key={rule.id} className="flex items-center gap-2 rounded-[6px] border border-[#e5e7eb] bg-[#f9fafb] px-3 py-2">
-                    <span className={`inline-flex h-[18px] w-[18px] items-center justify-center rounded-full text-[9px] font-semibold ${styles.icon}`}>
-                      {rule.tone === "success" ? "OK" : rule.tone === "danger" ? "X" : "!"}
-                    </span>
-                    <p className="flex-1 text-[12px] text-[#374151]">{rule.text}</p>
-                    <span className={`rounded px-2 py-0.5 text-[10px] font-medium ${styles.badge}`}>{rule.status}</span>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-4">
-              <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-[#6b7280]">
-                Regras avaliadas com explicabilidade
-              </p>
-              <div className="space-y-2">
-                {explainabilityRows.length ? (
-                  explainabilityRows.slice(0, 20).map((row) => {
-                    const styles = toneStyles(row.tone);
-                    return (
-                      <div key={row.id} className="rounded-[8px] border border-[#e5e7eb] bg-white px-3 py-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-[12px] font-medium text-[#111827]">{row.label}</p>
-                          <span className={`rounded px-2 py-0.5 text-[10px] font-medium ${styles.badge}`}>{row.statusLabel}</span>
-                        </div>
-                        <p className="mt-1 text-[11px] text-[#6b7280]">{row.pillarLabel}</p>
-                        <div className="mt-1 grid gap-1 text-[11px] text-[#374151] sm:grid-cols-3">
-                          <p>Esperado: {row.expectedValueLabel}</p>
-                          <p>Encontrado: {row.actualValueLabel}</p>
-                          <p>Impacto: {row.impactLabel}</p>
-                        </div>
-                        <p className="mt-1 text-[11px] text-[#4b5563]">{row.reason}</p>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="rounded-[8px] border border-dashed border-[#d1d5db] bg-[#f9fafb] px-3 py-4 text-[12px] text-[#6b7280]">
-                    A explicabilidade detalhada desta análise ainda não está disponível.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <AnalysisEventsTimeline
-            events={events}
-            createdAt={analysis.created_at}
-            decisionCalculatedAt={decision?.decision_calculated_at ?? analysis.decision_calculated_at}
-            completedAt={finalDecision?.completed_at ?? analysis.completed_at}
+          <RecommendationBanner
+            title={recommendationTitle}
+            subtitle={scoreSummary?.executiveReason ?? "A recomendação considera score, regras e sinais de risco."}
+            limitSuggested={recommendationLimit}
+            risk={riskLabelByBand[scoreBand] ?? "Risco moderado"}
+            confidence={`${confidencePercent}%`}
+            confidencePercent={confidencePercent}
           />
+
+          <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="Faturamento anual"
+              value={annualRevenue}
+              muted={annualRevenueMissing}
+              helper={annualRevenueMissing ? "Informação não disponível" : "Valor informado"}
+              state={annualRevenueMissing ? "warning" : "normal"}
+            />
+            <KpiCard
+              label="Endividamento total"
+              value="Informação não disponível"
+              muted
+              helper="Informação não disponível"
+              state="warning"
+            />
+            <KpiCard
+              label="Exposição atual"
+              value={exposureValue}
+              helper={exposureMissing ? "Informação não disponível" : "Crédito ativo em aberto"}
+              state={exposureMissing ? "warning" : "normal"}
+            />
+            <KpiCard
+              label="Limite sugerido"
+              value={kpiLimitValue}
+              muted={kpiLimitValue === "Dados não disponíveis"}
+              helper={kpiLimitValue === "Dados não disponíveis" ? "Informação não disponível" : "Calculado pelo motor"}
+              state={kpiLimitValue === "Dados não disponíveis" ? "danger" : "normal"}
+            />
+          </div>
+
+          <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <FactorList
+              title="Insights da análise"
+              titleTone="neutral"
+              titleIcon={
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <circle cx="7" cy="7" r="5.5" stroke="#4F647A" strokeWidth="1.2" />
+                  <path d="M7 4v3h2.5" stroke="#4F647A" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              }
+              items={insights}
+              isInsights
+            />
+            <FactorList
+              title="Fatores positivos"
+              titleTone="positive"
+              titleIcon={
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <circle cx="7" cy="7" r="5.5" stroke="#1A7A3A" strokeWidth="1.2" />
+                  <path d="M4.5 7l2 2 3-3" stroke="#1A7A3A" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+              }
+              items={positiveFactors}
+            />
+            <FactorList
+              title="Fatores de risco"
+              titleTone="negative"
+              titleIcon={
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <circle cx="7" cy="7" r="5.5" stroke="#C0392B" strokeWidth="1.2" />
+                  <path d="M7 4v3.5M7 9.5v.5" stroke="#C0392B" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              }
+              items={riskFactors}
+            />
+          </div>
+
+          <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div className="rounded-[14px] border border-[#D7E1EC] bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]">
+              <div className="mb-3.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.6px] text-[#4F647A]">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <rect x="1.5" y="2" width="11" height="10" rx="1.5" stroke="#4F647A" strokeWidth="1.2" />
+                  <path d="M4 6h6M4 8.5h4" stroke="#4F647A" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+                Dados da operação
+              </div>
+              {operationRows.map((row) => (
+                <div key={row[0]} className="flex items-baseline justify-between border-b border-[#F0F4F8] py-2 last:border-b-0">
+                  <div className="text-xs text-[#4F647A]">{row[0]}</div>
+                  <div className="text-xs font-medium text-[#102033]">{row[1]}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="rounded-[14px] border border-[#D7E1EC] bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]">
+              <div className="mb-3.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.6px] text-[#4F647A]">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <circle cx="7" cy="7" r="5.5" stroke="#4F647A" strokeWidth="1.2" />
+                  <path d="M7 4.5v3.5M7 9v.5" stroke="#4F647A" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+                Linha do tempo da análise
+              </div>
+              <Timeline items={timelineItems} />
+            </div>
+          </div>
+
+          <AccordionRules rules={rules} />
+
+          <div className="flex flex-col items-start justify-between gap-4 rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px] lg:flex-row lg:items-center">
+            <div>
+              <div className="mb-1 text-[11px] text-[#4F647A]">Decisão do analista · {analysis.assigned_analyst_name ?? "Backoffice"}</div>
+              <div className="text-sm font-medium text-[#102033]">
+                {resolvedDecision.tone === "success"
+                  ? "Motor sugere aprovação. Confirme limites e conclua a análise."
+                  : resolvedDecision.tone === "danger"
+                    ? "Motor sugere reprovar. Revisão manual recomendada antes da decisão final."
+                    : "Aguardando revisão dos fatores críticos para concluir análise."}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2.5">
+              <Button variant="outline" className="h-auto rounded-lg border-[#D7E1EC] px-5 py-2.5 text-[13px] font-medium text-[#102033]">
+                Solicitar exceção
+              </Button>
+              <button
+                type="button"
+                className="rounded-lg bg-[#C0392B] px-5 py-2.5 text-[13px] font-medium text-white transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
+              >
+                Reprovar
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-[#E8B83A] px-5 py-2.5 text-[13px] font-medium text-[#102033] transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
+              >
+                Concluir decisão →
+              </button>
+            </div>
+          </div>
         </div>
-      </article>
+      </div>
     </section>
   );
 }

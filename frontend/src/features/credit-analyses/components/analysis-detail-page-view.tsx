@@ -49,26 +49,5 @@ export function AnalysisDetailPageView({ analysisId }: AnalysisDetailPageViewPro
     );
   }
 
-  return (
-    <div className="readability-standard space-y-4">
-      <div className="flex flex-wrap gap-2">
-        <Link
-          href="/analises"
-          className="inline-flex items-center gap-2 rounded-[6px] border border-[#d1d5db] bg-white px-3 py-1.5 text-[12px] text-[#374151] hover:bg-[#f9fafb]"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Voltar para a lista
-        </Link>
-
-        <Link
-          href={`/dados-externos?analysisId=${analysisId}`}
-          className="inline-flex items-center gap-2 rounded-[6px] border border-[#d1d5db] bg-white px-3 py-1.5 text-[12px] text-[#374151] hover:bg-[#f9fafb]"
-        >
-          Ver dados externos
-        </Link>
-      </div>
-
-      <AnalysisDetailCards data={data} />
-    </div>
-  );
+  return <AnalysisDetailCards data={data} />;
 }
