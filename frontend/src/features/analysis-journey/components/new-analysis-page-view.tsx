@@ -6,8 +6,8 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, ChevronLeft, ChevronRight, Upload, X } from "lucide-react";
 
-import { listCustomers, lookupExternalCnpj, readAgriskReport, submitAnalysisJourney } from "@/features/analysis-journey/api/analysis-journey.api";
-import { AgriskImportStatus, AgriskReportReadResponse, AnalysisJourneySubmitRequest, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import { listCustomers, lookupExternalCnpj, readAgriskReport, readCofaceReport, submitAnalysisJourney } from "@/features/analysis-journey/api/analysis-journey.api";
+import { AgriskImportStatus, AgriskReportReadResponse, AnalysisJourneySubmitRequest, CofaceReportReadResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
 import {
   formatCnpj,
   formatCurrencyInputBRL,
@@ -31,6 +31,9 @@ type ImportState = {
   agriskReadId: number | null;
   agriskReadPayload: AgriskReportReadResponse["read_payload"] | null;
   agriskWarnings: string[];
+  cofaceReadId: number | null;
+  cofaceReadPayload: CofaceReportReadResponse["read_payload"] | null;
+  cofaceWarnings: string[];
 };
 
 type OcrState = {
@@ -96,7 +99,10 @@ function buildDefaultImportState(): ImportState {
     errorMessage: null,
     agriskReadId: null,
     agriskReadPayload: null,
-    agriskWarnings: []
+    agriskWarnings: [],
+    cofaceReadId: null,
+    cofaceReadPayload: null,
+    cofaceWarnings: []
   };
 }
 
@@ -145,6 +151,10 @@ function isAgriskValidatedStatus(status: ImportStatus) {
   return status === "valid" || status === "valid_with_warnings";
 }
 
+function isCofaceValidatedStatus(status: ImportStatus) {
+  return status === "valid" || status === "valid_with_warnings" || status === "success";
+}
+
 function importStatusBadgeClass(status: ImportStatus) {
   if (status === "valid" || status === "success") return "bg-[#EAF7EE] text-[#166534]";
   if (status === "valid_with_warnings") return "bg-[#FFF7E8] text-[#92400E]";
@@ -188,6 +198,19 @@ function confidenceLabel(value: string | null | undefined) {
   if (value === "medium") return "Média";
   if (value === "low") return "Baixa";
   return value;
+}
+
+function formatIsoDateToBr(value: string | null | undefined) {
+  if (!value) return "Não informado";
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return value;
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+function formatCnpjForDisplay(value: string | null | undefined) {
+  const digits = sanitizeDigits(value ?? "");
+  if (digits.length !== 14) return value || "Não informado";
+  return formatCnpj(digits);
 }
 
 const agriskWarningLabelMap: Record<string, string> = {
@@ -269,6 +292,7 @@ export function NewAnalysisPageView() {
   const [pendingImportError, setPendingImportError] = useState<string | null>(null);
   const [isManualDrawerOpen, setIsManualDrawerOpen] = useState(false);
   const [isAgriskDataDrawerOpen, setIsAgriskDataDrawerOpen] = useState(false);
+  const [isCofaceDataDrawerOpen, setIsCofaceDataDrawerOpen] = useState(false);
   const [manualPanel, setManualPanel] = useState({
     scoreSource: "Serasa",
     scoreValue: 610,
@@ -299,7 +323,7 @@ export function NewAnalysisPageView() {
 
   const hasAgriskImported = agriskImport.files.length > 0 && (agriskImport.status === "valid" || agriskImport.status === "valid_with_warnings");
   const hasInvalidAgriskImport = agriskImport.files.length > 0 && (agriskImport.status === "invalid" || agriskImport.status === "error");
-  const hasCofaceImported = cofaceImport.files.length > 0;
+  const hasCofaceImported = cofaceImport.files.length > 0 && isCofaceValidatedStatus(cofaceImport.status);
   const hasInternalImported = internalImport.files.length > 0;
   const structuredSourcesCount = [hasAgriskImported, hasCofaceImported, hasInternalImported].filter(Boolean).length;
   const isManualBlocked = hasAgriskImported && hasCofaceImported && hasInternalImported;
@@ -486,10 +510,42 @@ export function NewAnalysisPageView() {
       }
       return;
     } else if (importModalSource === "coface") {
-      setCofaceImport((prev) => ({ ...prev, files: [pendingImportFile], status: "processing", importedAt, errorMessage: null }));
-      setTimeout(() => {
-        setCofaceImport((prev) => (prev.files.length > 0 ?{ ...prev, status: "success" } : prev));
-      }, 900);
+      if (!pendingImportRawFile) {
+        setPendingImportError("Não foi possível ler o arquivo selecionado.");
+        return;
+      }
+      setIsCofaceDataDrawerOpen(false);
+      setCofaceImport((prev) => ({
+        ...prev,
+        files: [pendingImportFile],
+        status: "processing",
+        importedAt,
+        errorMessage: null,
+        cofaceReadId: null,
+        cofaceReadPayload: null,
+        cofaceWarnings: []
+      }));
+      setPendingImportError(null);
+      setPendingImportFile(null);
+      setPendingImportRawFile(null);
+      setIsImportModalOpen(false);
+      try {
+        const response = await readCofaceReport(pendingImportRawFile, sanitizeDigits(customer.cnpj));
+        setCofaceImport((prev) => ({
+          ...prev,
+          files: [pendingImportFile],
+          status: response.status,
+          importedAt,
+          errorMessage: response.validation_message,
+          cofaceReadId: response.id,
+          cofaceReadPayload: response.read_payload,
+          cofaceWarnings: response.warnings
+        }));
+      } catch (error) {
+        const message = error instanceof Error ?error.message : "Falha ao processar o relatório COFACE.";
+        setCofaceImport((prev) => ({ ...prev, status: "error", errorMessage: message }));
+      }
+      return;
     } else {
       setInternalImport((prev) => ({ ...prev, files: [pendingImportFile], status: "processing", importedAt, errorMessage: null }));
       setTimeout(() => {
@@ -514,6 +570,7 @@ export function NewAnalysisPageView() {
       return;
     }
     if (source === "coface") {
+      setIsCofaceDataDrawerOpen(false);
       setCofaceImport(buildDefaultImportState());
       return;
     }
@@ -929,7 +986,7 @@ export function NewAnalysisPageView() {
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("coface")}</p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorStatusText("coface", cofaceImport.status)}</p>
                       </div>
-                      <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-medium">
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-medium">
                         <button
                           type="button"
                           onClick={(event) => {
@@ -940,9 +997,23 @@ export function NewAnalysisPageView() {
                         >
                           {removeActionLabel("coface")}
                         </button>
-                        <span className="inline-flex items-center justify-center rounded-[9px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-2 text-[12px] font-medium text-[#102033]">
-                          Substituir relatório <ChevronRight className="ml-1 h-3.5 w-3.5" />
-                        </span>
+                        {isCofaceValidatedStatus(cofaceImport.status) ?(
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setIsCofaceDataDrawerOpen(true);
+                            }}
+                            className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#295B9A]"
+                          >
+                            Ver dados importados
+                          </button>
+                        ) : null}
+                        {(cofaceImport.status === "invalid" || cofaceImport.status === "error") ?(
+                          <span className="inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
+                            Substituir relatório <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </>
@@ -1285,7 +1356,7 @@ export function NewAnalysisPageView() {
                   <div>
                     <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Qualidade da leitura</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">Confiança:</span> {confidenceLabel(agriskImport.agriskReadPayload?.read_quality?.confidence)}</p>
+                      <p><span className="font-medium text-[#102033]">Confiança:</span> {confidenceLabel(cofaceImport.cofaceReadPayload?.read_quality?.confidence)}</p>
                       {(agriskImport.agriskWarnings ?? []).length > 0 ?(
                         <div className="mt-2 rounded-[10px] border border-[#F3D7A1] bg-[#FFF7E8] p-3">
                           <p className="text-[12px] font-semibold text-[#92400E]">Alertas de leitura</p>
@@ -1299,7 +1370,72 @@ export function NewAnalysisPageView() {
                           </ul>
                         </div>
                       ) : (
-                        <p>Sem alertas relevantes de leitura.</p>
+                        <p>Nenhum alerta identificado na leitura.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isCofaceDataDrawerOpen ?(
+            <div className="fixed inset-0 z-40 flex justify-end bg-[#0D1B2A]/45" onClick={() => setIsCofaceDataDrawerOpen(false)}>
+              <div className="flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
+                  <div>
+                    <p className="text-[15px] font-semibold text-[#102033]">Dados importados do relatório COFACE</p>
+                    <p className="text-[12px] text-[#4F647A]">Somente os dados estruturados utilizados pelo motor de crédito.</p>
+                  </div>
+                  <button type="button" onClick={() => setIsCofaceDataDrawerOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-6 py-5">
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Identificação</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Empresa:</span> {cofaceImport.cofaceReadPayload?.company?.name || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">CNPJ:</span> {formatCnpjForDisplay(cofaceImport.cofaceReadPayload?.company?.document)}</p>
+                      <p><span className="font-medium text-[#102033]">EasyNumber:</span> {cofaceImport.cofaceReadPayload?.coface?.easy_number || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Endereço:</span> {cofaceImport.cofaceReadPayload?.company?.address || "Não informado"}</p>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Indicadores COFACE</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">CRA:</span> {cofaceImport.cofaceReadPayload?.coface?.cra || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">DRA:</span> {cofaceImport.cofaceReadPayload?.coface?.dra ?? "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Notação:</span> {cofaceImport.cofaceReadPayload?.coface?.notation || "Não informado"}</p>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Decisão de crédito</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Estado:</span> {cofaceImport.cofaceReadPayload?.coface?.decision_status || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Valor Segurado:</span> {cofaceImport.cofaceReadPayload?.coface?.decision_amount != null ?`R$ ${cofaceImport.cofaceReadPayload.coface.decision_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Data efetiva:</span> {formatIsoDateToBr(cofaceImport.cofaceReadPayload?.coface?.decision_effective_date)}</p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Qualidade da leitura</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Confiança:</span> {confidenceLabel(cofaceImport.cofaceReadPayload?.read_quality?.confidence)}</p>
+                      {(cofaceImport.cofaceWarnings ?? []).length > 0 ?(
+                        <div className="mt-2 rounded-[10px] border border-[#F3D7A1] bg-[#FFF7E8] p-3">
+                          <p className="text-[12px] font-semibold text-[#92400E]">Alertas de leitura</p>
+                          <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-[#7C5A1D]">
+                            {(cofaceImport.cofaceWarnings ?? []).map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <p>Nenhum alerta identificado na leitura.</p>
                       )}
                     </div>
                   </div>
@@ -1544,4 +1680,3 @@ export function NewAnalysisPageView() {
     </section>
   );
 }
-

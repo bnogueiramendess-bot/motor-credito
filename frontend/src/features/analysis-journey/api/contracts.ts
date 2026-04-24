@@ -88,12 +88,13 @@ export type AnalysisJourneySubmitResponse = {
   warnings: string[];
 };
 
-export type AgriskImportStatus = "pending" | "processing" | "valid" | "valid_with_warnings" | "invalid" | "error";
+export type ReportImportStatus = "pending" | "processing" | "valid" | "valid_with_warnings" | "invalid" | "error";
+export type AgriskImportStatus = ReportImportStatus;
 
 export type AgriskReportReadResponse = {
   id: number;
   source_type: "agrisk";
-  status: AgriskImportStatus;
+  status: ReportImportStatus;
   original_filename: string;
   mime_type: string;
   file_size: number;
@@ -154,6 +155,46 @@ export type AgriskReportReadResponse = {
       warnings?: string[];
       anchors_found?: string[];
       anchors_missing?: string[];
+    };
+  };
+  created_at: string;
+};
+
+export type CofaceReportReadResponse = {
+  id: number;
+  source_type: "coface";
+  status: ReportImportStatus;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  customer_document_number: string;
+  report_document_number: string | null;
+  is_document_match: boolean;
+  validation_message: string | null;
+  score_primary: number | null;
+  score_source: string | null;
+  warnings: string[];
+  confidence: "high" | "medium" | "low" | null;
+  read_payload: {
+    company?: {
+      name?: string | null;
+      document?: string | null;
+      document_type?: "cnpj" | null;
+      address?: string | null;
+    };
+    coface?: {
+      easy_number?: string | null;
+      cra?: string | null;
+      dra?: number | null;
+      decision_status?: string | null;
+      decision_amount?: number | null;
+      decision_currency?: string | null;
+      decision_effective_date?: string | null;
+      notation?: string | null;
+    };
+    read_quality?: {
+      confidence?: "high" | "medium" | "low";
+      warnings?: string[];
     };
   };
   created_at: string;

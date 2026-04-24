@@ -4,6 +4,7 @@ import {
   AgriskReportReadResponse,
   AnalysisJourneySubmitRequest,
   AnalysisJourneySubmitResponse,
+  CofaceReportReadResponse,
   ExternalCnpjLookupResponse
 } from "@/features/analysis-journey/api/contracts";
 import { CustomerDto } from "@/features/credit-analyses/api/contracts";
@@ -57,4 +58,26 @@ export async function readAgriskReport(file: File, customerDocumentNumber: strin
   }
 
   return (await response.json()) as AgriskReportReadResponse;
+}
+
+export async function readCofaceReport(file: File, customerDocumentNumber: string) {
+  const fileContentBase64 = await toBase64(file);
+  const response = await fetch("/api/analysis-journey/coface-read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      original_filename: file.name,
+      mime_type: file.type || "application/pdf",
+      file_size: file.size,
+      customer_document_number: customerDocumentNumber,
+      file_content_base64: fileContentBase64
+    })
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(payload.detail ?? "Falha ao processar o relatório COFACE.");
+  }
+
+  return (await response.json()) as CofaceReportReadResponse;
 }
