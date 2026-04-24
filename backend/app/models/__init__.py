@@ -1,5 +1,6 @@
 ﻿
 from app.models.credit_analysis import CreditAnalysis
+from app.models.credit_report_read import CreditReportRead
 from app.models.credit_policy import CreditPolicy
 from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.customer import Customer
@@ -22,6 +23,7 @@ __all__ = [
     "ActorType",
     "AnalysisStatus",
     "CreditAnalysis",
+    "CreditReportRead",
     "CreditPolicy",
     "CreditPolicyRule",
     "CreditPolicyStatus",

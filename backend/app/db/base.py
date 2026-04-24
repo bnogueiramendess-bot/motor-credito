@@ -1,6 +1,7 @@
 ﻿from app.db.session import Base
 from app.models import (
     CreditAnalysis,
+    CreditReportRead,
     CreditPolicy,
     CreditPolicyRule,
     Customer,
@@ -14,6 +15,7 @@ __all__ = [
     "Base",
     "Customer",
     "CreditAnalysis",
+    "CreditReportRead",
     "CreditPolicy",
     "CreditPolicyRule",
     "DecisionEvent",

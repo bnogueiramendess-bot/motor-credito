@@ -88,6 +88,77 @@ export type AnalysisJourneySubmitResponse = {
   warnings: string[];
 };
 
+export type AgriskImportStatus = "pending" | "processing" | "valid" | "valid_with_warnings" | "invalid" | "error";
+
+export type AgriskReportReadResponse = {
+  id: number;
+  source_type: "agrisk";
+  status: AgriskImportStatus;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  customer_document_number: string;
+  report_document_number: string | null;
+  is_document_match: boolean;
+  validation_message: string | null;
+  score_primary: number | null;
+  score_source: string | null;
+  warnings: string[];
+  confidence: "high" | "medium" | "low" | null;
+  read_payload: {
+    company?: {
+      name?: string | null;
+      document?: string | null;
+      opened_at?: string | null;
+      age_years?: number | null;
+      legal_nature?: string | null;
+      capital_social?: number | null;
+      status?: string | null;
+    };
+    credit?: {
+      score?: number | null;
+      score_source?: string | null;
+      rating?: string | null;
+      default_probability?: number | null;
+      default_probability_label?: string | null;
+      secondary_scores?: Array<{
+        source?: string | null;
+        score?: number | null;
+        rating?: string | null;
+        default_probability?: number | null;
+      }>;
+    };
+    restrictions?: {
+      negative_events_count?: number;
+      negative_events_total_amount?: number;
+      last_negative_event_at?: string | null;
+    };
+    protests?: {
+      count?: number;
+      total_amount?: number;
+    };
+    checks_without_funds?: {
+      has_records?: boolean;
+      items?: string[];
+    };
+    consultations?: {
+      total?: number;
+      items?: string[];
+    };
+    ownership?: {
+      shareholding?: string[];
+      partners?: string[];
+    };
+    read_quality?: {
+      confidence?: "high" | "medium" | "low";
+      warnings?: string[];
+      anchors_found?: string[];
+      anchors_missing?: string[];
+    };
+  };
+  created_at: string;
+};
+
 export type ExternalCnpjLookupResponse = {
   status: "ok" | "not_found" | "unavailable";
   message: string | null;

@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+NULL_TEXT_TOKENS: set[str] = {
+    "",
+    "-",
+    "--",
+    "nenhum dado encontrado",
+    "nao informado",
+    "nao disponivel",
+    "n/a",
+}
+
+ANCHOR_ALIASES: dict[str, tuple[str, ...]] = {
+    "INFORMACOES_BASICAS": ("INFORMACOES BASICAS", "INFORMACOES BASICAS DA EMPRESA"),
+    "INFORMACOES_CADASTRAIS": ("INFORMACOES CADASTRAIS",),
+    "RESTRITIVOS": ("RESTRITIVOS",),
+    "RESTRITIVOS_NACIONAL": ("RESTRITIVOS NACIONAL",),
+    "SCORE": ("SCORE",),
+    "INDICADORES": ("INDICADORES",),
+    "PROTESTOS_NACIONAL": ("PROTESTOS NACIONAL", "PROTESTOS"),
+    "CHEQUES_SEM_FUNDO_CCF": ("CHEQUES SEM FUNDO - CCF", "CHEQUES SEM FUNDO CCF", "CCF"),
+    "ULTIMAS_CONSULTAS": ("ULTIMAS CONSULTAS",),
+    "PARTICIPACAO_SOCIETARIA": ("PARTICIPACAO SOCIETARIA",),
+    "GRUPO_ECONOMICO": ("GRUPO ECONOMICO",),
+    "GRUPO_FAMILIAR": ("GRUPO FAMILIAR",),
+    "CONFORMIDADE": ("CONFORMIDADE",),
+    "SITUACAO_JUDICIAL": ("SITUACAO JUDICIAL",),
+}
+
+EXPECTED_ANCHORS: tuple[str, ...] = tuple(ANCHOR_ALIASES.keys())
+
+CRITICAL_ANCHORS: tuple[str, ...] = (
+    "INFORMACOES_BASICAS",
+    "INFORMACOES_CADASTRAIS",
+    "SCORE",
+    "INDICADORES",
+    "RESTRITIVOS_NACIONAL",
+)
+
+IGNORE_SECTION_MARKERS: tuple[str, ...] = (
+    "servico inativo",
+    "servico indisponivel",
+)
+

@@ -6,8 +6,8 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, ChevronLeft, ChevronRight, Upload, X } from "lucide-react";
 
-import { listCustomers, lookupExternalCnpj, submitAnalysisJourney } from "@/features/analysis-journey/api/analysis-journey.api";
-import { AnalysisJourneySubmitRequest, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import { listCustomers, lookupExternalCnpj, readAgriskReport, submitAnalysisJourney } from "@/features/analysis-journey/api/analysis-journey.api";
+import { AgriskImportStatus, AgriskReportReadResponse, AnalysisJourneySubmitRequest, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
 import {
   formatCnpj,
   formatCurrencyInputBRL,
@@ -20,7 +20,7 @@ import { ErrorState } from "@/shared/components/states/error-state";
 
 const steps = ["Identificação do cliente", "Informações para análise", "Dados da solicitação", "Revisão e envio"];
 type ImportSource = "agrisk" | "coface" | "internal";
-type ImportStatus = "empty" | "processing" | "success" | "error";
+type ImportStatus = "empty" | AgriskImportStatus | "success";
 
 type ImportState = {
   notes: string;
@@ -28,6 +28,9 @@ type ImportState = {
   status: ImportStatus;
   importedAt: string | null;
   errorMessage: string | null;
+  agriskReadId: number | null;
+  agriskReadPayload: AgriskReportReadResponse["read_payload"] | null;
+  agriskWarnings: string[];
 };
 
 type OcrState = {
@@ -90,7 +93,10 @@ function buildDefaultImportState(): ImportState {
     files: [],
     status: "empty",
     importedAt: null,
-    errorMessage: null
+    errorMessage: null,
+    agriskReadId: null,
+    agriskReadPayload: null,
+    agriskWarnings: []
   };
 }
 
@@ -106,14 +112,49 @@ function buildDefaultOcrState(): OcrState {
 }
 
 function statusLabel(status: ImportStatus) {
+  if (status === "pending") return "Pendente";
   if (status === "processing") return "Em processamento";
+  if (status === "valid") return "Válido";
+  if (status === "valid_with_warnings") return "Válido com alertas";
+  if (status === "invalid") return "Inválido";
   if (status === "success") return "Processado com sucesso";
   if (status === "error") return "Erro na leitura";
   return "Sem arquivo";
 }
 
+function isDocumentDivergenceMessage(message: string | null | undefined) {
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return normalized.includes("não corresponde") || normalized.includes("nao corresponde") || normalized.includes("outro cnpj");
+}
+
+function agriskStatusBadgeLabel(state: ImportState) {
+  if (state.status === "valid") {
+    return "Validado";
+  }
+  if (state.status === "valid_with_warnings") {
+    return "Validado com alertas";
+  }
+  if (state.status === "invalid" && isDocumentDivergenceMessage(state.errorMessage)) {
+    return "CNPJ divergente";
+  }
+  return statusLabel(state.status);
+}
+
+function isAgriskValidatedStatus(status: ImportStatus) {
+  return status === "valid" || status === "valid_with_warnings";
+}
+
+function importStatusBadgeClass(status: ImportStatus) {
+  if (status === "valid" || status === "success") return "bg-[#EAF7EE] text-[#166534]";
+  if (status === "valid_with_warnings") return "bg-[#FFF7E8] text-[#92400E]";
+  if (status === "pending" || status === "processing") return "bg-[#EFF6FF] text-[#1D4ED8]";
+  if (status === "invalid" || status === "error") return "bg-[#FEF2F2] text-[#B91C1C]";
+  return "bg-[#EEF3F8] text-[#4F647A]";
+}
+
 function importMonitorTitle(source: ImportSource) {
-  return source === "internal" ? "Base importada" : "Relatório importado";
+  return source === "internal" ?"Base importada" : "Relatório importado";
 }
 
 function importMonitorSourceName(source: ImportSource) {
@@ -123,11 +164,44 @@ function importMonitorSourceName(source: ImportSource) {
 }
 
 function importMonitorStatusText(source: ImportSource, status: ImportStatus) {
+  if (status === "pending") return "Aguardando início da leitura";
   if (status === "processing") return "Aguardando processamento";
+  if (status === "invalid") return "Relatório inválido para esta análise";
+  if (status === "valid_with_warnings") return "Dados importados com alertas";
   if (status === "error") return "Requer novo envio";
   if (source === "coface") return "DRA e indicadores prontos para análise";
   if (source === "internal") return "Dados internos prontos para análise";
   return "Dados prontos para análise";
+}
+
+function scoreSourceLabel(value: string | null | undefined) {
+  if (!value) return "Não informado";
+  if (value === "agrisk_report_primary") return "AgRisk principal";
+  if (value === "boa_vista") return "Boa Vista";
+  if (value === "quod") return "Quod";
+  return value;
+}
+
+function confidenceLabel(value: string | null | undefined) {
+  if (!value) return "Não informado";
+  if (value === "high") return "Alta";
+  if (value === "medium") return "Média";
+  if (value === "low") return "Baixa";
+  return value;
+}
+
+const agriskWarningLabelMap: Record<string, string> = {
+  INFORMACOES_BASICAS: "Informações básicas",
+  INFORMACOES_CADASTRAIS: "Informações cadastrais",
+};
+
+function formatAgriskWarning(warning: string) {
+  const prefix = "Ancora critica ausente:";
+  if (!warning.startsWith(prefix)) return warning;
+  const rawCode = warning.slice(prefix.length).trim();
+  const mapped = agriskWarningLabelMap[rawCode];
+  if (mapped) return `Bloco esperado não encontrado: ${mapped}`;
+  return `Bloco esperado não encontrado: ${rawCode.replaceAll("_", " ").toLowerCase()}`;
 }
 
 function importMonitorValueText(source: ImportSource) {
@@ -137,7 +211,7 @@ function importMonitorValueText(source: ImportSource) {
 }
 
 function removeActionLabel(source: ImportSource) {
-  return source === "internal" ? "Remover arquivo" : "Remover relatório";
+  return source === "internal" ?"Remover arquivo" : "Remover relatório";
 }
 
 export function NewAnalysisPageView() {
@@ -191,8 +265,10 @@ export function NewAnalysisPageView() {
   const [importModalSource, setImportModalSource] = useState<ImportSource>("agrisk");
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [pendingImportFile, setPendingImportFile] = useState<UploadFileMetadataInput | null>(null);
+  const [pendingImportRawFile, setPendingImportRawFile] = useState<File | null>(null);
   const [pendingImportError, setPendingImportError] = useState<string | null>(null);
   const [isManualDrawerOpen, setIsManualDrawerOpen] = useState(false);
+  const [isAgriskDataDrawerOpen, setIsAgriskDataDrawerOpen] = useState(false);
   const [manualPanel, setManualPanel] = useState({
     scoreSource: "Serasa",
     scoreValue: 610,
@@ -221,7 +297,8 @@ export function NewAnalysisPageView() {
   const totalLimitDisplay = currencyFormatter.format(totalLimitCalculated);
   const exposureDisplay = currencyFormatter.format(exposureCalculated);
 
-  const hasAgriskImported = agriskImport.files.length > 0;
+  const hasAgriskImported = agriskImport.files.length > 0 && (agriskImport.status === "valid" || agriskImport.status === "valid_with_warnings");
+  const hasInvalidAgriskImport = agriskImport.files.length > 0 && (agriskImport.status === "invalid" || agriskImport.status === "error");
   const hasCofaceImported = cofaceImport.files.length > 0;
   const hasInternalImported = internalImport.files.length > 0;
   const structuredSourcesCount = [hasAgriskImported, hasCofaceImported, hasInternalImported].filter(Boolean).length;
@@ -231,7 +308,7 @@ export function NewAnalysisPageView() {
 
   useEffect(() => {
     if (!hasAgriskImported) return;
-    setManualPanel((prev) => (prev.scoreSource === "Agrisk" ? { ...prev, scoreSource: "Serasa" } : prev));
+    setManualPanel((prev) => (prev.scoreSource === "Agrisk" ?{ ...prev, scoreSource: "Serasa" } : prev));
   }, [hasAgriskImported]);
 
   const submitMutation = useMutation({
@@ -296,6 +373,9 @@ export function NewAnalysisPageView() {
     }
 
     if (stepNumber === 2 && !hasStep2Source) {
+      if (hasInvalidAgriskImport) {
+        return "O relatório AgRisk enviado está inválido para uso na análise. Substitua o arquivo para continuar.";
+      }
       return "Selecione ao menos uma fonte de dados para continuar.";
     }
 
@@ -330,20 +410,24 @@ export function NewAnalysisPageView() {
       source === "agrisk" ? agriskImport.files[0] ?? null : source === "coface" ? cofaceImport.files[0] ?? null : internalImport.files[0] ?? null
     );
     setPendingImportError(null);
+    setPendingImportRawFile(null);
     setIsImportModalOpen(true);
   }
 
   function handleImportFileChange(files: FileList | null) {
+    const rawFile = files?.[0] ?? null;
     const parsed = mapFiles(files);
     const selected = parsed[0] ?? null;
     if (!selected) {
       setPendingImportFile(null);
+      setPendingImportRawFile(null);
       setPendingImportError(null);
       return;
     }
 
     if (selected.file_size > 10 * 1024 * 1024) {
       setPendingImportFile(null);
+      setPendingImportRawFile(null);
       setPendingImportError("Arquivo inválido. O tamanho máximo permitido é 10 MB.");
       if (importModalSource === "agrisk") {
         setAgriskImport((prev) => ({ ...prev, status: "error", errorMessage: "Falha na leitura do arquivo (tamanho excedido)." }));
@@ -357,39 +441,75 @@ export function NewAnalysisPageView() {
 
     setPendingImportError(null);
     setPendingImportFile(selected);
+    setPendingImportRawFile(rawFile);
   }
 
-  function confirmImport() {
+  async function confirmImport() {
     if (!pendingImportFile) return;
     const importedAt = new Date().toISOString();
 
     if (importModalSource === "agrisk") {
-      setAgriskImport((prev) => ({ ...prev, files: [pendingImportFile], status: "processing", importedAt, errorMessage: null }));
-      setTimeout(() => {
-        setAgriskImport((prev) => (prev.files.length > 0 ? { ...prev, status: "success" } : prev));
-      }, 900);
+      if (!pendingImportRawFile) {
+        setPendingImportError("Não foi possível ler o arquivo selecionado.");
+        return;
+      }
+      setAgriskImport((prev) => ({
+        ...prev,
+        files: [pendingImportFile],
+        status: "processing",
+        importedAt,
+        errorMessage: null,
+        agriskReadId: null,
+        agriskReadPayload: null,
+        agriskWarnings: []
+      }));
+      setPendingImportError(null);
+      setPendingImportFile(null);
+      setPendingImportRawFile(null);
+      setIsAgriskDataDrawerOpen(false);
+      setIsImportModalOpen(false);
+      try {
+        const response = await readAgriskReport(pendingImportRawFile, sanitizeDigits(customer.cnpj));
+        setAgriskImport((prev) => ({
+          ...prev,
+          files: [pendingImportFile],
+          status: response.status,
+          importedAt,
+          errorMessage: response.validation_message,
+          agriskReadId: response.id,
+          agriskReadPayload: response.read_payload,
+          agriskWarnings: response.warnings
+        }));
+      } catch (error) {
+        const message = error instanceof Error ?error.message : "Falha ao processar o relatório AgRisk.";
+        setAgriskImport((prev) => ({ ...prev, status: "error", errorMessage: message }));
+      }
+      return;
     } else if (importModalSource === "coface") {
       setCofaceImport((prev) => ({ ...prev, files: [pendingImportFile], status: "processing", importedAt, errorMessage: null }));
       setTimeout(() => {
-        setCofaceImport((prev) => (prev.files.length > 0 ? { ...prev, status: "success" } : prev));
+        setCofaceImport((prev) => (prev.files.length > 0 ?{ ...prev, status: "success" } : prev));
       }, 900);
     } else {
       setInternalImport((prev) => ({ ...prev, files: [pendingImportFile], status: "processing", importedAt, errorMessage: null }));
       setTimeout(() => {
-        setInternalImport((prev) => (prev.files.length > 0 ? { ...prev, status: "success" } : prev));
+        setInternalImport((prev) => (prev.files.length > 0 ?{ ...prev, status: "success" } : prev));
       }, 900);
     }
 
     setPendingImportError(null);
+    setPendingImportFile(null);
+    setPendingImportRawFile(null);
     setIsImportModalOpen(false);
   }
 
   function removeImport(source: ImportSource) {
     const shouldRemove = window.confirm(
-      source === "internal" ? "Deseja remover o arquivo importado desta fonte?" : "Deseja remover o relatório importado desta fonte?"
+      source === "internal" ?"Deseja remover o arquivo importado desta fonte?" : "Deseja remover o relatório importado desta fonte?"
     );
     if (!shouldRemove) return;
     if (source === "agrisk") {
+      setIsAgriskDataDrawerOpen(false);
       setAgriskImport(buildDefaultImportState());
       return;
     }
@@ -427,7 +547,7 @@ export function NewAnalysisPageView() {
       errorMessage: null
     }));
     setTimeout(() => {
-      setOcr((prev) => (prev.files.length > 0 ? { ...prev, status: "success" } : prev));
+      setOcr((prev) => (prev.files.length > 0 ?{ ...prev, status: "success" } : prev));
     }, 900);
   }
 
@@ -445,7 +565,7 @@ export function NewAnalysisPageView() {
     setManual((prev) => ({
       ...prev,
       comments: manualPanel.analystNotes,
-      observations: `Fonte do score: ${scoreIsFromImportedAgrisk ? "Agrisk (importado)" : manualPanel.scoreSource}; Score: ${scoreIsFromImportedAgrisk ? "informado por relatório importado" : manualPanel.scoreValue}; DRA COFACE: ${cofaceIsFromImportedReport ? "informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}`
+      observations: `Fonte do score: ${scoreIsFromImportedAgrisk ?"Agrisk (importado)" : manualPanel.scoreSource}; Score: ${scoreIsFromImportedAgrisk ?"informado por relatório importado" : manualPanel.scoreValue}; DRA COFACE: ${cofaceIsFromImportedReport ?"informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}`
     }));
     setIsManualDrawerOpen(false);
   }
@@ -479,10 +599,10 @@ export function NewAnalysisPageView() {
           active_lawsuits: manual.activeLawsuits,
           observations: manual.observations,
           comments: manual.comments,
-          has_commercial_history: manualConfigured ? manual.hasCommercialHistory : false,
-          commercial_history_revenue: manualConfigured && manual.hasCommercialHistory ? toNullableNumberInput(manual.commercialHistoryRevenue) : null,
-          contractual_avg_term_days: manualConfigured && manual.hasCommercialHistory ? toNullableNumberInput(manual.contractualAvgTermDays) : null,
-          effective_avg_term_days: manualConfigured && manual.hasCommercialHistory ? toNullableNumberInput(manual.effectiveAvgTermDays) : null
+          has_commercial_history: manualConfigured ?manual.hasCommercialHistory : false,
+          commercial_history_revenue: manualConfigured && manual.hasCommercialHistory ?toNullableNumberInput(manual.commercialHistoryRevenue) : null,
+          contractual_avg_term_days: manualConfigured && manual.hasCommercialHistory ?toNullableNumberInput(manual.contractualAvgTermDays) : null,
+          effective_avg_term_days: manualConfigured && manual.hasCommercialHistory ?toNullableNumberInput(manual.effectiveAvgTermDays) : null
         },
         ocr: {
           enabled: ocr.enabled,
@@ -506,21 +626,26 @@ export function NewAnalysisPageView() {
         },
         external_import: {
           enabled: hasAgriskImported || hasCofaceImported,
-          source_type: hasAgriskImported ? "agrisk" : hasCofaceImported ? "other" : "agrisk",
-          source_score: manualConfigured ? manualPanel.scoreValue : null,
-          source_rating: manualConfigured ? `Fonte manual: ${manualPanel.scoreSource}` : "",
+          source_type: hasAgriskImported ?"agrisk" : hasCofaceImported ?"other" : "agrisk",
+          source_score: manualConfigured ?manualPanel.scoreValue : null,
+          source_rating: manualConfigured ?`Fonte manual: ${manualPanel.scoreSource}` : "",
           negativations_count: Number(manual.negativationsCount || 0),
           protests_count: Number(manual.protestsCount || 0),
-          lawsuits_count: manual.activeLawsuits ? 1 : 0,
+          lawsuits_count: manual.activeLawsuits ?1 : 0,
           has_restrictions: false,
           notes: [
-            hasAgriskImported ? "Agrisk importado" : "",
-            hasCofaceImported ? "COFACE importado" : "",
-            manualConfigured && !hasCofaceImported ? `DRA COFACE manual: ${manualPanel.cofaceDra || "não informado"}` : ""
+            hasAgriskImported ?"Agrisk importado" : "",
+            hasAgriskImported && agriskImport.agriskReadId ?`Leitura AgRisk ID: ${agriskImport.agriskReadId}` : "",
+            hasAgriskImported && agriskImport.status ?`Status AgRisk: ${statusLabel(agriskImport.status)}` : "",
+            hasAgriskImported && agriskImport.agriskReadPayload?.credit?.score_source
+              ?`Fonte do score AgRisk: ${agriskImport.agriskReadPayload.credit.score_source}`
+              : "",
+            hasCofaceImported ?"COFACE importado" : "",
+            manualConfigured && !hasCofaceImported ?`DRA COFACE manual: ${manualPanel.cofaceDra || "não informado"}` : ""
           ]
             .filter(Boolean)
             .join(" · "),
-          files: [...agriskImport.files, ...cofaceImport.files]
+          files: [...(hasAgriskImported ?agriskImport.files : []), ...cofaceImport.files]
         }
       }
     };
@@ -531,7 +656,7 @@ export function NewAnalysisPageView() {
     return <ErrorState title="Não foi possível carregar clientes" description={customersQuery.error.message} onRetry={() => customersQuery.refetch()} />;
   }
 
-  const canContinue = step === 1 ? normalizedCnpj.length === 14 && Boolean(customer.companyName) : step === 2 ? hasStep2Source : step === 3 ? toNumberInput(analysis.requestedLimit) > 0 : true;
+  const canContinue = step === 1 ?normalizedCnpj.length === 14 && Boolean(customer.companyName) : step === 2 ?hasStep2Source : step === 3 ?toNumberInput(analysis.requestedLimit) > 0 : true;
 
   return (
     <section className="readability-standard space-y-4">
@@ -544,7 +669,7 @@ export function NewAnalysisPageView() {
           <p className="mt-1 text-[11px] text-[#8FA3B4]">A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente.</p>
         </div>
         <Link href="/analises" className="rounded-[8px] border border-[#D7E1EC] bg-white px-4 py-2 text-[12px] font-medium text-[#4F647A] hover:bg-[#f9fafb]">
-          <span className="mr-1">←</span> Voltar para análises
+          <span className="mr-1"></span> Voltar para análises
         </Link>
       </div>
 
@@ -558,22 +683,22 @@ export function NewAnalysisPageView() {
               <button type="button" onClick={() => navigateToStep(stepNumber)} className="flex items-center gap-2 text-left">
                 <span
                   className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${
-                    isDone ? "bg-[#295B9A] text-white" : isActive ? "bg-[#0D1B2A] text-white ring-2 ring-[#295B9A]/20" : "bg-[#EEF3F8] text-[#8FA3B4]"
+                    isDone ?"bg-[#295B9A] text-white" : isActive ?"bg-[#0D1B2A] text-white ring-2 ring-[#295B9A]/20" : "bg-[#EEF3F8] text-[#8FA3B4]"
                   }`}
                 >
-                  {isDone ? <Check className="h-3.5 w-3.5" /> : stepNumber}
+                  {isDone ?<Check className="h-3.5 w-3.5" /> : stepNumber}
                 </span>
-                <span className={`text-[11px] font-medium ${isDone ? "text-[#295B9A]" : isActive ? "text-[#102033]" : "text-[#8FA3B4]"}`}>{label}</span>
+                <span className={`text-[11px] font-medium ${isDone ?"text-[#295B9A]" : isActive ?"text-[#102033]" : "text-[#8FA3B4]"}`}>{label}</span>
               </button>
-              {index !== steps.length - 1 ? <div className={`mx-3 h-px flex-1 ${isDone ? "bg-[#295B9A]" : "bg-[#D7E1EC]"}`} /> : null}
+              {index !== steps.length - 1 ?<div className={`mx-3 h-px flex-1 ${isDone ?"bg-[#295B9A]" : "bg-[#D7E1EC]"}`} /> : null}
             </div>
           );
         })}
       </div>
 
-      {stepError ? <div className="rounded-[8px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#b91c1c]">{stepError}</div> : null}
+      {stepError ?<div className="rounded-[8px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#b91c1c]">{stepError}</div> : null}
 
-      {step === 1 ? (
+      {step === 1 ?(
         <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
           <p className="text-[13px] font-medium text-[#111827]">Informe o CNPJ para identificar o cliente</p>
           <label className="block text-[12px] text-[#374151]">
@@ -590,7 +715,7 @@ export function NewAnalysisPageView() {
             />
           </label>
           <p className="text-[12px] text-[#6b7280]">
-            {lookupMutation.isPending ? "Consultando dados cadastrais..." : externalLookupMessage ?? "A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente."}
+            {lookupMutation.isPending ?"Consultando dados cadastrais..." : externalLookupMessage ?? "A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente."}
           </p>
 
           {matchedCustomers.map((item) => (
@@ -620,7 +745,7 @@ export function NewAnalysisPageView() {
         </article>
       ) : null}
 
-      {step >= 2 ? (
+      {step >= 2 ?(
         <div className="flex items-center gap-3 rounded-[10px] border border-[#D7E1EC] bg-white px-5 py-3">
           <div className="mr-1 text-[11px] text-[#8FA3B4]">Cliente da solicitação</div>
           <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-[#EEF3F8] text-[10px] font-bold text-[#295B9A]">
@@ -632,7 +757,7 @@ export function NewAnalysisPageView() {
         </div>
       ) : null}
 
-      {step === 2 ? (
+      {step === 2 ?(
         <>
           <article className="space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -642,7 +767,7 @@ export function NewAnalysisPageView() {
               </div>
               <div className="space-y-1 text-right">
                 <p className="text-[11px] font-medium text-[#4F647A]">{structuredSourcesCount} de 3 fontes estruturadas preenchidas</p>
-                {isStep2Ready ? <p className="text-[11px] text-[#166534]">Dados suficientes para avançar para a próxima etapa</p> : null}
+                {isStep2Ready ?<p className="text-[11px] text-[#166534]">Dados suficientes para avançar para a próxima etapa</p> : null}
               </div>
             </div>
 
@@ -651,10 +776,10 @@ export function NewAnalysisPageView() {
                 type="button"
                 onClick={() => openImportModal("agrisk")}
                 className={`relative flex h-full flex-col rounded-[16px] border-2 border-[#295B9A] bg-white p-6 text-left transition hover:-translate-y-0.5 ${
-                  agriskImport.status !== "empty" ? "cursor-pointer hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]" : ""
+                  agriskImport.status !== "empty" ?"cursor-pointer hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]" : ""
                 }`}
               >
-                {agriskImport.status === "empty" ? (
+                {agriskImport.status === "empty" ?(
                   <>
                     <span className="absolute left-6 top-0 -translate-y-1/2 rounded-full bg-[#295B9A] px-3 py-1 text-[10px] font-semibold text-white">Principal</span>
                     <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#EEF3F8]">
@@ -679,8 +804,8 @@ export function NewAnalysisPageView() {
                         <p className="text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
                         <p className="text-[15px] font-semibold text-[#102033]">Importação Agrisk</p>
                       </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${agriskImport.status === "success" ? "bg-[#EAF7EE] text-[#166534]" : agriskImport.status === "processing" ? "bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#FEF2F2] text-[#B91C1C]"}`}>
-                        {statusLabel(agriskImport.status)}
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${importStatusBadgeClass(agriskImport.status)}`}>
+                        {agriskStatusBadgeLabel(agriskImport)}
                       </span>
                     </div>
                     <div className="mb-3 flex flex-1 flex-col justify-between rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
@@ -689,12 +814,40 @@ export function NewAnalysisPageView() {
                         <p className="mt-1 text-[11px] font-semibold text-[#102033]">{importMonitorTitle("agrisk")}</p>
                         <p className="mt-1 truncate text-[11px] text-[#102033]">{agriskImport.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
                         <p className="text-[10px] text-[#64748B]">
-                          {agriskImport.files[0] ? `${formatFileSize(agriskImport.files[0].file_size)} · ${agriskImport.importedAt ? `Importado em ${formatImportedAt(agriskImport.importedAt)}` : "Importado"}` : agriskImport.errorMessage ?? "Falha na leitura do arquivo."}
+                          {agriskImport.files[0] ?`${formatFileSize(agriskImport.files[0].file_size)} · ${agriskImport.importedAt ?`Importado em ${formatImportedAt(agriskImport.importedAt)}` : "Importado"}` : agriskImport.errorMessage ?? "Falha na leitura do arquivo."}
                         </p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("agrisk")}</p>
-                        <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorStatusText("agrisk", agriskImport.status)}</p>
+                        {agriskImport.status === "valid" ?(
+                          <p className="mt-1 text-[10px] text-[#4F647A]">Relatório validado e pronto para análise.</p>
+                        ) : null}
+                        {agriskImport.status === "valid_with_warnings" ?(
+                          <>
+                            <p className="mt-1 text-[10px] text-[#92400E]">Relatório validado com alertas de leitura.</p>
+                            <p className="mt-1 text-[10px] text-[#4F647A]">Confira os detalhes em Ver dados importados.</p>
+                          </>
+                        ) : null}
+                        {!isAgriskValidatedStatus(agriskImport.status) && !(agriskImport.status === "invalid" && isDocumentDivergenceMessage(agriskImport.errorMessage)) ?(
+                          <p className={`mt-1 text-[10px] ${agriskImport.status === "invalid" || agriskImport.status === "error" ?"text-[#B91C1C]" : "text-[#4F647A]"}`}>
+                            {importMonitorStatusText("agrisk", agriskImport.status)}
+                          </p>
+                        ) : null}
+                        {!isAgriskValidatedStatus(agriskImport.status) && agriskImport.errorMessage && !isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
+                          <p className={`mt-1 text-[10px] ${agriskImport.status === "invalid" ?"text-[#B91C1C]" : "text-[#4F647A]"}`}>
+                            {agriskImport.errorMessage}
+                          </p>
+                        ) : null}
+                        {agriskImport.status === "invalid" && isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
+                          <p className="mt-1 text-[10px] text-[#B91C1C]">
+                            O CNPJ do relatório não corresponde ao cliente informado.
+                          </p>
+                        ) : null}
+                        {(agriskImport.status === "invalid" || agriskImport.status === "error") && !isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
+                          <p className="mt-1 text-[10px] text-[#B91C1C]">
+                            Este relatório não será considerado apto para análise até ser substituído.
+                          </p>
+                        ) : null}
                       </div>
-                      <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-medium">
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-medium">
                         <button
                           type="button"
                           onClick={(event) => {
@@ -705,9 +858,23 @@ export function NewAnalysisPageView() {
                         >
                           {removeActionLabel("agrisk")}
                         </button>
-                        <span className="inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
-                          Substituir relatório <ChevronRight className="ml-1 h-3.5 w-3.5" />
-                        </span>
+                        {isAgriskValidatedStatus(agriskImport.status) && agriskImport.agriskReadPayload ?(
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setIsAgriskDataDrawerOpen(true);
+                            }}
+                            className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#295B9A]"
+                          >
+                            Ver dados importados
+                          </button>
+                        ) : null}
+                        {(agriskImport.status === "invalid" || agriskImport.status === "error") ?(
+                          <span className="inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
+                            Substituir relatório <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </>
@@ -719,11 +886,11 @@ export function NewAnalysisPageView() {
                 onClick={() => openImportModal("coface")}
                 className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left transition hover:border-[#295B9A] ${
                   cofaceImport.status !== "empty"
-                    ? "cursor-pointer border-[#295B9A] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]"
+                    ?"cursor-pointer border-[#295B9A] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]"
                     : "border-[#D7E1EC]"
                 }`}
               >
-                {cofaceImport.status === "empty" ? (
+                {cofaceImport.status === "empty" ?(
                   <>
                     <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
                       <Upload className="h-5 w-5 text-[#295B9A]" />
@@ -747,7 +914,7 @@ export function NewAnalysisPageView() {
                         <p className="text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
                         <p className="text-[15px] font-semibold text-[#102033]">Importação COFACE</p>
                       </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${cofaceImport.status === "success" ? "bg-[#EAF7EE] text-[#166534]" : cofaceImport.status === "processing" ? "bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#FEF2F2] text-[#B91C1C]"}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${importStatusBadgeClass(cofaceImport.status)}`}>
                         {statusLabel(cofaceImport.status)}
                       </span>
                     </div>
@@ -757,7 +924,7 @@ export function NewAnalysisPageView() {
                         <p className="mt-1 text-[11px] font-semibold text-[#102033]">{importMonitorTitle("coface")}</p>
                         <p className="mt-1 truncate text-[11px] text-[#102033]">{cofaceImport.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
                         <p className="text-[10px] text-[#64748B]">
-                          {cofaceImport.files[0] ? `${formatFileSize(cofaceImport.files[0].file_size)} · ${cofaceImport.importedAt ? `Importado em ${formatImportedAt(cofaceImport.importedAt)}` : "Importado"}` : cofaceImport.errorMessage ?? "Falha na leitura do arquivo."}
+                          {cofaceImport.files[0] ?`${formatFileSize(cofaceImport.files[0].file_size)} · ${cofaceImport.importedAt ?`Importado em ${formatImportedAt(cofaceImport.importedAt)}` : "Importado"}` : cofaceImport.errorMessage ?? "Falha na leitura do arquivo."}
                         </p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("coface")}</p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorStatusText("coface", cofaceImport.status)}</p>
@@ -787,11 +954,11 @@ export function NewAnalysisPageView() {
                 onClick={() => openImportModal("internal")}
                 className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left transition hover:border-[#295B9A] ${
                   internalImport.status !== "empty"
-                    ? "cursor-pointer border-[#295B9A] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]"
+                    ?"cursor-pointer border-[#295B9A] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]"
                     : "border-[#D7E1EC]"
                 }`}
               >
-                {internalImport.status === "empty" ? (
+                {internalImport.status === "empty" ?(
                   <>
                     <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
                       <Upload className="h-5 w-5 text-[#4F647A]" />
@@ -815,7 +982,7 @@ export function NewAnalysisPageView() {
                         <p className="text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Base interna</p>
                         <p className="text-[15px] font-semibold text-[#102033]">Importação interna</p>
                       </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${internalImport.status === "success" ? "bg-[#EAF7EE] text-[#166534]" : internalImport.status === "processing" ? "bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#FEF2F2] text-[#B91C1C]"}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${importStatusBadgeClass(internalImport.status)}`}>
                         {statusLabel(internalImport.status)}
                       </span>
                     </div>
@@ -825,7 +992,7 @@ export function NewAnalysisPageView() {
                         <p className="mt-1 text-[11px] font-semibold text-[#102033]">{importMonitorTitle("internal")}</p>
                         <p className="mt-1 truncate text-[11px] text-[#102033]">{internalImport.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
                         <p className="text-[10px] text-[#64748B]">
-                          {internalImport.files[0] ? `${formatFileSize(internalImport.files[0].file_size)} · ${internalImport.importedAt ? `Importado em ${formatImportedAt(internalImport.importedAt)}` : "Importado"}` : internalImport.errorMessage ?? "Falha na leitura do arquivo."}
+                          {internalImport.files[0] ?`${formatFileSize(internalImport.files[0].file_size)} · ${internalImport.importedAt ?`Importado em ${formatImportedAt(internalImport.importedAt)}` : "Importado"}` : internalImport.errorMessage ?? "Falha na leitura do arquivo."}
                         </p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("internal")}</p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorStatusText("internal", internalImport.status)}</p>
@@ -857,7 +1024,7 @@ export function NewAnalysisPageView() {
                 }}
                 disabled={isManualBlocked}
                 className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left transition ${
-                  isManualBlocked ? "cursor-not-allowed border-[#D7E1EC] opacity-75" : "hover:border-[#295B9A]"
+                  isManualBlocked ?"cursor-not-allowed border-[#D7E1EC] opacity-75" : "hover:border-[#295B9A]"
                 }`}
               >
                 <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
@@ -868,18 +1035,18 @@ export function NewAnalysisPageView() {
                 <p className="flex-1 text-[12px] leading-relaxed text-[#4F647A]">
                   Informe apenas dados internos comerciais e operacionais para complementar a análise.
                 </p>
-                {isManualBlocked ? (
+                {isManualBlocked ?(
                   <p className="mt-2 border-t border-[#EEF3F8] pt-2 text-[11px] leading-relaxed text-[#8FA3B4]">
                     Complemento manual indisponível. Agrisk, COFACE e importação interna já foram carregados nesta análise.
                   </p>
                 ) : null}
                 <span className="mt-4 inline-flex items-center justify-center rounded-[9px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-2 text-[12px] font-medium text-[#102033]">
-                  {isManualBlocked ? "Complemento manual indisponível" : "Preencher manualmente"}
+                  {isManualBlocked ?"Complemento manual indisponível" : "Preencher manualmente"}
                 </span>
               </button>
             </div>
 
-            {ocr.files.length === 0 ? (
+            {ocr.files.length === 0 ?(
               <div className="flex items-center justify-between rounded-[14px] border border-dashed border-[#D7E1EC] bg-white px-6 py-4">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] text-[#8FA3B4]">
@@ -890,7 +1057,7 @@ export function NewAnalysisPageView() {
                       Complementar com demonstrativos financeiros <span className="text-[10px] font-normal text-[#8FA3B4]">(opcional)</span>
                     </p>
                     <p className="text-[11px] text-[#8FA3B4]">Envio de DRE ou balanço para leitura assistida.</p>
-                    {ocr.status === "error" && ocr.errorMessage ? <p className="mt-1 text-[11px] text-[#B91C1C]">{ocr.errorMessage}</p> : null}
+                    {ocr.status === "error" && ocr.errorMessage ?<p className="mt-1 text-[11px] text-[#B91C1C]">{ocr.errorMessage}</p> : null}
                   </div>
                 </div>
                 <button
@@ -911,14 +1078,14 @@ export function NewAnalysisPageView() {
                     </p>
                     <p className="text-[11px] text-[#8FA3B4]">Demonstrativo importado</p>
                   </div>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ocr.status === "success" ? "bg-[#EAF7EE] text-[#166534]" : ocr.status === "processing" ? "bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#FEF2F2] text-[#B91C1C]"}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ocr.status === "success" ?"bg-[#EAF7EE] text-[#166534]" : ocr.status === "processing" ?"bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#FEF2F2] text-[#B91C1C]"}`}>
                     {statusLabel(ocr.status)}
                   </span>
                 </div>
                 <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
                   <p className="truncate text-[11px] font-semibold text-[#102033]">{ocr.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
                   <p className="text-[10px] text-[#64748B]">
-                    {ocr.files[0] ? `${formatFileSize(ocr.files[0].file_size)} · ${ocr.importedAt ? `Importado em ${formatImportedAt(ocr.importedAt)}` : "Importado"}` : "Sem arquivo vinculado"}
+                    {ocr.files[0] ?`${formatFileSize(ocr.files[0].file_size)} · ${ocr.importedAt ?`Importado em ${formatImportedAt(ocr.importedAt)}` : "Importado"}` : "Sem arquivo vinculado"}
                   </p>
                   <p className="mt-1 text-[10px] text-[#4F647A]">Demonstrativos prontos para leitura assistida</p>
                 </div>
@@ -943,7 +1110,7 @@ export function NewAnalysisPageView() {
             )}
           </article>
 
-          {isImportModalOpen ? (
+          {isImportModalOpen ?(
             <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#0D1B2A]/55 p-4" onClick={() => setIsImportModalOpen(false)}>
               <div className="w-full max-w-[480px] rounded-[18px] bg-white p-7 shadow-xl" onClick={(event) => event.stopPropagation()}>
                 <button type="button" onClick={() => setIsImportModalOpen(false)} className="absolute hidden" />
@@ -951,16 +1118,16 @@ export function NewAnalysisPageView() {
                   <div>
                     <p className="text-[16px] font-semibold text-[#102033]">
                       {importModalSource === "agrisk"
-                        ? "Importar relatório Agrisk"
+                        ?"Importar relatório Agrisk"
                         : importModalSource === "coface"
-                          ? "Importar relatório COFACE"
+                          ?"Importar relatório COFACE"
                           : "Importar base interna"}
                     </p>
                     <p className="text-[12px] text-[#4F647A]">
                       {importModalSource === "agrisk"
-                        ? "Selecione ou arraste o arquivo exportado da Agrisk para processamento automático."
+                        ?"Selecione ou arraste o arquivo exportado da Agrisk para processamento automático."
                         : importModalSource === "coface"
-                          ? "Selecione ou arraste o arquivo exportado da COFACE para leitura automática do DRA e indicadores de risco."
+                          ?"Selecione ou arraste o arquivo exportado da COFACE para leitura automática do DRA e indicadores de risco."
                           : "Selecione a planilha com títulos, vencimentos e pagamentos para complementar a análise."}
                     </p>
                   </div>
@@ -969,7 +1136,7 @@ export function NewAnalysisPageView() {
                   </button>
                 </div>
 
-                {pendingImportFile ? (
+                {pendingImportFile ?(
                   <div className="mb-4 rounded-[8px] border border-[#B5D4F4] bg-[#EEF3F8] p-3">
                     <div className="flex items-center gap-3">
                       <div className="flex h-8 w-8 items-center justify-center rounded-[7px] border border-[#D7E1EC] bg-white">
@@ -977,15 +1144,25 @@ export function NewAnalysisPageView() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[12px] font-medium text-[#102033]">{pendingImportFile.original_filename}</p>
-                        <p className="text-[11px] text-[#8FA3B4]">{formatFileSize(pendingImportFile.file_size)} · Pronto para importar</p>
+                        <p className="text-[11px] text-[#8FA3B4]">{formatFileSize(pendingImportFile.file_size)} · Arquivo selecionado</p>
                       </div>
-                      <button type="button" onClick={() => setPendingImportFile(null)} className="text-[#8FA3B4]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingImportFile(null);
+                          setPendingImportRawFile(null);
+                          setPendingImportError(null);
+                        }}
+                        className="text-[#8FA3B4]"
+                      >
                         <X className="h-4 w-4" />
                       </button>
                     </div>
-                    <div className="mt-3 flex items-center gap-2 rounded-[8px] border border-[#A7DDB8] bg-[#F0FBF5] px-3 py-2 text-[11px] text-[#1A7A3A]">
+                    <div className="mt-3 flex items-center gap-2 rounded-[8px] border border-[#CFE0F4] bg-white px-3 py-2 text-[11px] text-[#295B9A]">
                       <Check className="h-3.5 w-3.5" />
-                      Arquivo válido. Os dados serão extraídos automaticamente.
+                      {importModalSource === "agrisk"
+                        ?"Pronto para importação. A validação do CNPJ será realizada após clicar em Importar."
+                        : "Pronto para importação."}
                     </div>
                   </div>
                 ) : (
@@ -1011,7 +1188,7 @@ export function NewAnalysisPageView() {
                   ))}
                 </div>
 
-                {pendingImportError ? (
+                {pendingImportError ?(
                   <div className="mb-4 rounded-[8px] border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 text-[11px] text-[#B91C1C]">
                     {pendingImportError}
                   </div>
@@ -1036,7 +1213,102 @@ export function NewAnalysisPageView() {
             </div>
           ) : null}
 
-          {isManualDrawerOpen ? (
+          {isAgriskDataDrawerOpen ?(
+            <div className="fixed inset-0 z-40 flex justify-end bg-[#0D1B2A]/45" onClick={() => setIsAgriskDataDrawerOpen(false)}>
+              <div className="flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
+                  <div>
+                    <p className="text-[15px] font-semibold text-[#102033]">Dados importados do relatório AgRisk</p>
+                    <p className="text-[12px] text-[#4F647A]">Somente os dados estruturados utilizados pelo motor de crédito.</p>
+                  </div>
+                  <button type="button" onClick={() => setIsAgriskDataDrawerOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-6 py-5">
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Identificação</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Razão social:</span> {agriskImport.agriskReadPayload?.company?.name || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Documento:</span> {agriskImport.agriskReadPayload?.company?.document || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Abertura:</span> {agriskImport.agriskReadPayload?.company?.opened_at || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Idade:</span> {agriskImport.agriskReadPayload?.company?.age_years ?? "Não informado"}</p>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Crédito</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Score principal:</span> {agriskImport.agriskReadPayload?.credit?.score ?? "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Fonte do score principal:</span> {scoreSourceLabel(agriskImport.agriskReadPayload?.credit?.score_source)}</p>
+                      <p><span className="font-medium text-[#102033]">Rating:</span> {agriskImport.agriskReadPayload?.credit?.rating || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Probabilidade de inadimplência:</span> {agriskImport.agriskReadPayload?.credit?.default_probability != null ?`${(agriskImport.agriskReadPayload.credit.default_probability * 100).toFixed(1).replace(".", ",")}%` : "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Classificação:</span> {agriskImport.agriskReadPayload?.credit?.default_probability_label || "Não informado"}</p>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Restritivos</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Quantidade:</span> {agriskImport.agriskReadPayload?.restrictions?.negative_events_count ?? 0}</p>
+                      <p><span className="font-medium text-[#102033]">Valor total:</span> {agriskImport.agriskReadPayload?.restrictions?.negative_events_total_amount != null ?`R$ ${agriskImport.agriskReadPayload.restrictions.negative_events_total_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Último apontamento:</span> {agriskImport.agriskReadPayload?.restrictions?.last_negative_event_at || "Não informado"}</p>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Protestos / CCF</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Protestos:</span> {agriskImport.agriskReadPayload?.protests?.count ?? 0}</p>
+                      <p><span className="font-medium text-[#102033]">Valor total de protestos:</span> {agriskImport.agriskReadPayload?.protests?.total_amount != null ?`R$ ${agriskImport.agriskReadPayload.protests.total_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "R$ 0,00"}</p>
+                      <p><span className="font-medium text-[#102033]">CCF com registros:</span> {agriskImport.agriskReadPayload?.checks_without_funds?.has_records ?"Sim" : "Não"}</p>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Consultas</p>
+                    <p className="text-[12px] text-[#4F647A]"><span className="font-medium text-[#102033]">Total de consultas:</span> {agriskImport.agriskReadPayload?.consultations?.total ?? 0}</p>
+                  </div>
+
+                  <div className="mb-6">
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Societário</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      {(agriskImport.agriskReadPayload?.ownership?.shareholding ?? []).length > 0 ?(
+                        (agriskImport.agriskReadPayload?.ownership?.shareholding ?? []).map((item) => <p key={item}>{item}</p>)
+                      ) : (
+                        <p>Sem participações societárias estruturadas.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Qualidade da leitura</p>
+                    <div className="space-y-1 text-[12px] text-[#4F647A]">
+                      <p><span className="font-medium text-[#102033]">Confiança:</span> {confidenceLabel(agriskImport.agriskReadPayload?.read_quality?.confidence)}</p>
+                      {(agriskImport.agriskWarnings ?? []).length > 0 ?(
+                        <div className="mt-2 rounded-[10px] border border-[#F3D7A1] bg-[#FFF7E8] p-3">
+                          <p className="text-[12px] font-semibold text-[#92400E]">Alertas de leitura</p>
+                          <p className="mt-1 text-[11px] text-[#7C5A1D]">
+                            Alguns blocos esperados não foram encontrados, mas a leitura principal foi concluída.
+                          </p>
+                          <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-[#7C5A1D]">
+                            {(agriskImport.agriskWarnings ?? []).map((warning) => (
+                              <li key={warning}>{formatAgriskWarning(warning)}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <p>Sem alertas relevantes de leitura.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isManualDrawerOpen ?(
             <div className="fixed inset-0 z-40 flex justify-end bg-[#0D1B2A]/45" onClick={() => setIsManualDrawerOpen(false)}>
               <div className="flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
                 <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
@@ -1061,7 +1333,7 @@ export function NewAnalysisPageView() {
                           className="mt-1 h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
                         >
                           <option value="Agrisk" disabled={hasAgriskImported}>
-                            {hasAgriskImported ? "Agrisk — indisponível (já importado)" : "Agrisk"}
+                            {hasAgriskImported ?"Agrisk  indisponível (já importado)" : "Agrisk"}
                           </option>
                           <option value="Serasa">Serasa</option>
                           <option value="SCR/Bacen">SCR/Bacen</option>
@@ -1106,7 +1378,7 @@ export function NewAnalysisPageView() {
                           <span className="min-w-[38px] text-right text-[16px] font-semibold text-[#295B9A]">{manualPanel.cofaceDra.toFixed(1)}</span>
                         </div>
                       </div>
-                      {hasCofaceImported ? <span className="mt-1 block text-[10px] text-[#8FA3B4]">DRA COFACE já informado por relatório importado.</span> : null}
+                      {hasCofaceImported ?<span className="mt-1 block text-[10px] text-[#8FA3B4]">DRA COFACE já informado por relatório importado.</span> : null}
                     </div>
                   </div>
 
@@ -1158,7 +1430,7 @@ export function NewAnalysisPageView() {
         </>
       ) : null}
 
-      {step === 3 ? (
+      {step === 3 ?(
         <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
           <p className="text-[13px] font-medium text-[#111827]">Dados da solicitação</p>
           <p className="text-[12px] text-[#6b7280]">Informe os dados principais da solicitação de crédito antes de avançar.</p>
@@ -1183,7 +1455,7 @@ export function NewAnalysisPageView() {
         </article>
       ) : null}
 
-      {step === 4 ? (
+      {step === 4 ?(
         <article className="space-y-4 rounded-[10px] border border-[#e2e5eb] bg-white p-4 text-[12px]">
           <div>
             <p className="text-[13px] font-medium text-[#111827]">Revise as informações antes de enviar para análise</p>
@@ -1217,25 +1489,27 @@ export function NewAnalysisPageView() {
             <div className={`mt-2 rounded-[6px] border px-3 py-2 ${labelStatus(internalStatus)}`}>Importação interna: {internalStatus}</div>
           </section>
 
-          {manualConfigured ? (
+          {manualConfigured ?(
             <section className="rounded-[8px] border border-[#e5e7eb] p-3">
               <p>Negativações: <strong>{manual.negativationsCount || "0"}</strong></p>
               <p>Valor total de Negativações: <strong>{formatCurrencyBRL(manual.negativationsAmount)}</strong></p>
               <p>Protestos: <strong>{manual.protestsCount || "0"}</strong></p>
               <p>Valor total de protestos: <strong>{formatCurrencyBRL(manual.protestsAmount)}</strong></p>
-              <p>Processos judiciais ativos: <strong>{manual.activeLawsuits ? "Sim" : "Não"}</strong></p>
+              <p>Processos judiciais ativos: <strong>{manual.activeLawsuits ?"Sim" : "Não"}</strong></p>
             </section>
           ) : null}
 
-          {submitMutation.isError ? <p className="text-[#b91c1c]">{submitMutation.error.message}</p> : null}
+          {submitMutation.isError ?<p className="text-[#b91c1c]">{submitMutation.error.message}</p> : null}
         </article>
       ) : null}
 
-      {step === 2 ? (
+      {step === 2 ?(
         <div className="flex items-center justify-between rounded-[12px] border border-[#D7E1EC] bg-white px-6 py-4">
           <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
             <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full border border-[#8FA3B4]">i</span>
-            Selecione ao menos uma fonte de dados para Avançar
+            {hasInvalidAgriskImport
+              ?"Relatório AgRisk inválido: esse insumo não será usado até o envio de um arquivo válido."
+              : "Selecione ao menos uma fonte de dados para Avançar"}
           </div>
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setStep((prev) => Math.max(1, prev - 1))} className="inline-flex items-center rounded-[8px] border border-[#D7E1EC] bg-white px-4 py-2 text-[12px] font-medium text-[#4F647A]">
@@ -1256,13 +1530,13 @@ export function NewAnalysisPageView() {
           <button type="button" onClick={() => setStep((prev) => Math.max(1, prev - 1))} disabled={step === 1} className="rounded-[6px] border border-[#d1d5db] px-3 py-2 text-[12px] text-[#374151] disabled:opacity-50">
             Voltar
           </button>
-          {step < 4 ? (
+          {step < 4 ?(
             <button type="button" onClick={() => navigateToStep(Math.min(4, step + 1))} disabled={!canContinue} className="rounded-[6px] bg-[#1a2b5e] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
               Avançar
             </button>
           ) : (
             <button type="button" onClick={submit} disabled={submitMutation.isPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
-              {submitMutation.isPending ? "Enviando..." : "Enviar para análise"}
+              {submitMutation.isPending ?"Enviando..." : "Enviar para análise"}
             </button>
           )}
         </div>

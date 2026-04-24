@@ -5,3 +5,4 @@ psycopg[binary]==3.3.3
 pydantic-settings==2.14.0
 alembic==1.18.4
 python-dotenv==1.2.2
+pypdf==6.10.2
