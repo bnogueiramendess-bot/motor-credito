@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { AnalysisJourneySubmitRequest, AnalysisJourneySubmitResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import {
+  AnalysisJourneySubmitRequest,
+  AnalysisJourneySubmitResponse,
+  CofaceReportReadResponse,
+  UploadFileMetadataInput
+} from "@/features/analysis-journey/api/contracts";
 import { CreditAnalysisDto, CustomerDto } from "@/features/credit-analyses/api/contracts";
 import { ExternalDataEntryDto } from "@/features/external-data/api/contracts";
 import { BackendError, fetchBackend } from "@/shared/server/backend-client";
@@ -44,6 +49,10 @@ function toCurrencyNumber(value: number | null | undefined) {
     return 0;
   }
   return Math.max(0, value);
+}
+
+function isCofaceStatusValid(status: CofaceReportReadResponse["status"]) {
+  return status === "valid" || status === "valid_with_warnings";
 }
 
 async function registerEntryWithFiles(
@@ -107,13 +116,43 @@ export async function POST(request: Request) {
       });
     }
 
+    const requestedLimit = toCurrencyNumber(payload.analysis.requested_limit);
+    const currentLimit = toCurrencyNumber(payload.analysis.current_limit);
+    const usedLimit = toCurrencyNumber(payload.analysis.used_limit);
+    let guaranteeLimit = toCurrencyNumber(payload.analysis.guarantee_limit);
+
+    if (payload.analysis.guarantee_limit_source === "coface_report") {
+      const cofaceReadId = payload.inputs.external_import.coface_read_id;
+      if (cofaceReadId !== null) {
+        try {
+          const cofaceRead = await fetchBackend<CofaceReportReadResponse>(`/credit-report-reads/coface/${cofaceReadId}`);
+          const importedCoverageAmount = cofaceRead.read_payload?.coface?.decision_amount;
+          if (isCofaceStatusValid(cofaceRead.status) && importedCoverageAmount !== null && importedCoverageAmount !== undefined) {
+            guaranteeLimit = toCurrencyNumber(importedCoverageAmount);
+          } else {
+            warnings.push("Relatorio COFACE sem valor de cobertura valido. Limite com garantia mantido conforme preenchimento da tela.");
+          }
+        } catch (error) {
+          if (error instanceof BackendError) {
+            warnings.push(`Nao foi possivel confirmar o valor de cobertura COFACE: ${error.message}`);
+          } else {
+            warnings.push("Nao foi possivel confirmar o valor de cobertura COFACE no backend.");
+          }
+        }
+      } else {
+        warnings.push("Leitura COFACE nao informada no envio. Limite com garantia mantido conforme preenchimento da tela.");
+      }
+    }
+
+    const exposureAmount = Math.max(0, requestedLimit + currentLimit + usedLimit - guaranteeLimit);
+
     const analysis = await fetchBackend<CreditAnalysisDto>("/credit-analyses", {
       method: "POST",
       body: JSON.stringify({
         customer_id: customer.id,
-        requested_limit: toCurrencyNumber(payload.analysis.requested_limit),
-        current_limit: toCurrencyNumber(payload.analysis.current_limit),
-        exposure_amount: toCurrencyNumber(payload.analysis.exposure_amount),
+        requested_limit: requestedLimit,
+        current_limit: currentLimit,
+        exposure_amount: exposureAmount,
         annual_revenue_estimated: toCurrencyNumber(payload.analysis.annual_revenue_estimated),
         assigned_analyst_name: payload.analysis.assigned_analyst_name || null
       })

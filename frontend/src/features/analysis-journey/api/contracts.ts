@@ -44,6 +44,8 @@ export type InternalImportInputBlock = {
 export type ExternalImportInputBlock = {
   enabled: boolean;
   source_type: "agrisk" | "serasa" | "scr" | "other";
+  coface_read_id: number | null;
+  coface_decision_amount: number | null;
   source_score: number | null;
   source_rating: string;
   negativations_count: number;
@@ -68,6 +70,9 @@ export type AnalysisJourneySubmitRequest = {
   analysis: {
     requested_limit: number;
     current_limit: number;
+    used_limit: number;
+    guarantee_limit: number;
+    guarantee_limit_source: "manual" | "coface_report";
     exposure_amount: number;
     annual_revenue_estimated: number;
     assigned_analyst_name: string;
@@ -201,7 +206,7 @@ export type CofaceReportReadResponse = {
 };
 
 export type ExternalCnpjLookupResponse = {
-  status: "ok" | "not_found" | "unavailable";
+  status: "ok" | "not_found" | "unavailable" | "invalid_input";
   message: string | null;
   data: {
     cnpj: string;

@@ -152,7 +152,7 @@ function isAgriskValidatedStatus(status: ImportStatus) {
 }
 
 function isCofaceValidatedStatus(status: ImportStatus) {
-  return status === "valid" || status === "valid_with_warnings" || status === "success";
+  return status === "valid" || status === "valid_with_warnings";
 }
 
 function importStatusBadgeClass(status: ImportStatus) {
@@ -265,6 +265,7 @@ export function NewAnalysisPageView() {
     assignedAnalystName: "Backoffice",
     comment: ""
   });
+  const [manualGuaranteeLimitBeforeCoface, setManualGuaranteeLimitBeforeCoface] = useState<string | null>(null);
 
   const [manual, setManual] = useState({
     negativationsCount: "0",
@@ -316,14 +317,20 @@ export function NewAnalysisPageView() {
   const totalLimitCalculated = useMemo(() => {
     return toNumberInput(analysis.requestedLimit) + toNumberInput(analysis.currentLimit) + toNumberInput(analysis.usedLimit);
   }, [analysis.currentLimit, analysis.requestedLimit, analysis.usedLimit]);
-  const exposureCalculated = useMemo(() => totalLimitCalculated - toNumberInput(analysis.guaranteeLimit), [analysis.guaranteeLimit, totalLimitCalculated]);
-  const currencyFormatter = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+  const exposureCalculated = useMemo(
+    () => Math.max(0, totalLimitCalculated - toNumberInput(analysis.guaranteeLimit)),
+    [analysis.guaranteeLimit, totalLimitCalculated]
+  );
+  const currencyFormatter = useMemo(() => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }), []);
   const totalLimitDisplay = currencyFormatter.format(totalLimitCalculated);
   const exposureDisplay = currencyFormatter.format(exposureCalculated);
+  const hasPositiveExposure = exposureCalculated > 0;
 
   const hasAgriskImported = agriskImport.files.length > 0 && (agriskImport.status === "valid" || agriskImport.status === "valid_with_warnings");
   const hasInvalidAgriskImport = agriskImport.files.length > 0 && (agriskImport.status === "invalid" || agriskImport.status === "error");
   const hasCofaceImported = cofaceImport.files.length > 0 && isCofaceValidatedStatus(cofaceImport.status);
+  const cofaceDecisionAmount = hasCofaceImported ?cofaceImport.cofaceReadPayload?.coface?.decision_amount ?? null : null;
+  const hasCofaceCoverageImported = hasCofaceImported && cofaceDecisionAmount !== null;
   const hasInternalImported = internalImport.files.length > 0;
   const structuredSourcesCount = [hasAgriskImported, hasCofaceImported, hasInternalImported].filter(Boolean).length;
   const isManualBlocked = hasAgriskImported && hasCofaceImported && hasInternalImported;
@@ -334,6 +341,25 @@ export function NewAnalysisPageView() {
     if (!hasAgriskImported) return;
     setManualPanel((prev) => (prev.scoreSource === "Agrisk" ?{ ...prev, scoreSource: "Serasa" } : prev));
   }, [hasAgriskImported]);
+
+  useEffect(() => {
+    if (hasCofaceCoverageImported && cofaceDecisionAmount !== null) {
+      setManualGuaranteeLimitBeforeCoface((prev) => (prev === null ?analysis.guaranteeLimit : prev));
+      setAnalysis((prev) => ({ ...prev, guaranteeLimit: currencyFormatter.format(Math.max(0, cofaceDecisionAmount)) }));
+      return;
+    }
+
+    if (manualGuaranteeLimitBeforeCoface !== null) {
+      setAnalysis((prev) => ({ ...prev, guaranteeLimit: manualGuaranteeLimitBeforeCoface }));
+      setManualGuaranteeLimitBeforeCoface(null);
+    }
+  }, [
+    analysis.guaranteeLimit,
+    cofaceDecisionAmount,
+    currencyFormatter,
+    hasCofaceCoverageImported,
+    manualGuaranteeLimitBeforeCoface
+  ]);
 
   const submitMutation = useMutation({
     mutationFn: (payload: AnalysisJourneySubmitRequest) => submitAnalysisJourney(payload),
@@ -361,7 +387,10 @@ export function NewAnalysisPageView() {
       }));
       setExternalLookupMessage("Dados cadastrais localizados automaticamente. Você poderá revisar e editar na próxima etapa.");
     },
-    onError: () => setExternalLookupMessage("A consulta externa está indisponível no momento. Se necessário, informe os dados manualmente.")
+    onError: (error: Error) =>
+      setExternalLookupMessage(
+        error.message || "A consulta externa está indisponível no momento. Se necessário, informe os dados manualmente."
+      )
   });
 
   const manualStatus = resolveManualStatus({ ...manual, enabled: manualConfigured });
@@ -642,6 +671,9 @@ export function NewAnalysisPageView() {
       analysis: {
         requested_limit: toNumberInput(analysis.requestedLimit),
         current_limit: toNumberInput(analysis.currentLimit),
+        used_limit: toNumberInput(analysis.usedLimit),
+        guarantee_limit: toNumberInput(analysis.guaranteeLimit),
+        guarantee_limit_source: hasCofaceCoverageImported ?"coface_report" : "manual",
         exposure_amount: exposureCalculated,
         annual_revenue_estimated: toNumberInput(manualPanel.internalRevenue12m),
         assigned_analyst_name: analysis.assignedAnalystName
@@ -684,6 +716,8 @@ export function NewAnalysisPageView() {
         external_import: {
           enabled: hasAgriskImported || hasCofaceImported,
           source_type: hasAgriskImported ?"agrisk" : hasCofaceImported ?"other" : "agrisk",
+          coface_read_id: hasCofaceImported ?cofaceImport.cofaceReadId : null,
+          coface_decision_amount: hasCofaceCoverageImported ?cofaceDecisionAmount : null,
           source_score: manualConfigured ?manualPanel.scoreValue : null,
           source_rating: manualConfigured ?`Fonte manual: ${manualPanel.scoreSource}` : "",
           negativations_count: Number(manual.negativationsCount || 0),
@@ -698,6 +732,7 @@ export function NewAnalysisPageView() {
               ?`Fonte do score AgRisk: ${agriskImport.agriskReadPayload.credit.score_source}`
               : "",
             hasCofaceImported ?"COFACE importado" : "",
+            hasCofaceCoverageImported && cofaceDecisionAmount !== null ?`Valor de cobertura COFACE: ${currencyFormatter.format(cofaceDecisionAmount)}` : "",
             manualConfigured && !hasCofaceImported ?`DRA COFACE manual: ${manualPanel.cofaceDra || "não informado"}` : ""
           ]
             .filter(Boolean)
@@ -714,10 +749,67 @@ export function NewAnalysisPageView() {
   }
 
   const canContinue = step === 1 ?normalizedCnpj.length === 14 && Boolean(customer.companyName) : step === 2 ?hasStep2Source : step === 3 ?toNumberInput(analysis.requestedLimit) > 0 : true;
+  const submitBlockingError = validateStep(1) ?? validateStep(2) ?? validateStep(3);
+  const canSubmitJourney = !submitBlockingError && !submitMutation.isPending;
+  const guaranteeOriginText = hasCofaceCoverageImported
+    ? "COFACE (valor de cobertura)"
+    : toNumberInput(analysis.guaranteeLimit) > 0
+      ? "Informado manualmente"
+      : "Não informado";
+  const guaranteeDisplayText = hasCofaceCoverageImported && cofaceDecisionAmount !== null
+    ? currencyFormatter.format(Math.max(0, cofaceDecisionAmount))
+    : toNumberInput(analysis.guaranteeLimit) > 0
+      ? formatCurrencyBRL(analysis.guaranteeLimit)
+      : "Não informado";
+
+  const consolidatedSources = [
+    {
+      key: "agrisk",
+      name: "Importação Agrisk",
+      isSent: hasAgriskImported,
+      detail: hasAgriskImported
+        ?`${agriskImport.files[0]?.original_filename ?? "Arquivo importado"} · ${formatFileSize(agriskImport.files[0]?.file_size ?? 0)} · enviado`
+        : "Relatório Agrisk não importado"
+    },
+    {
+      key: "coface",
+      name: "Importação COFACE",
+      isSent: hasCofaceImported,
+      detail: hasCofaceImported
+        ?`${cofaceImport.files[0]?.original_filename ?? "Arquivo importado"} · ${formatFileSize(cofaceImport.files[0]?.file_size ?? 0)} · enviado`
+        : "Relatório COFACE não importado"
+    },
+    {
+      key: "manual",
+      name: "Preenchimento manual",
+      isSent: manualStatus === "preenchido",
+      detail: manualStatus === "preenchido" ?"Dados manuais preenchidos" : "Não preenchido"
+    },
+    {
+      key: "ocr",
+      name: "OCR DRE / Balanço",
+      isSent: ocr.files.length > 0,
+      detail: ocr.files.length > 0
+        ?`${ocr.files[0]?.original_filename ?? "Demonstrativo anexado"} · ${formatFileSize(ocr.files[0]?.file_size ?? 0)} · enviado`
+        : "Nenhum demonstrativo anexado"
+    },
+    {
+      key: "internal",
+      name: "Importação interna",
+      isSent: hasInternalImported,
+      detail: hasInternalImported
+        ?`${internalImport.files[0]?.original_filename ?? "Planilha importada"} · ${formatFileSize(internalImport.files[0]?.file_size ?? 0)} · enviada`
+        : "Planilha de títulos não importada"
+    }
+  ];
+  const consolidatedSourcesSentCount = consolidatedSources.filter((source) => source.isSent).length;
+  const customerReady = normalizedCnpj.length === 14 && Boolean(customer.companyName.trim());
+  const requestedLimitReady = toNumberInput(analysis.requestedLimit) > 0;
 
   return (
-    <section className="readability-standard space-y-4">
-      <div className="flex items-center justify-between rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5">
+    <section className={`readability-standard ${step === 4 ?"space-y-0 rounded-[12px] bg-[#F7F9FC]" : "space-y-4"}`}>
+      {step !== 4 ?(
+        <div className="flex items-center justify-between rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5">
         <div>
           <p className="text-[17px] font-semibold text-[#102033]">Nova análise de crédito</p>
           <p className="text-[13px] text-[#4F647A]">
@@ -729,8 +821,10 @@ export function NewAnalysisPageView() {
           <span className="mr-1"></span> Voltar para análises
         </Link>
       </div>
+      ) : null}
 
-      <div className="flex items-center rounded-[12px] border border-[#D7E1EC] bg-white px-6 py-4">
+      {step !== 4 ?(
+        <div className="flex items-center rounded-[12px] border border-[#D7E1EC] bg-white px-6 py-4">
         {steps.map((label, index) => {
           const stepNumber = index + 1;
           const isDone = stepNumber < step;
@@ -752,6 +846,7 @@ export function NewAnalysisPageView() {
           );
         })}
       </div>
+      ) : null}
 
       {stepError ?<div className="rounded-[8px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#b91c1c]">{stepError}</div> : null}
 
@@ -803,14 +898,14 @@ export function NewAnalysisPageView() {
       ) : null}
 
       {step >= 2 ?(
-        <div className="flex items-center gap-3 rounded-[10px] border border-[#D7E1EC] bg-white px-5 py-3">
+        <div className={`flex items-center gap-3 bg-white ${step === 4 ?"h-[44px] border-b border-[#D7E1EC] px-7" : "rounded-[10px] border border-[#D7E1EC] px-5 py-3"}`}>
           <div className="mr-1 text-[11px] text-[#8FA3B4]">Cliente da solicitação</div>
-          <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-[#EEF3F8] text-[10px] font-bold text-[#295B9A]">
+          <div className={`flex items-center justify-center rounded-[6px] text-[10px] font-bold ${step === 4 ?"h-[26px] w-[26px] bg-[#295B9A] text-white" : "h-7 w-7 bg-[#EEF3F8] text-[#295B9A]"}`}>
             {toInitials(customer.companyName || "Cliente")}
           </div>
           <div className="text-[13px] font-semibold text-[#102033]">{customer.companyName || "Cliente não informado"}</div>
           <div className="text-[11px] text-[#4F647A]">{customer.cnpj || "CNPJ não informado"}</div>
-          <div className="ml-auto rounded-full bg-[#EEF3F8] px-2.5 py-1 text-[10px] font-medium text-[#4F647A]">Etapa {step} de 4</div>
+          <div className={`ml-auto rounded-full bg-[#EEF3F8] px-2.5 py-1 font-medium ${step === 4 ?"text-[11px] text-[#295B9A]" : "text-[10px] text-[#4F647A]"}`}>Etapa {step} de 4</div>
         </div>
       ) : null}
 
@@ -1576,11 +1671,36 @@ export function NewAnalysisPageView() {
             <label className="text-[11px] text-[#374151]">Limite utilizado<input value={analysis.usedLimit} onChange={(event) => setAnalysis((prev) => ({ ...prev, usedLimit: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
             <label className="text-[11px] text-[#374151]">
               Limite com garantia
-              <input value={analysis.guaranteeLimit} onChange={(event) => setAnalysis((prev) => ({ ...prev, guaranteeLimit: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" />
-              <span className="mt-1 block text-[10px] text-[#6b7280]">Valor garantido por seguro ou garantia real.</span>
+              <input
+                value={analysis.guaranteeLimit}
+                onChange={(event) => setAnalysis((prev) => ({ ...prev, guaranteeLimit: formatCurrencyInputBRL(event.target.value) }))}
+                disabled={hasCofaceCoverageImported}
+                className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px] disabled:cursor-not-allowed disabled:bg-[#f9fafb] disabled:text-[#6b7280]"
+              />
+              <span className="mt-1 block text-[10px] text-[#6b7280]">
+                {hasCofaceCoverageImported
+                  ?"Valor preenchido automaticamente a partir do relatório COFACE (Valor de cobertura)."
+                  : "Valor garantido por seguro ou garantia real."}
+              </span>
+              {hasCofaceCoverageImported ?(
+                <span className="mt-1 inline-flex rounded-full border border-[#CFE0F4] bg-[#EEF3F8] px-2 py-0.5 text-[10px] font-medium text-[#295B9A]">
+                  Origem: COFACE
+                </span>
+              ) : null}
             </label>
             <label className="text-[11px] text-[#374151]">Limite total<input value={totalLimitDisplay} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" /></label>
-            <label className="text-[11px] text-[#374151]">Exposição<input value={exposureDisplay} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" /></label>
+            <label className="text-[11px] text-[#374151]">
+              Exposição
+              <input
+                value={exposureDisplay}
+                readOnly
+                className={`mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px] ${
+                  hasPositiveExposure
+                    ?"border-[#E7DDC3] bg-[#FFFCF3] text-[#6B5B2A]"
+                    : "bg-[#f9fafb] text-[#6b7280]"
+                }`}
+              />
+            </label>
             <label className="text-[11px] text-[#374151]">Analista responsável
               <input value={analysis.assignedAnalystName} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
             </label>
@@ -1592,51 +1712,117 @@ export function NewAnalysisPageView() {
       ) : null}
 
       {step === 4 ?(
-        <article className="space-y-4 rounded-[10px] border border-[#e2e5eb] bg-white p-4 text-[12px]">
-          <div>
-            <p className="text-[13px] font-medium text-[#111827]">Revise as informações antes de enviar para análise</p>
-            <p className="text-[12px] text-[#6b7280]">Confira os dados do cliente, da solicitação e das informações complementares antes de seguir.</p>
+        <div className="bg-[#F7F9FC] px-7 py-6">
+          <div className="mb-5">
+            <p className="text-[16px] font-semibold text-[#102033]">Revisão e envio para análise</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-[#4F647A]">
+              Confira os dados do cliente, os limites vigentes, o valor solicitado e as fontes de informação antes de acionar o motor de crédito.
+            </p>
           </div>
 
-          <section className="rounded-[8px] border border-[#e5e7eb] p-3">
-            <p>Razão social: <strong>{customer.companyName || "-"}</strong></p>
-            <p>CNPJ: <strong>{customer.cnpj || "-"}</strong></p>
-            <p>Endereço: <strong>{customer.address || "-"}</strong></p>
-            <p>Telefone: <strong>{customer.phone || "-"}</strong></p>
-            <p>E-mail: <strong>{customer.email || "-"}</strong></p>
-          </section>
+          <div className="mb-5 flex items-center rounded-[12px] border border-[#D7E1EC] bg-white px-6 py-4">
+            {["Identificação", "Informações para análise", "Dados da solicitação", "Revisão e envio"].map((label, index) => {
+              const isDone = index < 3;
+              const isActive = index === 3;
+              return (
+                <div key={label} className="flex flex-1 items-center">
+                  <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${isDone ?"bg-[#295B9A] text-white" : isActive ?"bg-[#0D1B2A] text-white" : "bg-[#EEF3F8] text-[#8FA3B4]"}`}>
+                    {isDone ?<Check className="h-3.5 w-3.5" /> : index + 1}
+                  </span>
+                  <span className={`ml-2 text-[11px] font-medium ${isDone ?"text-[#295B9A]" : isActive ?"text-[#102033]" : "text-[#8FA3B4]"}`}>{label}</span>
+                  {index !== 3 ?<div className={`mx-3 h-px flex-1 ${isDone ?"bg-[#295B9A]" : "bg-[#D7E1EC]"}`} /> : null}
+                </div>
+              );
+            })}
+          </div>
 
-          <section className="rounded-[8px] border border-[#e5e7eb] p-3">
-            <p>Limite solicitado: <strong>{formatCurrencyBRL(analysis.requestedLimit)}</strong></p>
-            <p>Limite atual: <strong>{formatCurrencyBRL(analysis.currentLimit)}</strong></p>
-            <p>Limite utilizado: <strong>{formatCurrencyBRL(analysis.usedLimit)}</strong></p>
-            <p>Limite com garantia: <strong>{formatCurrencyBRL(analysis.guaranteeLimit)}</strong></p>
-            <p>Limite total: <strong>{totalLimitDisplay}</strong></p>
-            <p>Exposição: <strong>{exposureDisplay}</strong></p>
-            <p>Analista responsável: <strong>{analysis.assignedAnalystName || "-"}</strong></p>
-            <p>Comentário: <strong>{analysis.comment || "-"}</strong></p>
-          </section>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="space-y-4">
+              <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <p className="text-[12px] font-semibold text-[#102033]">Dados do cliente</p>
+                  <span className="rounded-[5px] border border-[#B5D4F4] bg-[#EEF3F8] px-2 py-0.5 text-[10px] font-medium text-[#295B9A]">Cadastro verificado</span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 text-[12px] sm:grid-cols-2">
+                  <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">Razão social</p><p className="text-[13px] font-medium text-[#102033]">{customer.companyName || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">CNPJ</p><p className="text-[13px] font-medium text-[#102033]">{customer.cnpj || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Telefone</p><p className="text-[13px] font-medium text-[#102033]">{customer.phone || "Não informado"}</p></div>
+                  <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">Endereço</p><p className="text-[13px] text-[#4F647A]">{customer.address || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">E-mail</p><p className="text-[13px] text-[#4F647A]">{customer.email || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Analista responsável</p><p className="text-[13px] font-medium text-[#102033]">{analysis.assignedAnalystName || "Não informado"}</p></div>
+                </div>
+              </article>
 
-          <section className="rounded-[8px] border border-[#e5e7eb] p-3">
-            <div className={`rounded-[6px] border px-3 py-2 ${labelStatus(manualStatus)}`}>Manual: {manualStatus}</div>
-            <div className={`mt-2 rounded-[6px] border px-3 py-2 ${labelStatus(ocrStatus)}`}>OCR DRE/Balanço: {ocrStatus}</div>
-            <div className={`mt-2 rounded-[6px] border px-3 py-2 ${labelStatus(agriskStatus)}`}>Importação Agrisk: {agriskStatus}</div>
-            <div className={`mt-2 rounded-[6px] border px-3 py-2 ${labelStatus(cofaceStatus)}`}>Importação COFACE: {cofaceStatus}</div>
-            <div className={`mt-2 rounded-[6px] border px-3 py-2 ${labelStatus(internalStatus)}`}>Importação interna: {internalStatus}</div>
-          </section>
+              <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
+                <p className="mb-4 text-[12px] font-semibold text-[#102033]">Posição de limites e solicitação</p>
+                <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div className="rounded-[10px] border border-[#0D1B2A] bg-[#0D1B2A] px-4 py-3">
+                    <p className="text-[10px] uppercase text-[rgba(255,255,255,0.45)]">Valor solicitado</p>
+                    <p className="mt-1 text-[16px] font-semibold text-[#75D4EE]">{formatCurrencyBRL(analysis.requestedLimit)}</p>
+                    <p className="mt-1 text-[10px] text-[rgba(255,255,255,0.35)]">Aguarda aprovação</p>
+                  </div>
+                  <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-3"><p className="text-[10px] uppercase text-[#8FA3B4]">Limite atual</p><p className="mt-1 text-[16px] font-semibold text-[#102033]">{formatCurrencyBRL(analysis.currentLimit)}</p></div>
+                  <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-3"><p className="text-[10px] uppercase text-[#8FA3B4]">Limite utilizado</p><p className="mt-1 text-[16px] font-semibold text-[#102033]">{formatCurrencyBRL(analysis.usedLimit)}</p></div>
+                </div>
+                <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-3">
+                  <div className="mb-3 flex items-center gap-2"><p className="text-[10px] font-semibold uppercase tracking-[0.6px] text-[#8FA3B4]">Estrutura com garantia (COFACE)</p><div className="h-px flex-1 bg-[#D7E1EC]" /></div>
+                  <div className="grid grid-cols-1 gap-3 text-[12px] sm:grid-cols-2 lg:grid-cols-4">
+                    <div><p className="text-[10px] uppercase text-[#8FA3B4]">Limite com garantia</p><p className="mt-1 text-[14px] font-semibold text-[#1A7A3A]">{guaranteeDisplayText}</p></div>
+                    <div><p className="text-[10px] uppercase text-[#8FA3B4]">Origem da garantia</p><p className="mt-1 text-[13px] font-medium text-[#102033]">{guaranteeOriginText}</p></div>
+                    <div><p className="text-[10px] uppercase text-[#8FA3B4]">Limite total</p><p className="mt-1 text-[14px] font-semibold text-[#295B9A]">{totalLimitDisplay}</p></div>
+                    <div><p className="text-[10px] uppercase text-[#8FA3B4]">Exposição atual</p><p className={`mt-1 text-[14px] font-semibold ${hasPositiveExposure ?"text-[#92580A]" : "text-[#102033]"}`}>{exposureDisplay}</p></div>
+                  </div>
+                </div>
+              </article>
 
-          {manualConfigured ?(
-            <section className="rounded-[8px] border border-[#e5e7eb] p-3">
-              <p>Negativações: <strong>{manual.negativationsCount || "0"}</strong></p>
-              <p>Valor total de Negativações: <strong>{formatCurrencyBRL(manual.negativationsAmount)}</strong></p>
-              <p>Protestos: <strong>{manual.protestsCount || "0"}</strong></p>
-              <p>Valor total de protestos: <strong>{formatCurrencyBRL(manual.protestsAmount)}</strong></p>
-              <p>Processos judiciais ativos: <strong>{manual.activeLawsuits ?"Sim" : "Não"}</strong></p>
-            </section>
-          ) : null}
+              <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <p className="text-[12px] font-semibold text-[#102033]">Fontes de informação consolidadas</p>
+                  <p className="text-[11px] text-[#8FA3B4]">{consolidatedSourcesSentCount} de {consolidatedSources.length} enviadas</p>
+                </div>
+                <div className="space-y-2">
+                  {consolidatedSources.map((source) => (
+                    <div key={source.key} className={`flex items-center gap-3 rounded-[10px] border px-3 py-2.5 ${source.isSent ?"border-[#A7DDB8] bg-[#F0FBF5]" : "border-[#D7E1EC] bg-[#F7F9FC] opacity-75"}`}>
+                      <span className={`h-2 w-2 rounded-full ${source.isSent ?"bg-[#1EBD6A]" : "bg-[#C4CDD6]"}`} />
+                      <div className="min-w-0 flex-1"><p className={`text-[12px] font-medium ${source.isSent ?"text-[#102033]" : "text-[#8FA3B4]"}`}>{source.name}</p><p className={`truncate text-[11px] ${source.isSent ?"text-[#4F647A]" : "text-[#C4CDD6]"}`}>{source.detail}</p></div>
+                      <span className={`rounded-[5px] border px-2 py-0.5 text-[10px] font-medium ${source.isSent ?"border-[#A7DDB8] bg-[#E6F4ED] text-[#1A7A3A]" : "border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]"}`}>{source.isSent ?"Enviado" : "Não selecionado"}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </div>
 
-          {submitMutation.isError ?<p className="text-[#b91c1c]">{submitMutation.error.message}</p> : null}
-        </article>
+            <aside className="space-y-4">
+              <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
+                <p className="mb-3 text-[12px] font-semibold text-[#102033]">Analista responsável</p>
+                <div className="mb-3 flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#295B9A] text-[12px] font-semibold text-white">{toInitials(analysis.assignedAnalystName || "Backoffice")}</div><div><p className="text-[13px] font-medium text-[#102033]">{analysis.assignedAnalystName || "Backoffice"}</p><p className="text-[11px] text-[#8FA3B4]">Cadastro e consolidação</p></div></div>
+                <p className="mb-1 text-[10px] uppercase tracking-[0.5px] text-[#8FA3B4]">Comentário</p>
+                <div className="min-h-[64px] rounded-[8px] border border-[#D7E1EC] bg-[#F7F9FC] px-3 py-2 text-[12px] italic text-[#8FA3B4]">{analysis.comment.trim() || "Sem comentário registrado para esta análise."}</div>
+              </article>
+
+              <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
+                <p className="mb-3 text-[12px] font-semibold text-[#102033]">Pré-validação</p>
+                <div className="space-y-2.5 text-[12px]">
+                  <p className={customerReady ?"text-[#102033]" : "text-[#92580A]"}>{customerReady ?"✓ " : "! "}Cliente identificado e vinculado</p>
+                  <p className={requestedLimitReady ?"text-[#102033]" : "text-[#92580A]"}>{requestedLimitReady ?"✓ " : "! "}Valor solicitado informado</p>
+                  <p className={consolidatedSourcesSentCount > 0 ?"text-[#102033]" : "text-[#92580A]"}>{consolidatedSourcesSentCount > 0 ?"✓ " : "! "}Ao menos 1 fonte enviada</p>
+                  <p className={manualStatus === "preenchido" ?"text-[#102033]" : "text-[#92580A]"}>{manualStatus === "preenchido" ?"✓ Dados manuais preenchidos" : "! Dados manuais não preenchidos"}</p>
+                  <p className="text-[#4F647A]">{ocr.files.length > 0 ?"✓ OCR demonstrativos - opcional" : "- OCR demonstrativos - opcional"}</p>
+                </div>
+              </article>
+
+              <article className={`rounded-[14px] border p-5 ${submitBlockingError ?"border-[#F5D06A] bg-[#FEF9EC]" : "border-[#B5D4F4] bg-[#EEF3F8]"}`}>
+                <p className={`text-[12px] font-semibold ${submitBlockingError ?"text-[#92580A]" : "text-[#0C447C]"}`}>{submitBlockingError ?"Pendências para acionar o motor" : "Pronto para acionar o motor"}</p>
+                <p className={`mt-1 text-[11px] leading-relaxed ${submitBlockingError ?"text-[#92580A]" : "text-[#185FA5]"}`}>
+                  {submitBlockingError
+                    ?`Revise este ponto antes de enviar: ${submitBlockingError}`
+                    : 'As informações mínimas foram consolidadas. Clique em "Enviar para análise" para acionar o motor de crédito.'}
+                </p>
+              </article>
+            </aside>
+          </div>
+          {submitMutation.isError ?<p className="mt-3 text-[12px] text-[#b91c1c]">{submitMutation.error.message}</p> : null}
+        </div>
       ) : null}
 
       {step === 2 ?(
@@ -1661,6 +1847,27 @@ export function NewAnalysisPageView() {
             </button>
           </div>
         </div>
+      ) : step === 4 ?(
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#D7E1EC] bg-white px-7 py-4">
+          <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
+            <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[#8FA3B4] text-[9px]">i</span>
+            Ao enviar, o motor de crédito será acionado automaticamente com as informações consolidadas.
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => setStep(3)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-5 py-2 text-[12px] font-medium text-[#4F647A]">
+              <ChevronLeft className="mr-1 inline h-3.5 w-3.5" />
+              Voltar
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSubmitJourney}
+              className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
+            >
+              {submitMutation.isPending ?"Enviando..." : "Enviar para análise"}
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="flex items-center justify-between rounded-[10px] border border-[#e2e5eb] bg-white p-3">
           <button type="button" onClick={() => setStep((prev) => Math.max(1, prev - 1))} disabled={step === 1} className="rounded-[6px] border border-[#d1d5db] px-3 py-2 text-[12px] text-[#374151] disabled:opacity-50">
@@ -1680,3 +1887,4 @@ export function NewAnalysisPageView() {
     </section>
   );
 }
+
