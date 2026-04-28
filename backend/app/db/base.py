@@ -1,5 +1,9 @@
 ﻿from app.db.session import Base
 from app.models import (
+    ArAgingDataTotalRow,
+    ArAgingGroupConsolidatedRow,
+    ArAgingImportRun,
+    ArAgingRemarkRow,
     CreditAnalysis,
     CreditReportRead,
     CreditPolicy,
@@ -13,6 +17,10 @@ from app.models import (
 
 __all__ = [
     "Base",
+    "ArAgingImportRun",
+    "ArAgingDataTotalRow",
+    "ArAgingGroupConsolidatedRow",
+    "ArAgingRemarkRow",
     "Customer",
     "CreditAnalysis",
     "CreditReportRead",

@@ -1,5 +1,12 @@
 ﻿
 from app.schemas.credit_analysis import CreditAnalysisCreate, CreditAnalysisRead
+from app.schemas.ar_aging_import import ArAgingImportCreate, ArAgingImportResponse
+from app.schemas.portfolio import (
+    PortfolioAgingLatestResponse,
+    PortfolioCustomerDetailResponse,
+    PortfolioCustomersResponse,
+    PortfolioGroupDetailResponse,
+)
 from app.schemas.credit_policy import CreditPolicyRead
 from app.schemas.credit_report_read import (
     AgriskReportReadCreate,
@@ -23,6 +30,12 @@ from app.schemas.score import ScoreCalculationResponse, ScoreResultResponse
 
 __all__ = [
     "CreditAnalysisCreate",
+    "ArAgingImportCreate",
+    "ArAgingImportResponse",
+    "PortfolioAgingLatestResponse",
+    "PortfolioCustomersResponse",
+    "PortfolioCustomerDetailResponse",
+    "PortfolioGroupDetailResponse",
     "CreditAnalysisRead",
     "CreditPolicyRead",
     "AgriskReportReadCreate",

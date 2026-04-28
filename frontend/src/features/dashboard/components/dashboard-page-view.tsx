@@ -4,15 +4,25 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 
-import { useCreditAnalysesQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-query";
-import { resolveDecision } from "@/features/credit-analyses/utils/analysis-view-models";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { DashboardAnalysisGrid } from "@/features/dashboard/components/dashboard-analysis-grid";
-import { prioritizeDashboardAnalyses, toDashboardAnalysisCard } from "@/features/dashboard/utils/dashboard-analysis-view-models";
+import { DashboardAnalysisCardViewModel } from "@/features/dashboard/utils/dashboard-analysis-view-models";
 import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
+import { PortfolioCustomerDto } from "@/features/portfolio/api/contracts";
+import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
+import { usePortfolioCustomersQuery } from "@/features/portfolio/hooks/use-portfolio-customers-query";
 import { ErrorState } from "@/shared/components/states/error-state";
 
 type StatusFilter = "all" | "created" | "in_progress" | "completed";
+
+type OperationSummary = {
+  approved: number;
+  rejected: number;
+  manualReview: number;
+  pendingDecision: number;
+  avgLimit: number | null;
+  latestProtocol: string;
+};
 
 function textIncludes(base: string | number | null | undefined, search: string) {
   if (base === null || base === undefined) {
@@ -20,6 +30,42 @@ function textIncludes(base: string | number | null | undefined, search: string) 
   }
 
   return String(base).toLowerCase().includes(search);
+}
+
+function normalizeDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function mapPortfolioCustomerToCard(item: PortfolioCustomerDto, index: number): DashboardAnalysisCardViewModel {
+  const scoreBandRaw = typeof item.score === "object" && item.score !== null ? (item.score as { score_band?: unknown }).score_band : null;
+  const scoreBand = scoreBandRaw === "A" || scoreBandRaw === "B" || scoreBandRaw === "C" || scoreBandRaw === "D" ? scoreBandRaw : null;
+
+  const scoreValue = typeof item.score === "object" && item.score !== null ? (item.score as { final_score?: unknown }).final_score : null;
+  const finalScore = toNumber(scoreValue as string | number | null | undefined);
+  const scoreLabel = scoreBand ?? (finalScore !== null ? String(finalScore) : "Pendente");
+
+  const decisionValue = (typeof item.decision === "string" ? item.decision : null) ?? null;
+  const statusLabel = decisionValue === "approved" ? "Aprovado" : decisionValue === "rejected" ? "Recusado" : "N/D";
+  const statusTone = decisionValue === "approved" ? "success" : decisionValue === "rejected" ? "danger" : "warning";
+  const statusGroup = decisionValue === "approved" ? "approved" : decisionValue === "rejected" ? "rejected" : "pending";
+
+  const scoreTone =
+    scoreBand === "A" ? "positive" : scoreBand === "B" ? "good" : scoreBand === "C" ? "warning" : scoreBand === "D" ? "danger" : "neutral";
+
+  const limitBase = item.final_limit ?? item.suggested_limit ?? item.requested_limit;
+
+  return {
+    id: Number(item.id ?? item.customer_id ?? index + 1),
+    companyName: item.company_name ?? item.legal_name ?? item.trade_name ?? `Cliente #${item.customer_id ?? index + 1}`,
+    documentNumber: item.document_number ?? item.cnpj ?? "CNPJ não informado",
+    statusLabel,
+    statusTone,
+    statusGroup,
+    scoreLabel,
+    scoreTone,
+    scoreBand,
+    limitLabel: formatCurrencyInThousands(limitBase)
+  };
 }
 
 const statusFilters: Array<{ value: StatusFilter; label: string }> = [
@@ -30,78 +76,77 @@ const statusFilters: Array<{ value: StatusFilter; label: string }> = [
 ];
 
 export function DashboardPageView() {
-  const analysesQuery = useCreditAnalysesQuery();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const normalizedSearch = search.trim().toLowerCase();
+  const digits = normalizeDigits(search);
+  const cnpjSearch = digits.length >= 8 ? digits : undefined;
 
-  const analyses = useMemo(() => {
-    return prioritizeDashboardAnalyses(analysesQuery.data ?? []);
-  }, [analysesQuery.data]);
+  const agingQuery = usePortfolioAgingLatestQuery();
+  const customersQuery = usePortfolioCustomersQuery({ cnpj: cnpjSearch });
+
+  const customers = customersQuery.data ?? [];
 
   const kpis = useMemo(() => {
-    const total = analyses.length;
-    const completed = analyses.filter((item) => item.analysis_status === "completed").length;
-    const inProgress = analyses.filter((item) => item.analysis_status === "in_progress").length;
-    const created = analyses.filter((item) => item.analysis_status === "created").length;
-    const avgSuggestedLimitList = analyses
-      .map((item) => Number(item.suggested_limit ?? 0))
-      .filter((item) => Number.isFinite(item) && item > 0);
+    const avgSuggestedLimitList = customers
+      .map((item) => toNumber(item.suggested_limit ?? item.final_limit ?? item.requested_limit))
+      .filter((item): item is number => item !== null && Number.isFinite(item) && item > 0);
 
     const avgSuggestedLimit =
       avgSuggestedLimitList.length > 0
         ? avgSuggestedLimitList.reduce((acc, value) => acc + value, 0) / avgSuggestedLimitList.length
         : null;
 
+    const aging = agingQuery.data;
+
     return {
-      total,
-      completed,
-      inProgress,
-      created,
+      totalOpenAmount: toNumber(aging?.total_open_amount),
+      totalOverdueAmount: toNumber(aging?.total_overdue_amount),
+      totalNotDueAmount: toNumber(aging?.total_not_due_amount),
+      customersCount: customers.length,
       avgSuggestedLimit
     };
-  }, [analyses]);
+  }, [agingQuery.data, customers]);
 
-  const operationSummary = useMemo(() => {
-    const stats = analyses.reduce(
-      (acc, item) => {
-        const decision = resolveDecision(item.final_decision, item.motor_result);
-        if (decision === "approved") {
-          acc.approved += 1;
-        } else if (decision === "rejected") {
-          acc.rejected += 1;
-        } else if (decision === "manual_review") {
-          acc.manualReview += 1;
-        } else {
-          acc.pendingDecision += 1;
-        }
+  const operationSummary = useMemo<OperationSummary>(() => {
+    let approved = 0;
+    let rejected = 0;
+    let manualReview = 0;
+    let pendingDecision = 0;
+    let totalLimit = 0;
+    let limitCount = 0;
 
-        const effectiveLimit = toNumber(item.final_limit ?? item.suggested_limit ?? item.requested_limit);
-        if (effectiveLimit !== null && effectiveLimit > 0) {
-          acc.totalLimit += effectiveLimit;
-          acc.limitCount += 1;
-        }
+    for (const item of customers) {
+      const decision = typeof item.decision === "string" ? item.decision : null;
 
-        return acc;
-      },
-      {
-        approved: 0,
-        rejected: 0,
-        manualReview: 0,
-        pendingDecision: 0,
-        totalLimit: 0,
-        limitCount: 0
+      if (decision === "approved") {
+        approved += 1;
+      } else if (decision === "rejected") {
+        rejected += 1;
+      } else if (decision === "manual_review") {
+        manualReview += 1;
+      } else {
+        pendingDecision += 1;
       }
-    );
+
+      const effectiveLimit = toNumber(item.final_limit ?? item.suggested_limit ?? item.requested_limit);
+      if (effectiveLimit !== null && effectiveLimit > 0) {
+        totalLimit += effectiveLimit;
+        limitCount += 1;
+      }
+    }
 
     return {
-      ...stats,
-      avgLimit: stats.limitCount ? stats.totalLimit / stats.limitCount : null,
-      latestProtocol: analyses[0]?.protocol_number ?? "-"
+      approved,
+      rejected,
+      manualReview,
+      pendingDecision,
+      avgLimit: limitCount ? totalLimit / limitCount : null,
+      latestProtocol: "-"
     };
-  }, [analyses]);
+  }, [customers]);
 
-  if (analysesQuery.isLoading) {
+  if (agingQuery.isLoading || customersQuery.isLoading) {
     return (
       <div className="space-y-4">
         <div className="h-28 animate-pulse rounded-2xl bg-white" />
@@ -111,37 +156,48 @@ export function DashboardPageView() {
     );
   }
 
-  if (analysesQuery.isError) {
+  if (agingQuery.isError || customersQuery.isError) {
+    const errorMessage = agingQuery.isError
+      ? agingQuery.error.message
+      : customersQuery.error?.message ?? "Falha ao carregar dados da carteira.";
+
     return (
       <ErrorState
         title="Não foi possível carregar o dashboard"
-        description={analysesQuery.error.message}
-        onRetry={() => analysesQuery.refetch()}
+        description={errorMessage}
+        onRetry={() => {
+          void agingQuery.refetch();
+          void customersQuery.refetch();
+        }}
       />
     );
   }
 
-  const filtered = analyses.filter((analysis) => {
-    if (statusFilter !== "all" && analysis.analysis_status !== statusFilter) {
-      return false;
+  const mappedCards = customers.map(mapPortfolioCustomerToCard);
+
+  const filtered = mappedCards.filter((analysis) => {
+    if (statusFilter !== "all") {
+      return true;
     }
 
     if (!normalizedSearch) {
       return true;
     }
 
-    return (
-      textIncludes(analysis.customer?.company_name, normalizedSearch) ||
-      textIncludes(analysis.customer?.document_number, normalizedSearch) ||
-      textIncludes(analysis.protocol_number, normalizedSearch) ||
-      textIncludes(analysis.id, normalizedSearch)
-    );
+    return textIncludes(analysis.companyName, normalizedSearch) || textIncludes(analysis.documentNumber, normalizedSearch) || textIncludes(analysis.id, normalizedSearch);
   });
 
-  const highlightedAnalyses = filtered.slice(0, 12).map(toDashboardAnalysisCard);
+  const highlightedAnalyses = filtered.slice(0, 12);
+  const hasNoImport = !agingQuery.data && customers.length === 0;
 
   return (
     <section className="space-y-6">
+      {hasNoImport ? (
+        <div className="rounded-2xl border border-[#f5d0d0] bg-[#fff7f7] px-4 py-3 text-sm text-[#991b1b]">
+          Nenhuma importação de carteira encontrada. Importe dados para visualizar o Aging AR.
+        </div>
+      ) : null}
+
       <div className="space-y-3">
         <div>
           <h2 className="text-xl font-semibold tracking-[-0.01em] text-[#111827]">Visão geral das análises</h2>
@@ -150,23 +206,23 @@ export function DashboardPageView() {
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#6b7280]">Análises totais</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#111827]">{kpis.total}</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#6b7280]">Total em aberto</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#111827]">{formatCurrencyInThousands(kpis.totalOpenAmount)}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-blue-200 bg-blue-50/40 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-blue-700">Em criação</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-blue-900">{kpis.created}</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-blue-700">Overdue</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-blue-900">{formatCurrencyInThousands(kpis.totalOverdueAmount)}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-amber-200 bg-amber-50/45 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-amber-700">Em andamento</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-amber-900">{kpis.inProgress}</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-amber-700">Not Due</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-amber-900">{formatCurrencyInThousands(kpis.totalNotDueAmount)}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-emerald-200 bg-emerald-50/45 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-emerald-700">Concluídas</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-emerald-900">{kpis.completed}</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-emerald-700">Clientes na carteira</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-emerald-900">{kpis.customersCount}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#dde5f3] bg-[#f8fafe] px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
