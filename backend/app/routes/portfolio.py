@@ -70,6 +70,7 @@ def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[s
             func.sum(ArAgingGroupConsolidatedRow.not_due_amount),
             func.sum(ArAgingGroupConsolidatedRow.aging_amount),
             func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount),
+            func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount),
             func.sum(ArAgingGroupConsolidatedRow.exposure_amount),
         )
         .where(ArAgingGroupConsolidatedRow.import_run_id == import_run_id)
@@ -77,7 +78,7 @@ def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[s
     ).all()
 
     mapped: dict[str, dict[str, Decimal | None]] = {}
-    for group_key, overdue, not_due, aging, insured, exposure in rows:
+    for group_key, overdue, not_due, aging, insured, approved_credit, exposure in rows:
         if not group_key:
             continue
         mapped[group_key] = {
@@ -85,6 +86,7 @@ def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[s
             "not_due": not_due,
             "aging": aging,
             "insured": insured,
+            "approved_credit": approved_credit,
             "exposure": exposure,
         }
     return mapped
@@ -94,11 +96,8 @@ def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[s
 def get_latest_aging_summary(db: Session = Depends(get_db)) -> PortfolioAgingLatestResponse:
     run = _latest_valid_import_run(db)
 
-    totals = db.execute(
+    counts = db.execute(
         select(
-            func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.due_amount), 0),
             func.count(func.distinct(ArAgingDataTotalRow.cnpj_normalized)),
             func.count(func.distinct(ArAgingDataTotalRow.economic_group_normalized)),
         ).where(ArAgingDataTotalRow.import_run_id == run.id)
@@ -106,19 +105,25 @@ def get_latest_aging_summary(db: Session = Depends(get_db)) -> PortfolioAgingLat
 
     consolidated = db.execute(
         select(
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.overdue_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.not_due_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
             func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0),
             func.coalesce(func.sum(ArAgingGroupConsolidatedRow.exposure_amount), 0),
         ).where(ArAgingGroupConsolidatedRow.import_run_id == run.id)
     ).one()
 
+    open_amount = _derive_open_amount(consolidated[2], consolidated[0], consolidated[1])
     payload_totals = {
-        "total_open_amount": _derive_open_amount(totals[0], totals[1], totals[2]),
-        "total_overdue_amount": totals[1],
-        "total_not_due_amount": totals[2],
-        "distinct_customers": totals[3],
-        "distinct_groups": totals[4],
-        "total_insured_limit_amount": consolidated[0],
-        "total_exposure_amount": consolidated[1],
+        "total_open_amount": open_amount,
+        "total_overdue_amount": consolidated[0],
+        "total_not_due_amount": consolidated[1],
+        "distinct_customers": counts[0],
+        "distinct_groups": counts[1],
+        "total_insured_limit_amount": consolidated[3],
+        "total_internal_company_limit_amount": consolidated[4],
+        "total_exposure_amount": consolidated[5],
         "import_totals_json": run.totals_json,
     }
 
@@ -176,6 +181,7 @@ def list_portfolio_customers(
                 total_overdue_amount=_as_decimal(overdue_amount),
                 total_not_due_amount=_as_decimal(due_amount),
                 insured_limit_amount=group_metrics.get("insured"),
+                approved_credit_amount=group_metrics.get("approved_credit"),
                 exposure_amount=group_metrics.get("exposure"),
             )
         )
@@ -238,6 +244,7 @@ def get_portfolio_customer(cnpj: str, db: Session = Depends(get_db)) -> Portfoli
         total_overdue_amount=_as_decimal(row[5]),
         total_not_due_amount=_as_decimal(row[6]),
         insured_limit_amount=group_metrics.get("insured"),
+        approved_credit_amount=group_metrics.get("approved_credit"),
         exposure_amount=group_metrics.get("exposure"),
     )
 
@@ -258,6 +265,7 @@ def get_portfolio_group(economic_group: str, db: Session = Depends(get_db)) -> P
             func.coalesce(func.sum(ArAgingGroupConsolidatedRow.not_due_amount), 0),
             func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
             func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0),
             func.coalesce(func.sum(ArAgingGroupConsolidatedRow.exposure_amount), 0),
         )
         .where(
@@ -298,7 +306,8 @@ def get_portfolio_group(economic_group: str, db: Session = Depends(get_db)) -> P
             total_overdue_amount=_as_decimal(item[4]),
             total_not_due_amount=_as_decimal(item[5]),
             insured_limit_amount=consolidated[4],
-            exposure_amount=consolidated[5],
+            approved_credit_amount=consolidated[5],
+            exposure_amount=consolidated[6],
         )
         for item in customers_rows
     ]
@@ -317,7 +326,8 @@ def get_portfolio_group(economic_group: str, db: Session = Depends(get_db)) -> P
         not_due_amount=_as_decimal(consolidated[2]),
         aging_amount=_as_decimal(consolidated[3]),
         insured_limit_amount=_as_decimal(consolidated[4]),
-        exposure_amount=_as_decimal(consolidated[5]),
+        approved_credit_amount=_as_decimal(consolidated[5]),
+        exposure_amount=_as_decimal(consolidated[6]),
     )
 
     return PortfolioGroupDetailResponse(import_meta=_import_meta(run), group=group, customers=customers, remarks=[r for r in remarks if r])

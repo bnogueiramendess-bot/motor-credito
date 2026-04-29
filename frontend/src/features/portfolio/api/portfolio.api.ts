@@ -23,9 +23,36 @@ function buildQuery(params?: PortfolioQueryParams) {
 }
 
 export async function getPortfolioAgingLatest(params?: Pick<PortfolioQueryParams, "bu">) {
-  return apiClient.get<PortfolioAgingLatestDto | null>(`/api/portfolio/aging/latest${buildQuery(params)}`);
+  const payload = await apiClient.get<unknown>(`/api/portfolio/aging/latest${buildQuery(params)}`);
+
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const asRecord = payload as Record<string, unknown>;
+  const candidate = (asRecord.totals ?? asRecord.data ?? asRecord.result ?? asRecord.aging ?? payload) as unknown;
+
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return null;
+  }
+
+  return candidate as PortfolioAgingLatestDto;
 }
 
 export async function getPortfolioCustomers(params?: PortfolioQueryParams) {
-  return apiClient.get<PortfolioCustomerDto[]>(`/api/portfolio/customers${buildQuery(params)}`);
+  const payload = await apiClient.get<unknown>(`/api/portfolio/customers${buildQuery(params)}`);
+
+  if (Array.isArray(payload)) {
+    return payload as PortfolioCustomerDto[];
+  }
+
+  if (payload && typeof payload === "object") {
+    const asRecord = payload as Record<string, unknown>;
+    const listCandidate = asRecord.items ?? asRecord.results ?? asRecord.data ?? asRecord.customers;
+    if (Array.isArray(listCandidate)) {
+      return listCandidate as PortfolioCustomerDto[];
+    }
+  }
+
+  return [];
 }

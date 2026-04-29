@@ -112,6 +112,7 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
                     not_due_amount=normalize_money(row.get("not_due")),
                     aging_amount=normalize_money(row.get("aging")),
                     insured_limit_amount=normalize_money(row.get("insured_limit")),
+                    approved_credit_amount=normalize_money(row.get("approved_credit")),
                     exposure_amount=normalize_money(row.get("exposure")),
                     raw_payload_json=_safe_json_value(row.get("raw", {})),
                 )

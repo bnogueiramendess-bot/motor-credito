@@ -28,6 +28,7 @@ class PortfolioCustomerSummary(BaseModel):
     total_overdue_amount: Decimal
     total_not_due_amount: Decimal
     insured_limit_amount: Decimal | None
+    approved_credit_amount: Decimal | None = None
     exposure_amount: Decimal | None
 
 
@@ -49,6 +50,7 @@ class PortfolioGroupSummary(BaseModel):
     not_due_amount: Decimal | None
     aging_amount: Decimal | None
     insured_limit_amount: Decimal | None
+    approved_credit_amount: Decimal | None = None
     exposure_amount: Decimal | None
 
 

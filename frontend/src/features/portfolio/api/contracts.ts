@@ -2,6 +2,8 @@ export type PortfolioAgingLatestDto = {
   total_open_amount: number | string | null;
   total_overdue_amount: number | string | null;
   total_not_due_amount: number | string | null;
+  insured_limit_amount?: number | string | null;
+  total_insured_limit_amount?: number | string | null;
   [key: string]: unknown;
 };
 

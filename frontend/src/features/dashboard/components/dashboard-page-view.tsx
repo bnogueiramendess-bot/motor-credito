@@ -24,6 +24,18 @@ type OperationSummary = {
   latestProtocol: string;
 };
 
+const kpiThousandsFormatter = new Intl.NumberFormat("pt-BR", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+  useGrouping: true
+});
+
+const kpiMillionsFormatter = new Intl.NumberFormat("pt-BR", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+  useGrouping: true
+});
+
 function textIncludes(base: string | number | null | undefined, search: string) {
   if (base === null || base === undefined) {
     return false;
@@ -34,6 +46,19 @@ function textIncludes(base: string | number | null | undefined, search: string) 
 
 function normalizeDigits(value: string) {
   return value.replace(/\D/g, "");
+}
+
+function formatKpiCurrencyInThousands(value: number | string | null | undefined) {
+  const parsed = toNumber(value);
+  if (parsed === null) {
+    return "Não informado";
+  }
+  const absolute = Math.abs(parsed);
+  if (absolute >= 1_000_000) {
+    return `R$ ${kpiMillionsFormatter.format(parsed / 1_000_000)} MM`;
+  }
+
+  return `R$ ${kpiThousandsFormatter.format(parsed / 1_000)} K`;
 }
 
 function mapPortfolioCustomerToCard(item: PortfolioCustomerDto, index: number): DashboardAnalysisCardViewModel {
@@ -85,7 +110,7 @@ export function DashboardPageView() {
   const agingQuery = usePortfolioAgingLatestQuery();
   const customersQuery = usePortfolioCustomersQuery({ cnpj: cnpjSearch });
 
-  const customers = customersQuery.data ?? [];
+  const customers = Array.isArray(customersQuery.data) ? customersQuery.data : [];
 
   const kpis = useMemo(() => {
     const avgSuggestedLimitList = customers
@@ -103,6 +128,7 @@ export function DashboardPageView() {
       totalOpenAmount: toNumber(aging?.total_open_amount),
       totalOverdueAmount: toNumber(aging?.total_overdue_amount),
       totalNotDueAmount: toNumber(aging?.total_not_due_amount),
+      insuredLimitAmount: toNumber(aging?.insured_limit_amount ?? aging?.total_insured_limit_amount),
       customersCount: customers.length,
       avgSuggestedLimit
     };
@@ -188,7 +214,12 @@ export function DashboardPageView() {
   });
 
   const highlightedAnalyses = filtered.slice(0, 12);
-  const hasNoImport = !agingQuery.data && customers.length === 0;
+  const hasNoImport =
+    customers.length === 0 &&
+    kpis.totalOpenAmount === null &&
+    kpis.totalOverdueAmount === null &&
+    kpis.totalNotDueAmount === null &&
+    kpis.insuredLimitAmount === null;
 
   return (
     <section className="space-y-6">
@@ -200,35 +231,35 @@ export function DashboardPageView() {
 
       <div className="space-y-3">
         <div>
-          <h2 className="text-xl font-semibold tracking-[-0.01em] text-[#111827]">Visão geral das análises</h2>
+          <h2 className="text-xl font-semibold tracking-[-0.01em] text-[#111827]">Visão geral da carteira</h2>
           <p className="mt-1 text-sm text-[#6b7280]">Acompanhe o volume, o andamento e os resultados das análises de crédito.</p>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#e5e9f2] bg-white px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#6b7280]">Total em aberto</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#111827]">{formatCurrencyInThousands(kpis.totalOpenAmount)}</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#111827]">{formatKpiCurrencyInThousands(kpis.totalOpenAmount)}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-blue-200 bg-blue-50/40 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-blue-700">Overdue</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-blue-900">{formatCurrencyInThousands(kpis.totalOverdueAmount)}</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-blue-900">{formatKpiCurrencyInThousands(kpis.totalOverdueAmount)}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-amber-200 bg-amber-50/45 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-amber-700">Not Due</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-amber-900">{formatCurrencyInThousands(kpis.totalNotDueAmount)}</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-amber-900">{formatKpiCurrencyInThousands(kpis.totalNotDueAmount)}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-emerald-200 bg-emerald-50/45 px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-emerald-700">Clientes na carteira</p>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-emerald-900">{kpis.customersCount}</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-emerald-700">Limite segurado</p>
+          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-emerald-900">{formatKpiCurrencyInThousands(kpis.insuredLimitAmount)}</p>
         </article>
 
         <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#dde5f3] bg-[#f8fafe] px-5 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#64748b]">Limite sugerido médio</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#64748b]">Clientes na carteira</p>
           <p className="whitespace-nowrap text-[32px] font-bold leading-none tracking-[-0.02em] text-[#0f172a]">
-            {formatCurrencyInThousands(kpis.avgSuggestedLimit)}
+            {kpis.customersCount}
           </p>
         </article>
       </div>

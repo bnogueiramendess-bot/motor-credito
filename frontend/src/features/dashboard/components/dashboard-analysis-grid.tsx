@@ -1,4 +1,4 @@
-import { DashboardAnalysisCard } from "@/features/dashboard/components/dashboard-analysis-card";
+﻿import { DashboardAnalysisCard } from "@/features/dashboard/components/dashboard-analysis-card";
 import { DashboardAnalysisCardViewModel } from "@/features/dashboard/utils/dashboard-analysis-view-models";
 import { EmptyState } from "@/shared/components/states/empty-state";
 
@@ -20,7 +20,7 @@ export function DashboardAnalysisGrid({ analyses, filteredCount }: DashboardAnal
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-xl font-semibold tracking-[-0.01em] text-[#111827]">Análises em destaque</h2>
+        <h2 className="text-xl font-semibold tracking-[-0.01em] text-[#111827]">Clientes em destaque</h2>
         <p className="text-sm text-[#6b7280]">
           {filteredCount > 12 ? "Mostrando 12 mais prioritárias" : `${filteredCount} registro(s) exibido(s)`}
         </p>

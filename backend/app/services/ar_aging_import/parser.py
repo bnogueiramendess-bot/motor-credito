@@ -62,6 +62,10 @@ def extract_base_date_from_filename(filename: str) -> date:
 
 
 def _find_header_row(rows: list[tuple[Any, ...]], aliases: dict[str, tuple[str, ...]]) -> tuple[int, dict[str, int]]:
+    best_idx = 0
+    best_mapping: dict[str, int] = {}
+    best_score = -1
+
     for idx, row in enumerate(rows[:30]):
         lower = [str(cell).strip().lower() if cell is not None else "" for cell in row]
         mapping: dict[str, int] = {}
@@ -70,9 +74,14 @@ def _find_header_row(rows: list[tuple[Any, ...]], aliases: dict[str, tuple[str, 
                 if any(option in value for option in options):
                     mapping[key] = col_index
                     break
-        if mapping:
-            return idx, mapping
-    return 0, {}
+
+        score = len(mapping)
+        if score > best_score:
+            best_idx = idx
+            best_mapping = mapping
+            best_score = score
+
+    return best_idx, best_mapping
 
 
 def _cell(row: tuple[Any, ...], index: int | None) -> Any:
@@ -148,12 +157,13 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
     cc_header_index, cc_header = _find_header_row(
         consolidated_raw,
         {
-            "group": ("grupo", "grupo economico", "grupo economico"),
+            "group": ("grupo", "grupo economico", "grupo economico", "customer", "cliente"),
             "overdue": ("overdue", "vencido"),
             "not_due": ("not due", "a vencer"),
-            "aging": ("aging",),
-            "insured_limit": ("limite segurado", "insured", "coface"),
-            "exposure": ("exposi",),
+            "aging": ("aging", "total ar"),
+            "insured_limit": ("credit insurance", "limite segurado", "insured", "coface"),
+            "approved_credit": ("approved credit", "limite aprovado"),
+            "exposure": ("exposi", "credit balance"),
         },
     )
 
@@ -165,12 +175,13 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
             continue
         payload = {
             "row_number": idx,
-            "group": _pick_with_fallback(row, cc_header, "group", 0),
-            "overdue": _pick_with_fallback(row, cc_header, "overdue", 1),
-            "not_due": _pick_with_fallback(row, cc_header, "not_due", 2),
-            "aging": _pick_with_fallback(row, cc_header, "aging", 3),
-            "insured_limit": _pick_with_fallback(row, cc_header, "insured_limit", 4),
-            "exposure": _pick_with_fallback(row, cc_header, "exposure", 5),
+            "group": _pick_with_fallback(row, cc_header, "group", 2),
+            "overdue": _pick_with_fallback(row, cc_header, "overdue", 15),
+            "not_due": _pick_with_fallback(row, cc_header, "not_due", 16),
+            "aging": _pick_with_fallback(row, cc_header, "aging", 7),
+            "insured_limit": _pick_with_fallback(row, cc_header, "insured_limit", 27),
+            "approved_credit": _pick_with_fallback(row, cc_header, "approved_credit", 5),
+            "exposure": _pick_with_fallback(row, cc_header, "exposure", 6),
             "raw": {f"col_{i + 1}": value for i, value in enumerate(row) if value is not None},
         }
         if payload["group"] is None and payload["overdue"] is None and payload["insured_limit"] is None:

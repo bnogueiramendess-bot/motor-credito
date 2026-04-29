@@ -22,6 +22,7 @@ class ArAgingGroupConsolidatedRow(Base):
     not_due_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     aging_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     insured_limit_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    approved_credit_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     exposure_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
 
     raw_payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
