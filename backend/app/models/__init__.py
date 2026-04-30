@@ -1,5 +1,7 @@
 ﻿
 from app.models.credit_analysis import CreditAnalysis
+from app.models.ar_aging_bod_customer_row import ArAgingBodCustomerRow
+from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
 from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
 from app.models.ar_aging_import_run import ArAgingImportRun
@@ -26,6 +28,8 @@ from app.models.score_result import ScoreResult
 __all__ = [
     "ActorType",
     "AnalysisStatus",
+    "ArAgingBodCustomerRow",
+    "ArAgingBodSnapshot",
     "ArAgingDataTotalRow",
     "ArAgingGroupConsolidatedRow",
     "ArAgingImportRun",

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
+from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
 from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
 from app.models.ar_aging_import_run import ArAgingImportRun
 from app.models.ar_aging_remark_row import ArAgingRemarkRow
@@ -92,6 +93,39 @@ def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[s
     return mapped
 
 
+def _serialize_decimal(value: Decimal | None) -> Decimal | None:
+    return value if value is not None else None
+
+
+def _build_bod_snapshot_payload(db: Session, import_run_id: int) -> dict | None:
+    snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == import_run_id))
+    if snapshot is None:
+        return None
+
+    return {
+        "risk": {
+            "probable": {
+                "amount": _serialize_decimal(snapshot.probable_amount),
+                "customers_count": snapshot.probable_customers_count,
+            },
+            "possible": {
+                "amount": _serialize_decimal(snapshot.possible_amount),
+                "customers_count": snapshot.possible_customers_count,
+            },
+            "rare": {
+                "amount": _serialize_decimal(snapshot.rare_amount),
+                "customers_count": snapshot.rare_customers_count,
+            },
+        },
+        "aging_buckets": {
+            "not_due": snapshot.not_due_buckets_json or [],
+            "overdue": snapshot.overdue_buckets_json or [],
+        },
+        "totals": snapshot.totals_json or {},
+        "warnings": snapshot.warnings_json or [],
+    }
+
+
 @router.get("/aging/latest", response_model=PortfolioAgingLatestResponse)
 def get_latest_aging_summary(db: Session = Depends(get_db)) -> PortfolioAgingLatestResponse:
     run = _latest_valid_import_run(db)
@@ -131,6 +165,7 @@ def get_latest_aging_summary(db: Session = Depends(get_db)) -> PortfolioAgingLat
         import_meta=_import_meta(run),
         totals=payload_totals,
         warnings=run.warnings_json or [],
+        bod_snapshot=_build_bod_snapshot_payload(db, run.id),
     )
 
 

@@ -6,6 +6,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
+from app.models.ar_aging_bod_customer_row import ArAgingBodCustomerRow
+from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
 from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
 from app.models.ar_aging_import_run import ArAgingImportRun
 from app.models.ar_aging_remark_row import ArAgingRemarkRow
@@ -130,6 +132,49 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
                 )
             )
 
+        risk = parsed.bod_snapshot.get("risk", {})
+        probable = risk.get("probable", {}) if isinstance(risk, dict) else {}
+        possible = risk.get("possible", {}) if isinstance(risk, dict) else {}
+        rare = risk.get("rare", {}) if isinstance(risk, dict) else {}
+        aging_buckets = parsed.bod_snapshot.get("aging_buckets", {})
+
+        bod_snapshot = ArAgingBodSnapshot(
+            import_run_id=entry.id,
+            reference_date=parsed.base_date,
+            probable_amount=normalize_money(probable.get("amount")),
+            possible_amount=normalize_money(possible.get("amount")),
+            rare_amount=normalize_money(rare.get("amount")),
+            probable_customers_count=probable.get("customers_count"),
+            possible_customers_count=possible.get("customers_count"),
+            rare_customers_count=rare.get("customers_count"),
+            not_due_buckets_json=_safe_json_value(aging_buckets.get("not_due", [])),
+            overdue_buckets_json=_safe_json_value(aging_buckets.get("overdue", [])),
+            totals_json=_safe_json_value(parsed.bod_snapshot.get("totals", {})),
+            raw_bod_json=_safe_json_value(parsed.bod_snapshot.get("raw_bod_json", {})),
+            warnings_json=_safe_json_value(parsed.bod_snapshot.get("warnings", [])),
+        )
+        db.add(bod_snapshot)
+        db.flush()
+
+        for customer_row in parsed.bod_customer_rows:
+            db.add(
+                ArAgingBodCustomerRow(
+                    bod_snapshot_id=bod_snapshot.id,
+                    customer_name=as_optional_string(customer_row.get("customer_name")),
+                    customer_document=as_optional_string(customer_row.get("customer_document")),
+                    group_name=as_optional_string(customer_row.get("group_name")),
+                    total_open_amount=normalize_money(customer_row.get("total_open_amount")),
+                    overdue_amount=normalize_money(customer_row.get("overdue_amount")),
+                    not_due_amount=normalize_money(customer_row.get("not_due_amount")),
+                    insured_limit_amount=normalize_money(customer_row.get("insured_limit_amount")),
+                    exposure_amount=normalize_money(customer_row.get("exposure_amount")),
+                    risk_category=as_optional_string(customer_row.get("risk_category")),
+                    aging_json=_safe_json_value(customer_row.get("aging_json", {})),
+                    remarks_json=_safe_json_value(customer_row.get("remarks", [])),
+                    raw_row_json=_safe_json_value(customer_row.get("raw_row", {})),
+                )
+            )
+
         totals = {
             "data_total_rows": len(parsed.data_total_rows),
             "consolidated_rows": len(parsed.consolidated_rows),
@@ -140,6 +185,7 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
             "invalid_cnpj_rows": invalid_cnpj,
             "missing_group_rows": missing_group,
             "captured_comments": len(parsed.remark_rows),
+            "bod_customer_rows": len(parsed.bod_customer_rows),
         }
 
         warnings = list(parsed.warnings)

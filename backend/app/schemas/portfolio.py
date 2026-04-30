@@ -17,6 +17,7 @@ class PortfolioAgingLatestResponse(BaseModel):
     import_meta: PortfolioImportMeta
     totals: dict
     warnings: list[str]
+    bod_snapshot: dict | None = None
 
 
 class PortfolioCustomerSummary(BaseModel):

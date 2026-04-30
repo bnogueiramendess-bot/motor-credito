@@ -22,7 +22,11 @@ export function formatCurrencyInThousands(value: number | string | null | undefi
   }
 
   const sign = parsed < 0 ? "-" : "";
-  const valueInThousands = absoluteValue / 1000;
+  if (absoluteValue >= 1_000_000) {
+    const valueInMillions = absoluteValue / 1_000_000;
+    return `${sign}R$ ${thousandFormatter.format(valueInMillions)} MM`;
+  }
 
-  return `${sign}R$ ${thousandFormatter.format(valueInThousands)} mil`;
+  const valueInThousands = absoluteValue / 1000;
+  return `${sign}R$ ${thousandFormatter.format(valueInThousands)} k`;
 }

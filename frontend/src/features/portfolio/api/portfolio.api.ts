@@ -36,7 +36,19 @@ export async function getPortfolioAgingLatest(params?: Pick<PortfolioQueryParams
     return null;
   }
 
-  return candidate as PortfolioAgingLatestDto;
+  const base = candidate as Record<string, unknown>;
+  const snapshotCandidate = asRecord.bod_snapshot;
+  const bodSnapshot =
+    snapshotCandidate === null
+      ? null
+      : snapshotCandidate && typeof snapshotCandidate === "object" && !Array.isArray(snapshotCandidate)
+        ? snapshotCandidate
+        : undefined;
+
+  return {
+    ...(base as PortfolioAgingLatestDto),
+    bod_snapshot: bodSnapshot
+  } as PortfolioAgingLatestDto;
 }
 
 export async function getPortfolioCustomers(params?: PortfolioQueryParams) {

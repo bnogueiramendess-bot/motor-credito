@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.db.session import SessionLocal
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
-from app.routes.portfolio import _derive_open_amount, list_portfolio_customers
+from app.routes.portfolio import _derive_open_amount, get_latest_aging_summary, list_portfolio_customers
 from app.schemas.ar_aging_import import ArAgingImportCreate
 from app.services.ar_aging_import.upload import create_ar_aging_import_run
 
@@ -52,6 +52,18 @@ class PortfolioAgingConsistencyTestCase(unittest.TestCase):
     def test_total_open_amount_is_derived_when_open_is_zero(self) -> None:
         derived = _derive_open_amount(open_amount=Decimal("0"), overdue_amount=Decimal("10"), not_due_amount=Decimal("15"))
         self.assertEqual(str(derived), "25")
+
+    def test_latest_aging_includes_optional_bod_snapshot_without_breaking_totals(self) -> None:
+        with SessionLocal() as db:
+            response = get_latest_aging_summary(db=db)
+        self.assertIn("total_open_amount", response.totals)
+        self.assertIsNotNone(response.bod_snapshot)
+        self.assertIn("aging_buckets", response.bod_snapshot)
+        self.assertIn("not_due", response.bod_snapshot["aging_buckets"])
+        self.assertIn("overdue", response.bod_snapshot["aging_buckets"])
+        self.assertTrue(
+            len(response.bod_snapshot["aging_buckets"]["not_due"]) > 0 or len(response.bod_snapshot["aging_buckets"]["overdue"]) > 0
+        )
 
 
 if __name__ == "__main__":
