@@ -100,7 +100,11 @@ const statusFilters: Array<{ value: StatusFilter; label: string }> = [
   { value: "completed", label: "Concluídas" }
 ];
 
-export function DashboardPageView() {
+type DashboardPageViewProps = {
+  context?: "clientes" | "motor-credito";
+};
+
+export function DashboardPageView(_: DashboardPageViewProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const normalizedSearch = search.trim().toLowerCase();

@@ -1,5 +1,5 @@
-import { DashboardPageView } from "@/features/dashboard/components/dashboard-page-view";
+import { redirect } from "next/navigation";
 
 export default function DashboardPage() {
-  return <DashboardPageView />;
+  redirect("/motor-credito/dashboard");
 }

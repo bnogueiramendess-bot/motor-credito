@@ -1,5 +1,5 @@
-import { CreditRulesPageView } from "@/features/credit-rules/components/credit-rules-page-view";
+import { redirect } from "next/navigation";
 
 export default function RegrasPage() {
-  return <CreditRulesPageView />;
+  redirect("/motor-credito/regras");
 }
