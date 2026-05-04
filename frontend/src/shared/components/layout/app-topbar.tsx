@@ -7,8 +7,9 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/shared/lib/utils";
 
 type NavItem = {
-  href: string;
-  label: string;
+  type?: "link" | "divider";
+  href?: string;
+  label?: string;
 };
 
 type NavGroup = {
@@ -24,8 +25,8 @@ const navGroups: NavGroup[] = [
     label: "Clientes",
     activePrefix: "/clientes",
     items: [
-      { href: "/clientes/dashboard", label: "Dashboard" },
-      { href: "/clientes/carteira", label: "Carteira de Clientes" }
+      { type: "link", href: "/clientes/dashboard", label: "Dashboard" },
+      { type: "link", href: "/clientes/carteira", label: "Carteira de Clientes" }
     ]
   },
   {
@@ -33,14 +34,39 @@ const navGroups: NavGroup[] = [
     label: "Motor de Crédito",
     activePrefix: "/motor-credito",
     items: [
-      { href: "/motor-credito/dashboard", label: "Dashboard" },
-      { href: "/motor-credito/regras", label: "Regras" }
+      { type: "link", href: "/motor-credito/dashboard", label: "Dashboard" },
+      { type: "link", href: "/motor-credito/regras", label: "Regras" },
+      { type: "divider" },
+      { type: "link", href: "/analises/nova", label: "+ Nova análise" },
+      { type: "link", href: "/analises", label: "Localizar análise" }
     ]
   }
 ];
 
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function isMotorCreditoRoute(pathname: string) {
+  return (
+    pathname.startsWith("/motor-credito") ||
+    pathname.startsWith("/analises") ||
+    pathname.startsWith("/dados-externos")
+  );
+}
+
+function isSubmenuItemActive(pathname: string, groupId: string, href: string) {
+  if (groupId === "motor-credito") {
+    if (href === "/analises/nova") {
+      return pathname === "/analises/nova";
+    }
+
+    if (href === "/analises") {
+      return pathname === "/analises" || /^\/analises\/\d+$/.test(pathname);
+    }
+  }
+
+  return isActivePath(pathname, href);
 }
 
 function resolveTopbarMeta(pathname: string): { title: string; subtitle: string } {
@@ -131,7 +157,7 @@ export function AppTopbar() {
             {navGroups.map((group) => {
               const menuId = `topbar-submenu-${group.id}`;
               const isOpen = openGroupId === group.id;
-              const groupActive = pathname.startsWith(group.activePrefix);
+              const groupActive = group.id === "motor-credito" ? isMotorCreditoRoute(pathname) : pathname.startsWith(group.activePrefix);
 
               return (
                 <button
@@ -159,19 +185,6 @@ export function AppTopbar() {
           <div className="hidden h-8 w-px bg-[#334155] xl:block" aria-hidden="true" />
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            <Link
-              href="/analises/nova"
-              className="inline-flex h-11 items-center rounded-xl bg-white px-5 text-sm font-semibold text-[#0B132B] shadow-[0_2px_8px_rgba(2,6,23,0.24)] transition hover:bg-[#F8FAFC]"
-            >
-              Nova análise
-            </Link>
-            <Link
-              href="/analises"
-              className="hidden h-10 items-center rounded-xl border border-[#E2E8F0]/70 bg-white/5 px-4 text-sm font-semibold text-[#E2E8F0] transition hover:bg-white/10 md:inline-flex"
-            >
-              Localizar análise
-            </Link>
-
             <div className="hidden items-center gap-2 rounded-xl border border-[#E2E8F0]/25 bg-white/5 px-2.5 py-1.5 xl:flex">
               <div className="text-right text-xs text-[#CBD5E1]">
                 <p className="font-medium text-[#E2E8F0]">{meta.subtitle}</p>
@@ -187,14 +200,22 @@ export function AppTopbar() {
         <div
           id={openGroup ? `topbar-submenu-${openGroup.id}` : undefined}
           className={cn(
-            "hidden lg:block overflow-hidden border-t border-[#334155]/80 transition-all duration-200",
-            openGroup ? "max-h-16 opacity-100 py-2" : "max-h-0 opacity-0 py-0 border-t-transparent"
+            "hidden overflow-hidden border-t border-[#334155]/80 transition-all duration-200 lg:block",
+            openGroup ? "max-h-16 py-2 opacity-100" : "max-h-0 border-t-transparent py-0 opacity-0"
           )}
         >
           {openGroup ? (
-            <nav aria-label={`Submenu ${openGroup.label}`} className="flex items-center gap-2">
-              {openGroup.items.map((item) => {
-                const active = isActivePath(pathname, item.href);
+            <nav aria-label={`Submenu ${openGroup.label}`} className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pr-1">
+              {openGroup.items.map((item, index) => {
+                if (item.type === "divider") {
+                  return <span key={`divider-${openGroup.id}-${index}`} className="mx-1 h-4 w-px bg-[#334155]" aria-hidden="true" />;
+                }
+
+                if (!item.href || !item.label) {
+                  return null;
+                }
+
+                const active = isSubmenuItemActive(pathname, openGroup.id, item.href);
 
                 return (
                   <Link
