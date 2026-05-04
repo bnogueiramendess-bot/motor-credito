@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { PortfolioRiskSection } from "@/features/dashboard/components/portfolio-risk-section";
@@ -233,6 +233,7 @@ function movementReadableMessage(movement: PortfolioMovementDto) {
 export function DashboardPageView(_: DashboardPageViewProps) {
   const agingQuery = usePortfolioAgingLatestQuery();
   const movementsQuery = usePortfolioAgingMovementsLatestQuery();
+  const [showTopMovements, setShowTopMovements] = useState(false);
   const baseDateLabel = useMemo(() => {
     const rawBaseDate = agingQuery.data?.import_meta?.base_date;
     if (!rawBaseDate || typeof rawBaseDate !== "string") {
@@ -396,33 +397,48 @@ export function DashboardPageView(_: DashboardPageViewProps) {
       
 
       <section className="rounded-2xl border border-[#e5e9f2] bg-white p-4 shadow-sm xl:p-6 2xl:p-8">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.06em] text-[#334155]">Top movimentos da carteira</h3>
-        <p className="mt-1 text-sm text-[#64748b]">Principais variações entre a base vigente e a base anterior.</p>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-[0.06em] text-[#334155]">Top movimentos da carteira</h3>
+            <p className="mt-1 text-sm text-[#64748b]">Principais variações entre a base vigente e a base anterior.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowTopMovements((current) => !current)}
+            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            {showTopMovements ? "Ocultar" : "Mostrar"}
+          </button>
+        </div>
 
-        {movementsQuery.isLoading ? <p className="mt-3 text-sm text-[#64748b]">Carregando movimentos...</p> : null}
-        {movementsQuery.isError ? <p className="mt-3 text-sm text-rose-700">Não foi possível carregar os movimentos da carteira.</p> : null}
+        {showTopMovements ? (
+          <>
+            {movementsQuery.isLoading ? <p className="mt-3 text-sm text-[#64748b]">Carregando movimentos...</p> : null}
+            {movementsQuery.isError ? <p className="mt-3 text-sm text-rose-700">Não foi possível carregar os movimentos da carteira.</p> : null}
 
-        {!movementsQuery.isLoading && !movementsQuery.isError ? (
-          movementsQuery.data && movementsQuery.data.movements.length > 0 ? (
-            <div className="mt-4 space-y-3">
-              {movementsQuery.data.movements.slice(0, 10).map((movement) => (
-                <article key={movement.id} className={cn("rounded-xl border px-4 py-3", movementTone(movement))}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold">{movement.entity_name}</p>
-                    <p className="text-xs font-semibold uppercase tracking-[0.06em]">{movementMetricLabel(movement.metric)}</p>
-                  </div>
-                  <p className="mt-1 text-sm">{movementReadableMessage(movement)}</p>
-                  <p className="mt-1 text-xs font-medium">
-                    {movementSymbol(movement.direction)} {formatCurrencyInThousands(movement.delta)} | Atual: {formatCurrencyInThousands(movement.current_value)}
-                  </p>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              {movementsQuery.data?.message ?? "Ainda não há base anterior suficiente para comparação."}
-            </p>
-          )
+            {!movementsQuery.isLoading && !movementsQuery.isError ? (
+              movementsQuery.data && movementsQuery.data.movements.length > 0 ? (
+                <div className="mt-4 space-y-3">
+                  {movementsQuery.data.movements.slice(0, 10).map((movement) => (
+                    <article key={movement.id} className={cn("rounded-xl border px-4 py-3", movementTone(movement))}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{movement.entity_name}</p>
+                        <p className="text-xs font-semibold uppercase tracking-[0.06em]">{movementMetricLabel(movement.metric)}</p>
+                      </div>
+                      <p className="mt-1 text-sm">{movementReadableMessage(movement)}</p>
+                      <p className="mt-1 text-xs font-medium">
+                        {movementSymbol(movement.direction)} {formatCurrencyInThousands(movement.delta)} | Atual: {formatCurrencyInThousands(movement.current_value)}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  {movementsQuery.data?.message ?? "Ainda não há base anterior suficiente para comparação."}
+                </p>
+              )
+            ) : null}
+          </>
         ) : null}
       </section>
     </section>

@@ -133,4 +133,11 @@ export type PortfolioRiskSummaryDto = {
     attention: { amount: number; percentage: number; clients: number };
     healthy: { amount: number; percentage: number; clients: number };
   };
+  top_clients_at_risk: Array<{
+    customer_name: string;
+    bu?: string | null;
+    remark?: string | null;
+    amount: number;
+    risk_level: "critical" | "attention";
+  }>;
 };

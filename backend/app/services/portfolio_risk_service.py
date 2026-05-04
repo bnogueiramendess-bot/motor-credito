@@ -58,6 +58,10 @@ def _is_valid_customer_name(value: Any) -> bool:
 
 @dataclass(slots=True)
 class RiskRow:
+    customer_name: str
+    bu: str | None
+    remark: str | None
+    exposure_amount: float
     critical_amount: float
     attention_amount: float
     healthy_amount: float
@@ -110,6 +114,27 @@ def _build_summary(rows: list[RiskRow]) -> dict[str, Any]:
     total_portfolio = critical_amount + attention_amount + healthy_amount
     at_risk_amount = critical_amount + attention_amount
 
+    top_clients_candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if row.critical_amount <= 0 and row.attention_amount <= 0:
+            continue
+        if row.exposure_amount <= 500_000:
+            continue
+        risk_level = "critical" if row.critical_amount > 0 else "attention"
+        top_clients_candidates.append(
+            {
+                "customer_name": row.customer_name,
+                "bu": row.bu,
+                "remark": row.remark,
+                "amount": float(row.exposure_amount),
+                "risk_level": risk_level,
+            }
+        )
+    top_clients_at_risk = sorted(
+        top_clients_candidates,
+        key=lambda item: -item["amount"],
+    )
+
     return {
         "at_risk_amount": float(at_risk_amount),
         "at_risk_percentage": _safe_div(at_risk_amount, total_portfolio),
@@ -132,6 +157,7 @@ def _build_summary(rows: list[RiskRow]) -> dict[str, Any]:
                 "clients": int(healthy_clients),
             },
         },
+        "top_clients_at_risk": top_clients_at_risk,
     }
 
 
@@ -152,6 +178,10 @@ def _parse_bod_rows(rows: list[tuple[Any, ...]]) -> list[RiskRow]:
 
         parsed_rows.append(
             RiskRow(
+                customer_name=customer_name,
+                bu=as_optional_string(row[3] if len(row) > 3 else None),
+                remark=as_optional_string(row[15] if len(row) > 15 else None),
+                exposure_amount=_to_float(row[6] if len(row) > 6 else None),
                 critical_amount=_to_float(raw_critical),
                 attention_amount=_to_float(raw_attention),
                 healthy_amount=_to_float(raw_healthy),
@@ -198,6 +228,10 @@ def calculate_portfolio_risk_from_bod_raw_rows(raw_rows: list[dict[str, Any]]) -
         raw_healthy = raw.get("col_14")
         normalized_rows.append(
             RiskRow(
+                customer_name=customer_name,
+                bu=as_optional_string(raw.get("col_4")),
+                remark=as_optional_string(raw.get("col_16")),
+                exposure_amount=_to_float(raw.get("col_7")),
                 critical_amount=_to_float(raw_critical),
                 attention_amount=_to_float(raw_attention),
                 healthy_amount=_to_float(raw_healthy),

@@ -119,8 +119,16 @@ class PortfolioRiskDistribution(BaseModel):
 
 
 class PortfolioRiskSummaryResponse(BaseModel):
+    class TopClientAtRiskItem(BaseModel):
+        customer_name: str
+        bu: str | None = None
+        remark: str | None = None
+        amount: float
+        risk_level: str
+
     at_risk_amount: float
     at_risk_percentage: float
     healthy_percentage: float
     clients_at_risk: int
     distribution: PortfolioRiskDistribution
+    top_clients_at_risk: list[TopClientAtRiskItem]

@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
@@ -41,6 +43,8 @@ function RiskMiniCard({
 export function PortfolioRiskSection() {
   const query = usePortfolioRiskSummaryQuery();
   const agingQuery = usePortfolioAgingLatestQuery();
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [showTopClients, setShowTopClients] = useState(false);
 
   if (query.isLoading) {
     return (
@@ -97,6 +101,8 @@ export function PortfolioRiskSection() {
     { label: "Possible", value: attention.percentage, color: "bg-amber-400" },
     { label: "Rare", value: healthy.percentage, color: "bg-emerald-400" }
   ];
+  const topRiskTotal = (data.top_clients_at_risk ?? []).reduce((acc, item) => acc + (item.amount || 0), 0);
+  const topRiskShare = data.at_risk_amount > 0 ? topRiskTotal / data.at_risk_amount : 0;
 
   return (
     <section className="rounded-2xl border border-[#1f3754] bg-[#0d1b2a] p-5 xl:p-6">
@@ -157,6 +163,63 @@ export function PortfolioRiskSection() {
             </span>
           ))}
         </div>
+      </div>
+
+      <div className="mt-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-semibold text-white">Listagem das Principais Exposições em Risco</h4>
+            <button
+              type="button"
+              onClick={() => setShowTopClients((current) => !current)}
+              className="rounded-md border border-white/20 px-2.5 py-1 text-xs font-medium text-white/85 transition hover:bg-white/10"
+            >
+              {showTopClients ? "Ocultar" : "Mostrar"}
+            </button>
+          </div>
+          {showTopClients ? (
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-white/70">
+                Total: <span className="font-semibold text-white">{formatCurrencyInThousands(topRiskTotal)}</span> ({formatPctFromFraction(topRiskShare)})
+              </p>
+            </div>
+          ) : null}
+        </div>
+        {showTopClients ? <div className="mt-2 space-y-2">
+          {(data.top_clients_at_risk ?? []).map((item, index) => {
+            const isCritical = item.risk_level === "critical";
+            const isExpanded = expandedIndex === index;
+            return (
+              <button
+                type="button"
+                key={`${item.customer_name}-${index}`}
+                onClick={() => setExpandedIndex((current) => (current === index ? null : index))}
+                className={`w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-left transition hover:bg-white/[0.06] ${isCritical ? "border-l-4 border-l-rose-500" : "border-l-4 border-l-amber-400"}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-white">{item.customer_name}</p>
+                    <p className={`text-xs ${isCritical ? "text-rose-300" : "text-amber-300"}`}>
+                      {isCritical ? "Probable" : "Possible"}{item.bu ? ` · BU: ${item.bu}` : ""}
+                    </p>
+                  </div>
+                  <p className="shrink-0 text-sm font-semibold text-white">{formatCurrencyInThousands(item.amount)}</p>
+                </div>
+                {isExpanded ? (
+                  <div className="mt-2 rounded-md border border-white/10 bg-black/20 px-2.5 py-2">
+                    <p className="text-[11px] uppercase tracking-[0.06em] text-white/55">Remark</p>
+                    <p className="mt-1 text-sm text-white/80">{item.remark?.trim() ? item.remark : "Sem observação para este cliente."}</p>
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+          {(data.top_clients_at_risk ?? []).length === 0 ? (
+            <p className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/65">
+              Nenhuma exposição em risco acima de R$ 500 mil no último snapshot.
+            </p>
+          ) : null}
+        </div> : null}
       </div>
     </section>
   );
