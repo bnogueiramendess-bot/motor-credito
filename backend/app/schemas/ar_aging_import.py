@@ -23,6 +23,8 @@ class ArAgingImportCreate(BaseModel):
     mime_type: str
     file_size: int = Field(ge=0)
     file_content_base64: str
+    overwrite: bool = False
+    imported_by: str | None = None
 
 
 class ArAgingImportResponse(BaseModel):
@@ -37,3 +39,10 @@ class ArAgingImportResponse(BaseModel):
     warnings: list[str]
     totals: dict
     created_at: datetime
+    imported_by: str | None = None
+
+
+class ArAgingImportHistoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[ArAgingImportResponse]

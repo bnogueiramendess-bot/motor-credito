@@ -1,8 +1,11 @@
 ﻿from __future__ import annotations
 
 import base64
+import hashlib
+from fastapi import HTTPException, status
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
@@ -32,9 +35,63 @@ def _safe_json_value(value: Any) -> Any:
     return str(value)
 
 
+def _is_valid_status(status_value: str) -> bool:
+    return status_value in {"valid", "valid_with_warnings"}
+
+
+def _latest_valid_import_run(db: Session) -> ArAgingImportRun | None:
+    return db.scalar(
+        select(ArAgingImportRun)
+        .where(ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]))
+        .order_by(ArAgingImportRun.id.desc())
+        .limit(1)
+    )
+
+
+def _find_duplicate_import_run(
+    db: Session,
+    *,
+    base_date_value,
+    original_filename: str,
+    file_sha256: str,
+) -> ArAgingImportRun | None:
+    candidates = db.scalars(
+        select(ArAgingImportRun).where(
+            ArAgingImportRun.status.in_(["processing", "valid", "valid_with_warnings"])
+        )
+    ).all()
+
+    for run in candidates:
+        by_base_date = run.base_date == base_date_value
+        by_filename = run.original_filename == original_filename
+        run_hash = run.totals_json.get("_file_sha256") if isinstance(run.totals_json, dict) else None
+        by_hash = isinstance(run_hash, str) and run_hash == file_sha256
+        if by_base_date or by_filename or by_hash:
+            return run
+    return None
+
+
 def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArAgingImportRun:
+    base_date = extract_base_date_from_filename(payload.original_filename)
+    file_bytes = base64.b64decode(payload.file_content_base64)
+    file_sha256 = hashlib.sha256(file_bytes).hexdigest()
+
+    duplicate = _find_duplicate_import_run(
+        db,
+        base_date_value=base_date,
+        original_filename=payload.original_filename,
+        file_sha256=file_sha256,
+    )
+    if duplicate is not None and not payload.overwrite:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ja existe uma base importada para esta data. Use overwrite=true para sobrescrever.",
+        )
+
+    latest_valid_run = _latest_valid_import_run(db)
+
     entry = ArAgingImportRun(
-        base_date=extract_base_date_from_filename(payload.original_filename),
+        base_date=base_date,
         status="processing",
         original_filename=payload.original_filename,
         mime_type=payload.mime_type,
@@ -46,7 +103,6 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
     db.flush()
 
     try:
-        file_bytes = base64.b64decode(payload.file_content_base64)
         parsed = parse_aging_workbook(file_bytes, payload.original_filename)
 
         entry.base_date = parsed.base_date
@@ -186,9 +242,13 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
             "missing_group_rows": missing_group,
             "captured_comments": len(parsed.remark_rows),
             "bod_customer_rows": len(parsed.bod_customer_rows),
+            "_file_sha256": file_sha256,
+            "_imported_by": payload.imported_by,
         }
 
         warnings = list(parsed.warnings)
+        if latest_valid_run is not None and parsed.base_date < latest_valid_run.base_date:
+            warnings.append("Você está importando uma base mais antiga que a atual.")
         if missing_cnpj > 0:
             warnings.append(f"{missing_cnpj} linhas sem CNPJ na aba Data Total.")
         if invalid_cnpj > 0:
@@ -205,7 +265,11 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
     except Exception as exc:
         entry.status = "error"
         entry.warnings_json = [f"Falha ao importar Aging AR: {exc}"]
-        entry.totals_json = {}
+        entry.totals_json = {
+            "_file_sha256": file_sha256,
+            "_imported_by": payload.imported_by,
+            "_error_message": str(exc),
+        }
 
     db.commit()
     db.refresh(entry)

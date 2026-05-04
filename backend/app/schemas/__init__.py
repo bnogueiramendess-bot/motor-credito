@@ -2,7 +2,9 @@
 from app.schemas.credit_analysis import CreditAnalysisCreate, CreditAnalysisRead
 from app.schemas.ar_aging_import import ArAgingImportCreate, ArAgingImportResponse
 from app.schemas.portfolio import (
+    PortfolioAgingAlertsLatestResponse,
     PortfolioAgingLatestResponse,
+    PortfolioAgingMovementsLatestResponse,
     PortfolioCustomerDetailResponse,
     PortfolioCustomersResponse,
     PortfolioGroupDetailResponse,
@@ -33,6 +35,8 @@ __all__ = [
     "ArAgingImportCreate",
     "ArAgingImportResponse",
     "PortfolioAgingLatestResponse",
+    "PortfolioAgingAlertsLatestResponse",
+    "PortfolioAgingMovementsLatestResponse",
     "PortfolioCustomersResponse",
     "PortfolioCustomerDetailResponse",
     "PortfolioGroupDetailResponse",

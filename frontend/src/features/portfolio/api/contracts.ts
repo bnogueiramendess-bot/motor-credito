@@ -26,8 +26,17 @@ export type PortfolioAgingLatestDto = {
   total_open_amount: number | string | null;
   total_overdue_amount: number | string | null;
   total_not_due_amount: number | string | null;
+  distinct_customers?: number | null;
   insured_limit_amount?: number | string | null;
   total_insured_limit_amount?: number | string | null;
+  import_meta?: {
+    import_run_id?: number;
+    base_date?: string;
+    status?: string;
+    created_at?: string;
+    imported_at?: string;
+    imported_by?: string | null;
+  };
   bod_snapshot?: PortfolioBodSnapshotDto;
   [key: string]: unknown;
 };
@@ -46,4 +55,45 @@ export type PortfolioCustomerDto = {
   suggested_limit?: number | string | null;
   final_limit?: number | string | null;
   [key: string]: unknown;
+};
+
+export type PortfolioAgingAlertSeverity = "critical" | "warning" | "info";
+
+export type PortfolioAgingAlertDto = {
+  id: string;
+  severity: PortfolioAgingAlertSeverity;
+  title: string;
+  message: string;
+  metric?: string | null;
+  value?: number | null;
+  base_date?: string | null;
+  delta?: {
+    direction: "up" | "down" | "flat";
+    value: number;
+    formatted: string;
+  } | null;
+};
+
+export type PortfolioMovementSeverity = "critical" | "warning" | "info";
+export type PortfolioMovementDirection = "up" | "down" | "flat";
+
+export type PortfolioMovementDto = {
+  id: string;
+  entity_type: "customer" | "group";
+  entity_name: string;
+  cnpj?: string | null;
+  metric: "overdue_amount" | "total_open_amount" | "uncovered_exposure" | "probable_amount";
+  direction: PortfolioMovementDirection;
+  delta: number;
+  current_value: number;
+  previous_value: number;
+  severity: PortfolioMovementSeverity;
+  message: string;
+};
+
+export type PortfolioMovementsLatestDto = {
+  base_date: string;
+  previous_base_date?: string | null;
+  message?: string | null;
+  movements: PortfolioMovementDto[];
 };

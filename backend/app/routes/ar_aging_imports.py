@@ -1,15 +1,21 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.ar_aging_import_run import ArAgingImportRun
-from app.schemas.ar_aging_import import ArAgingImportCreate, ArAgingImportResponse
+from app.schemas.ar_aging_import import ArAgingImportCreate, ArAgingImportHistoryResponse, ArAgingImportResponse
 from app.services.ar_aging_import import create_ar_aging_import_run
 
 router = APIRouter(prefix="/ar-aging-imports", tags=["ar-aging-imports"])
 
 
 def _to_response(entry: ArAgingImportRun) -> ArAgingImportResponse:
+    imported_by = None
+    if isinstance(entry.totals_json, dict):
+        candidate = entry.totals_json.get("_imported_by")
+        imported_by = candidate if isinstance(candidate, str) else None
+
     return ArAgingImportResponse(
         id=entry.id,
         base_date=entry.base_date,
@@ -20,6 +26,7 @@ def _to_response(entry: ArAgingImportRun) -> ArAgingImportResponse:
         warnings=entry.warnings_json or [],
         totals=entry.totals_json or {},
         created_at=entry.created_at,
+        imported_by=imported_by,
     )
 
 
@@ -27,6 +34,15 @@ def _to_response(entry: ArAgingImportRun) -> ArAgingImportResponse:
 def create_import(payload: ArAgingImportCreate, db: Session = Depends(get_db)) -> ArAgingImportResponse:
     entry = create_ar_aging_import_run(db, payload)
     return _to_response(entry)
+
+
+@router.get("/history", response_model=ArAgingImportHistoryResponse)
+def list_import_history(
+    limit: int = Query(default=20, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> ArAgingImportHistoryResponse:
+    entries = db.scalars(select(ArAgingImportRun).order_by(ArAgingImportRun.id.desc()).limit(limit)).all()
+    return ArAgingImportHistoryResponse(items=[_to_response(entry) for entry in entries])
 
 
 @router.get("/{import_id}", response_model=ArAgingImportResponse)

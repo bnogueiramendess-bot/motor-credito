@@ -1,6 +1,6 @@
 import { apiClient } from "@/shared/lib/http/http-client";
 
-import { PortfolioAgingLatestDto, PortfolioCustomerDto } from "@/features/portfolio/api/contracts";
+import { PortfolioAgingAlertDto, PortfolioAgingLatestDto, PortfolioCustomerDto, PortfolioMovementsLatestDto } from "@/features/portfolio/api/contracts";
 
 type PortfolioQueryParams = {
   cnpj?: string;
@@ -47,6 +47,10 @@ export async function getPortfolioAgingLatest(params?: Pick<PortfolioQueryParams
 
   return {
     ...(base as PortfolioAgingLatestDto),
+    import_meta:
+      asRecord.import_meta && typeof asRecord.import_meta === "object" && !Array.isArray(asRecord.import_meta)
+        ? (asRecord.import_meta as PortfolioAgingLatestDto["import_meta"])
+        : undefined,
     bod_snapshot: bodSnapshot
   } as PortfolioAgingLatestDto;
 }
@@ -67,4 +71,33 @@ export async function getPortfolioCustomers(params?: PortfolioQueryParams) {
   }
 
   return [];
+}
+
+export async function getPortfolioAgingAlertsLatest() {
+  const payload = await apiClient.get<unknown>("/api/portfolio/aging/alerts/latest");
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const asRecord = payload as Record<string, unknown>;
+  const alertsCandidate = asRecord.alerts;
+  if (!Array.isArray(alertsCandidate)) {
+    return [];
+  }
+
+  return alertsCandidate as PortfolioAgingAlertDto[];
+}
+
+export async function getPortfolioAgingMovementsLatest() {
+  const payload = await apiClient.get<unknown>("/api/portfolio/aging/movements/latest");
+  if (!payload || typeof payload !== "object") {
+    return { base_date: "", previous_base_date: null, message: "Ainda não há base anterior suficiente para comparação.", movements: [] } as PortfolioMovementsLatestDto;
+  }
+  const asRecord = payload as Record<string, unknown>;
+  return {
+    base_date: String(asRecord.base_date ?? ""),
+    previous_base_date: (asRecord.previous_base_date as string | null | undefined) ?? null,
+    message: (asRecord.message as string | null | undefined) ?? null,
+    movements: Array.isArray(asRecord.movements) ? (asRecord.movements as PortfolioMovementsLatestDto["movements"]) : []
+  };
 }

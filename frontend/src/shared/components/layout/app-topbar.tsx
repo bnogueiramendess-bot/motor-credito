@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
+import { FileUp } from "lucide-react";
 
+import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
 import { cn } from "@/shared/lib/utils";
 
 type NavItem = {
@@ -136,6 +138,7 @@ export function AppTopbar() {
   const pathname = usePathname();
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
+  const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
   const openGroup = navGroups.find((group) => group.id === openGroupId) ?? null;
 
   function toggleGroup(groupId: string) {
@@ -185,6 +188,15 @@ export function AppTopbar() {
           <div className="hidden h-8 w-px bg-[#334155] xl:block" aria-hidden="true" />
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => setIsImportDrawerOpen(true)}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#E2E8F0]/40 bg-white/5 px-3.5 text-sm font-medium text-[#E2E8F0] transition hover:bg-white/10"
+            >
+              <FileUp className="h-4 w-4" />
+              Importação
+            </button>
+
             <div className="hidden items-center gap-2 rounded-xl border border-[#E2E8F0]/25 bg-white/5 px-2.5 py-1.5 xl:flex">
               <div className="text-right text-xs text-[#CBD5E1]">
                 <p className="font-medium text-[#E2E8F0]">{meta.subtitle}</p>
@@ -236,6 +248,7 @@ export function AppTopbar() {
           ) : null}
         </div>
       </div>
+      <AgingImportDrawer open={isImportDrawerOpen} onOpenChange={setIsImportDrawerOpen} />
     </header>
   );
 }

@@ -13,7 +13,9 @@ from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedR
 from app.models.ar_aging_import_run import ArAgingImportRun
 from app.models.ar_aging_remark_row import ArAgingRemarkRow
 from app.schemas.portfolio import (
+    PortfolioAgingAlertsLatestResponse,
     PortfolioAgingLatestResponse,
+    PortfolioAgingMovementsLatestResponse,
     PortfolioCustomerDetailResponse,
     PortfolioCustomersResponse,
     PortfolioCustomerSummary,
@@ -22,6 +24,8 @@ from app.schemas.portfolio import (
     PortfolioImportMeta,
 )
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_text_key
+from app.services.portfolio_alerts import build_latest_portfolio_alerts
+from app.services.portfolio_movements import build_latest_portfolio_movements
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio-aging"])
 
@@ -42,11 +46,18 @@ def _latest_valid_import_run(db: Session) -> ArAgingImportRun:
 
 
 def _import_meta(entry: ArAgingImportRun) -> PortfolioImportMeta:
+    imported_by = None
+    if isinstance(entry.totals_json, dict):
+        candidate = entry.totals_json.get("_imported_by")
+        imported_by = candidate if isinstance(candidate, str) else None
+
     return PortfolioImportMeta(
         import_run_id=entry.id,
         base_date=entry.base_date,
         status=entry.status,
         created_at=entry.created_at,
+        imported_at=entry.created_at,
+        imported_by=imported_by,
     )
 
 
@@ -167,6 +178,28 @@ def get_latest_aging_summary(db: Session = Depends(get_db)) -> PortfolioAgingLat
         warnings=run.warnings_json or [],
         bod_snapshot=_build_bod_snapshot_payload(db, run.id),
     )
+
+
+@router.get("/aging/alerts/latest", response_model=PortfolioAgingAlertsLatestResponse)
+def get_latest_aging_alerts(db: Session = Depends(get_db)) -> PortfolioAgingAlertsLatestResponse:
+    payload = build_latest_portfolio_alerts(db)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nao existe importacao Aging AR valida.",
+        )
+    return PortfolioAgingAlertsLatestResponse(**payload)
+
+
+@router.get("/aging/movements/latest", response_model=PortfolioAgingMovementsLatestResponse)
+def get_latest_aging_movements(db: Session = Depends(get_db)) -> PortfolioAgingMovementsLatestResponse:
+    payload = build_latest_portfolio_movements(db)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nao existe importacao Aging AR valida.",
+        )
+    return PortfolioAgingMovementsLatestResponse(**payload)
 
 
 @router.get("/customers", response_model=PortfolioCustomersResponse)

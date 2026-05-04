@@ -11,6 +11,8 @@ class PortfolioImportMeta(BaseModel):
     base_date: date
     status: str
     created_at: datetime
+    imported_at: datetime
+    imported_by: str | None = None
 
 
 class PortfolioAgingLatestResponse(BaseModel):
@@ -18,6 +20,48 @@ class PortfolioAgingLatestResponse(BaseModel):
     totals: dict
     warnings: list[str]
     bod_snapshot: dict | None = None
+
+
+class PortfolioAlertItem(BaseModel):
+    class Delta(BaseModel):
+        direction: str
+        value: float
+        formatted: str
+
+    id: str
+    severity: str
+    title: str
+    message: str
+    metric: str | None = None
+    value: float | None = None
+    base_date: date | None = None
+    delta: Delta | None = None
+
+
+class PortfolioAgingAlertsLatestResponse(BaseModel):
+    import_meta: PortfolioImportMeta | None
+    alerts: list[PortfolioAlertItem]
+
+
+class PortfolioMovementItem(BaseModel):
+    id: str
+    entity_type: str
+    entity_name: str
+    cnpj: str | None = None
+    metric: str
+    direction: str
+    delta: float
+    current_value: float
+    previous_value: float
+    severity: str
+    message: str
+
+
+class PortfolioAgingMovementsLatestResponse(BaseModel):
+    base_date: date
+    previous_base_date: date | None = None
+    message: str | None = None
+    movements: list[PortfolioMovementItem]
 
 
 class PortfolioCustomerSummary(BaseModel):
