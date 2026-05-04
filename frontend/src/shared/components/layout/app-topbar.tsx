@@ -150,7 +150,7 @@ export function AppTopbar() {
       <div className="mx-auto w-full max-w-[1520px] px-4 sm:px-6 lg:px-8">
         <div className="flex h-[82px] items-center gap-4">
           <div className="min-w-0 shrink-0 pr-1">
-            <p className="truncate text-lg font-semibold tracking-[-0.01em] text-[#FFFFFF]">Motor de Crédito</p>
+            <p className="truncate text-lg font-semibold tracking-[-0.01em] text-[#FFFFFF]">Gestão de Carteira de Clientes</p>
             <p className="truncate text-[11px] font-medium uppercase tracking-[0.08em] text-[#CBD5E1]">{meta.title}</p>
           </div>
 

@@ -122,3 +122,15 @@ export type PortfolioMovementsLatestDto = {
   message?: string | null;
   movements: PortfolioMovementDto[];
 };
+
+export type PortfolioRiskSummaryDto = {
+  at_risk_amount: number;
+  at_risk_percentage: number;
+  healthy_percentage: number;
+  clients_at_risk: number;
+  distribution: {
+    critical: { amount: number; percentage: number; clients: number };
+    attention: { amount: number; percentage: number; clients: number };
+    healthy: { amount: number; percentage: number; clients: number };
+  };
+};

@@ -24,10 +24,15 @@ from app.schemas.portfolio import (
     PortfolioGroupDetailResponse,
     PortfolioGroupSummary,
     PortfolioImportMeta,
+    PortfolioRiskSummaryResponse,
 )
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_money, normalize_text_key
 from app.services.portfolio_alerts import build_latest_portfolio_alerts
 from app.services.portfolio_movements import build_latest_portfolio_movements
+from app.services.portfolio_risk_service import (
+    calculate_portfolio_risk_from_bod,
+    calculate_portfolio_risk_from_bod_raw_rows,
+)
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio-aging"])
 logger = logging.getLogger(__name__)
@@ -398,6 +403,35 @@ def get_latest_aging_movements(db: Session = Depends(get_db)) -> PortfolioAgingM
             detail="Nao existe importacao Aging AR valida.",
         )
     return PortfolioAgingMovementsLatestResponse(**payload)
+
+
+@router.get("/risk-summary", response_model=PortfolioRiskSummaryResponse)
+def get_portfolio_risk_summary(db: Session = Depends(get_db)) -> PortfolioRiskSummaryResponse:
+    run = _latest_valid_import_run(db)
+    file_path = None
+    if isinstance(run.totals_json, dict):
+        candidate = run.totals_json.get("_stored_file_path")
+        if isinstance(candidate, str) and candidate.strip():
+            file_path = candidate
+
+    if file_path:
+        try:
+            return PortfolioRiskSummaryResponse(**calculate_portfolio_risk_from_bod(file_path))
+        except Exception:
+            logger.warning("Falha ao calcular risk-summary via arquivo salvo para import_run_id=%s", run.id, exc_info=True)
+
+    snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == run.id))
+    if snapshot is None or not isinstance(snapshot.raw_bod_json, dict):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nao foi possivel consolidar risco da carteira para a base mais recente.",
+        )
+
+    raw_rows = snapshot.raw_bod_json.get("rows", [])
+    if not isinstance(raw_rows, list):
+        raw_rows = []
+
+    return PortfolioRiskSummaryResponse(**calculate_portfolio_risk_from_bod_raw_rows(raw_rows))
 
 
 @router.get("/customers", response_model=PortfolioCustomersResponse)

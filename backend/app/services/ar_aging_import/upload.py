@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+from pathlib import Path
 from fastapi import HTTPException, status
 from typing import Any
 
@@ -101,6 +102,10 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
     )
     db.add(entry)
     db.flush()
+    storage_dir = Path(__file__).resolve().parents[3] / "data" / "ar_aging_imports"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    stored_file_path = storage_dir / f"import_run_{entry.id}.xlsx"
+    stored_file_path.write_bytes(file_bytes)
 
     try:
         parsed = parse_aging_workbook(file_bytes, payload.original_filename)
@@ -275,6 +280,7 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
             "bod_customer_rows": len(parsed.bod_customer_rows),
             "_file_sha256": file_sha256,
             "_imported_by": payload.imported_by,
+            "_stored_file_path": str(stored_file_path),
         }
 
         warnings = list(parsed.warnings)
@@ -299,6 +305,7 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
         entry.totals_json = {
             "_file_sha256": file_sha256,
             "_imported_by": payload.imported_by,
+            "_stored_file_path": str(stored_file_path),
             "_error_message": str(exc),
         }
 

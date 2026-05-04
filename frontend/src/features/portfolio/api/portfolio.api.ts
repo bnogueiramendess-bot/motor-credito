@@ -1,6 +1,12 @@
 import { apiClient } from "@/shared/lib/http/http-client";
 
-import { PortfolioAgingAlertDto, PortfolioAgingLatestDto, PortfolioCustomerDto, PortfolioMovementsLatestDto } from "@/features/portfolio/api/contracts";
+import {
+  PortfolioAgingAlertDto,
+  PortfolioAgingLatestDto,
+  PortfolioCustomerDto,
+  PortfolioMovementsLatestDto,
+  PortfolioRiskSummaryDto
+} from "@/features/portfolio/api/contracts";
 
 type PortfolioQueryParams = {
   cnpj?: string;
@@ -100,4 +106,18 @@ export async function getPortfolioAgingMovementsLatest() {
     message: (asRecord.message as string | null | undefined) ?? null,
     movements: Array.isArray(asRecord.movements) ? (asRecord.movements as PortfolioMovementsLatestDto["movements"]) : []
   };
+}
+
+export async function getPortfolioRiskSummary() {
+  const payload = await apiClient.get<unknown>("/api/portfolio/risk-summary");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const asRecord = payload as Record<string, unknown>;
+  if (!asRecord.distribution || typeof asRecord.distribution !== "object" || Array.isArray(asRecord.distribution)) {
+    return null;
+  }
+
+  return asRecord as unknown as PortfolioRiskSummaryDto;
 }

@@ -104,3 +104,23 @@ class PortfolioGroupDetailResponse(BaseModel):
     group: PortfolioGroupSummary
     customers: list[PortfolioCustomerSummary]
     remarks: list[str]
+
+
+class PortfolioRiskDistributionItem(BaseModel):
+    amount: float
+    percentage: float
+    clients: int
+
+
+class PortfolioRiskDistribution(BaseModel):
+    critical: PortfolioRiskDistributionItem
+    attention: PortfolioRiskDistributionItem
+    healthy: PortfolioRiskDistributionItem
+
+
+class PortfolioRiskSummaryResponse(BaseModel):
+    at_risk_amount: float
+    at_risk_percentage: float
+    healthy_percentage: float
+    clients_at_risk: int
+    distribution: PortfolioRiskDistribution

@@ -1,12 +1,11 @@
 ﻿"use client";
 
 import { useMemo } from "react";
-import { AlertTriangle } from "lucide-react";
 
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
+import { PortfolioRiskSection } from "@/features/dashboard/components/portfolio-risk-section";
 import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
-import { PortfolioAgingAlertDto, PortfolioMovementDto } from "@/features/portfolio/api/contracts";
-import { usePortfolioAgingAlertsLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-alerts-latest-query";
+import { PortfolioMovementDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
 import { usePortfolioAgingMovementsLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-movements-latest-query";
 import { ErrorState } from "@/shared/components/states/error-state";
@@ -189,60 +188,6 @@ function StackedBucketsChart({ title, subtitle, buckets, sourceHint }: StackedBu
   );
 }
 
-type RiskCardProps = {
-  title: "Probable" | "Possible" | "Rare";
-  amount: number | null;
-  customersCount: number | null;
-  totalOpen: number;
-};
-
-function alertTone(severity: PortfolioAgingAlertDto["severity"]) {
-  if (severity === "critical") {
-    return "border-2 border-rose-500 bg-rose-50 text-rose-900 shadow-[0_4px_12px_rgba(190,24,93,0.12)]";
-  }
-  if (severity === "warning") {
-    return "border border-amber-400 bg-amber-50 text-amber-900";
-  }
-  return "border border-slate-300 bg-slate-50 text-slate-700";
-}
-
-function alertSeverityLabel(severity: PortfolioAgingAlertDto["severity"]) {
-  if (severity === "critical") {
-    return "Crítico";
-  }
-  if (severity === "warning") {
-    return "Atenção";
-  }
-  return "Monitoramento";
-}
-
-function normalizeAlertMessage(alert: PortfolioAgingAlertDto) {
-  if (alert.metric === "probable_risk_amount" && typeof alert.value === "number") {
-    return `${formatCurrencyInThousands(alert.value)} em risco alto (provável)`;
-  }
-  return alert.message;
-}
-
-function alertDeltaTone(direction: NonNullable<PortfolioAgingAlertDto["delta"]>["direction"]) {
-  if (direction === "up") {
-    return "text-rose-700";
-  }
-  if (direction === "down") {
-    return "text-emerald-700";
-  }
-  return "text-slate-600";
-}
-
-function alertDeltaSymbol(direction: NonNullable<PortfolioAgingAlertDto["delta"]>["direction"]) {
-  if (direction === "up") {
-    return "↑";
-  }
-  if (direction === "down") {
-    return "↓";
-  }
-  return "→";
-}
-
 function movementMetricLabel(metric: PortfolioMovementDto["metric"]) {
   if (metric === "overdue_amount") return "Em atraso";
   if (metric === "uncovered_exposure") return "Exposição descoberta";
@@ -285,29 +230,8 @@ function movementReadableMessage(movement: PortfolioMovementDto) {
   return `${subject} ${action} ${valueLabel} em risco alto provável.`;
 }
 
-function RiskCard({ title, amount, customersCount, totalOpen }: RiskCardProps) {
-  const tone =
-    title === "Probable"
-      ? "border-[#fca5a5] bg-[#fff5f5] text-[#991b1b] ring-1 ring-rose-200"
-      : title === "Possible"
-        ? "border-[#fed7aa] bg-[#fff7ed] text-[#f97316]"
-        : "border-[#a7f3d0] bg-[#ecfdf5] text-[#10b981]";
-
-  const percent = amount !== null && totalOpen > 0 ? (amount / totalOpen) * 100 : null;
-
-  return (
-    <article className={cn("min-h-[140px] rounded-xl border px-4 py-4 shadow-sm xl:min-h-[160px] xl:px-5 xl:py-5 2xl:min-h-[180px] 2xl:px-6 2xl:py-6", tone)}>
-      <p className="text-xs font-semibold uppercase tracking-[0.06em]">{title}{title === "Probable" ? " · Crítico" : ""}</p>
-      <p className="mt-2 text-[28px] font-bold leading-none 2xl:text-[34px]">{amount === null ? "Sem dado estruturado" : formatCurrencyInThousands(amount)}</p>
-      <p className="mt-1 text-xs font-medium">{percent === null ? "Não identificado" : `${formatPercent(percent)} do total em aberto`}</p>
-      <p className="mt-2 text-xs">{customersCount === null ? "Clientes: Não identificado" : `Clientes: ${customersCount}`}</p>
-    </article>
-  );
-}
-
 export function DashboardPageView(_: DashboardPageViewProps) {
   const agingQuery = usePortfolioAgingLatestQuery();
-  const alertsQuery = usePortfolioAgingAlertsLatestQuery();
   const movementsQuery = usePortfolioAgingMovementsLatestQuery();
   const baseDateLabel = useMemo(() => {
     const rawBaseDate = agingQuery.data?.import_meta?.base_date;
@@ -347,35 +271,6 @@ export function DashboardPageView(_: DashboardPageViewProps) {
       netExposure: Math.max(totalOpen - insured, 0)
     };
   }, [agingQuery.data]);
-
-  const bodSnapshot = agingQuery.data?.bod_snapshot ?? null;
-  const bodRisk = bodSnapshot?.risk;
-  const bodWarnings = Array.isArray(bodSnapshot?.warnings) ? bodSnapshot?.warnings : [];
-  const orderedAlerts = useMemo(() => {
-    const severityOrder: Record<PortfolioAgingAlertDto["severity"], number> = {
-      critical: 0,
-      warning: 1,
-      info: 2
-    };
-    return (alertsQuery.data ?? [])
-      .slice()
-      .sort((a, b) => {
-        const bySeverity = severityOrder[a.severity] - severityOrder[b.severity];
-        return bySeverity !== 0 ? bySeverity : a.id.localeCompare(b.id);
-      })
-      .slice(0, 5);
-  }, [alertsQuery.data]);
-
-  const probableAmount = toNumber(bodRisk?.probable?.amount);
-  const possibleAmount = toNumber(bodRisk?.possible?.amount);
-  const rareAmount = toNumber(bodRisk?.rare?.amount);
-  const probableCustomers = bodRisk?.probable?.customers_count ?? null;
-  const possibleCustomers = bodRisk?.possible?.customers_count ?? null;
-  const rareCustomers = bodRisk?.rare?.customers_count ?? null;
-
-  const atRiskAmount = probableAmount !== null || possibleAmount !== null ? (probableAmount ?? 0) + (possibleAmount ?? 0) : null;
-  const atRiskPct = atRiskAmount !== null && asMoney(kpis.totalOpenAmount) > 0 ? (atRiskAmount / asMoney(kpis.totalOpenAmount)) * 100 : null;
-  const probablePct = probableAmount !== null && asMoney(kpis.totalOpenAmount) > 0 ? (probableAmount / asMoney(kpis.totalOpenAmount)) * 100 : null;
 
   const agingBuckets: BucketStackMap = useMemo(() => {
     const notDueByBu = normalizeBucketsByBuFromBackend(agingQuery.data?.aging_buckets_by_bu?.not_due, "not_due");
@@ -496,76 +391,9 @@ export function DashboardPageView(_: DashboardPageViewProps) {
         />
       </div>
 
-      <section className="rounded-2xl border border-[#e5e9f2] bg-white p-4 shadow-sm xl:p-6 2xl:p-8">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-semibold text-[#0f172a]">Risco da Carteira</h3>
-            <p className="mt-1 text-sm text-[#64748b]">Classificação de exposição por probabilidade de perda</p>
-          </div>
-          <div className="rounded-xl bg-[#0D1B2A] px-4 py-3 text-right xl:px-5 xl:py-4 2xl:px-6 2xl:py-5">
-            <p className="text-[10px] uppercase tracking-[0.08em] text-white/45">At Risk Exposure (Probable + Possible)</p>
-            <p className="text-xl font-bold text-[#75D4EE]">{atRiskAmount === null ? "Sem dado estruturado" : formatCurrencyInThousands(atRiskAmount)}</p>
-            <p className="text-xs text-white/45">{atRiskPct === null ? "Não identificado" : `${formatPercent(atRiskPct)} do total em aberto`}</p>
-          </div>
-        </div>
+      <PortfolioRiskSection />
 
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <article className="min-h-[140px] rounded-xl border border-[#dbe3ef] bg-[#eef3f8] px-4 py-4 shadow-sm xl:min-h-[160px] xl:px-5 xl:py-5 2xl:min-h-[180px] 2xl:px-6 2xl:py-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.06em] text-[#64748b]">At Risk Exposure</p>
-            <p className="mt-2 text-2xl font-bold text-[#102033] 2xl:text-[30px]">{atRiskAmount === null ? "Sem dado estruturado" : formatCurrencyInThousands(atRiskAmount)}</p>
-            <p className="mt-1 text-xs text-[#64748b]">{atRiskPct === null ? "Não identificado" : `${formatPercent(atRiskPct)} do total em aberto`}</p>
-          </article>
-          <RiskCard title="Probable" amount={probableAmount} customersCount={probableCustomers} totalOpen={asMoney(kpis.totalOpenAmount)} />
-          <RiskCard title="Possible" amount={possibleAmount} customersCount={possibleCustomers} totalOpen={asMoney(kpis.totalOpenAmount)} />
-          <RiskCard title="Rare" amount={rareAmount} customersCount={rareCustomers} totalOpen={asMoney(kpis.totalOpenAmount)} />
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-[#e5e9f2] bg-white p-4 shadow-sm xl:p-6 2xl:p-8">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.06em] text-[#334155]">Alertas Executivos</h3>
-        {alertsQuery.isLoading ? <p className="mt-3 text-sm text-[#64748b]">Carregando alertas...</p> : null}
-        {alertsQuery.isError ? <p className="mt-3 text-sm text-rose-700">Não foi possível carregar os alertas executivos.</p> : null}
-        {!alertsQuery.isLoading && !alertsQuery.isError ? (
-          orderedAlerts.length > 0 ? (
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {orderedAlerts.map((alert) => (
-                <article key={alert.id} className={cn("rounded-xl px-4 py-4 text-sm", alertTone(alert.severity))}>
-                  <p className="text-xs font-semibold uppercase tracking-[0.06em]">{alertSeverityLabel(alert.severity)}</p>
-                  <p className={cn("mt-1", alert.severity === "critical" ? "font-semibold" : "font-medium")}>{alert.title}</p>
-                  <p className="mt-2 leading-relaxed">{normalizeAlertMessage(alert)}</p>
-                  {alert.delta ? (
-                    <p className={cn("mt-2 text-xs font-medium", alertDeltaTone(alert.delta.direction))}>
-                      {alertDeltaSymbol(alert.delta.direction)} {alert.delta.formatted} vs base anterior
-                    </p>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-              Nenhum alerta crítico identificado na base vigente.
-            </p>
-          )
-        ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-[#e5e9f2] bg-white p-4 shadow-sm xl:p-6 2xl:p-8">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.06em] text-[#334155]">Avisos da Base</h3>
-        {bodWarnings.length > 0 ? (
-          <div className="mt-4 space-y-3">
-            {bodWarnings.map((warning) => (
-              <div key={warning} className="flex items-start gap-2 rounded-lg border border-[#fed7aa] bg-[#fff7ed] px-4 py-3 text-sm text-[#f97316]">
-                <AlertTriangle className="mt-0.5 h-4 w-4 text-[#f97316]" />
-                <span>{warning}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            Nenhum aviso técnico identificado na base vigente.
-          </p>
-        )}
-      </section>
+      
 
       <section className="rounded-2xl border border-[#e5e9f2] bg-white p-4 shadow-sm xl:p-6 2xl:p-8">
         <h3 className="text-sm font-semibold uppercase tracking-[0.06em] text-[#334155]">Top movimentos da carteira</h3>
