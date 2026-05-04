@@ -38,6 +38,31 @@ export type PortfolioAgingLatestDto = {
     imported_by?: string | null;
   };
   bod_snapshot?: PortfolioBodSnapshotDto;
+  bu_breakdown?: Array<{
+    bu: string;
+    total_open: number | string;
+    overdue: number | string;
+    not_due: number | string;
+    insured_limit: number | string;
+    uncovered_exposure: number | string;
+  }>;
+  litigation_summary?: {
+    total_open: number | string;
+    overdue: number | string;
+    not_due: number | string;
+    insured_limit: number | string;
+    uncovered_exposure: number | string;
+  };
+  litigation_by_bu?: Array<{
+    bu: string;
+    total_open: number | string;
+    overdue: number | string;
+    not_due: number | string;
+  }>;
+  aging_buckets_by_bu?: {
+    not_due?: Array<{ bucket: string; values: Array<{ bu: string; amount: number | string }> }>;
+    overdue?: Array<{ bucket: string; values: Array<{ bu: string; amount: number | string }> }>;
+  };
   [key: string]: unknown;
 };
 

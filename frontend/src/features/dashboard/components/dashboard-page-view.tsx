@@ -5,7 +5,7 @@ import { AlertTriangle } from "lucide-react";
 
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
-import { PortfolioAgingAlertDto, PortfolioBodAgingBucketDto, PortfolioMovementDto } from "@/features/portfolio/api/contracts";
+import { PortfolioAgingAlertDto, PortfolioMovementDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioAgingAlertsLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-alerts-latest-query";
 import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
 import { usePortfolioAgingMovementsLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-movements-latest-query";
@@ -16,11 +16,10 @@ type DashboardPageViewProps = {
   context?: "clientes" | "motor-credito";
 };
 
-type Bucket = {
-  label: string;
-  value: number;
-  percentOfGroup: number;
-};
+type BucketStackValue = { bu: string; amount: number };
+type BucketStack = { bucket: string; values: BucketStackValue[] };
+type BucketStackMap = { not_due: BucketStack[]; overdue: BucketStack[] };
+type AgingSide = "not_due" | "overdue";
 
 const percentFormatter = new Intl.NumberFormat("pt-BR", {
   minimumFractionDigits: 1,
@@ -31,125 +30,161 @@ function formatPercent(value: number) {
   return `${percentFormatter.format(value)}%`;
 }
 
+function formatSharePercent(value: number) {
+  const rounded = Math.round(value);
+  if (Math.abs(value - rounded) < 0.05) {
+    return `${rounded}%`;
+  }
+  return `${value.toFixed(1).replace(".", ",")}%`;
+}
+
 function asMoney(value: number | null) {
   return value ?? 0;
 }
 
-function toCents(value: number) {
-  return Math.round(value * 100);
+const BU_COLORS: Record<string, string> = {
+  Additive: "#0F1E3A",
+  Fertilizer: "rgba(15, 30, 58, 0.70)",
+  "Additive Intl": "rgba(15, 30, 58, 0.50)",
+  "Não informado": "rgba(15, 30, 58, 0.25)"
+};
+const BU_ORDER = ["Additive", "Fertilizer", "Additive Intl", "Não informado"] as const;
+const FIXED_BUCKETS = ["1-30", "31-60", "61-90", "91-120", "121-180", "Above 180"] as const;
+
+function bucketAlias(rawBucket: string): string {
+  const value = rawBucket.trim().toLowerCase();
+  if (value.includes("1-30")) return "1-30";
+  if (value.includes("31-60")) return "31-60";
+  if (value.includes("61-90")) return "61-90";
+  if (value.includes("91-120")) return "91-120";
+  if (value.includes("121-180")) return "121-180";
+  if (value.includes("181-360") || value.includes("above 360") || value.includes("360+")) return "Above 180";
+  if (value.includes("above 180")) return "Above 180";
+  return rawBucket;
 }
 
-function fromCents(value: number) {
-  return value / 100;
-}
-
-function distributeToBuckets(total: number, labels: string[], weights: number[]): Bucket[] {
-  if (labels.length !== weights.length || labels.length === 0 || total <= 0) {
-    return labels.map((label) => ({ label, value: 0, percentOfGroup: 0 }));
+function normalizeBucketsByBuFromBackend(
+  buckets: Array<{ bucket: string; values: Array<{ bu: string; amount: number | string }> }> | undefined,
+  side: AgingSide
+): BucketStack[] {
+  const bucketMap = new Map<string, Record<string, number>>();
+  for (const fixedBucket of FIXED_BUCKETS) {
+    bucketMap.set(fixedBucket, Object.fromEntries(BU_ORDER.map((bu) => [bu, 0])));
   }
 
-  const totalCents = toCents(total);
-  const normalizedWeight = weights.reduce((acc, item) => acc + item, 0);
-  if (normalizedWeight <= 0) {
-    return labels.map((label) => ({ label, value: 0, percentOfGroup: 0 }));
+  if (Array.isArray(buckets)) {
+    for (const bucket of buckets) {
+      const canonicalBucket = bucketAlias(bucket.bucket);
+      if (!bucketMap.has(canonicalBucket)) continue;
+      const current = bucketMap.get(canonicalBucket)!;
+      for (const value of bucket.values ?? []) {
+        const amount = toNumber(value.amount) ?? 0;
+        const bu = BU_ORDER.includes(value.bu as (typeof BU_ORDER)[number]) ? value.bu : "Não informado";
+        current[bu] = (current[bu] ?? 0) + amount;
+      }
+    }
   }
 
-  const rawAllocations = weights.map((weight) => (totalCents * weight) / normalizedWeight);
-  const floored = rawAllocations.map((item) => Math.floor(item));
-  const ranking = rawAllocations
-    .map((raw, index) => ({ index, fraction: raw - Math.floor(raw) }))
-    .sort((a, b) => b.fraction - a.fraction);
-  let remainder = totalCents - floored.reduce((acc, item) => acc + item, 0);
-
-  for (let i = 0; i < remainder; i += 1) {
-    floored[ranking[i % ranking.length].index] += 1;
-  }
-
-  return labels.map((label, index) => {
-    const value = fromCents(floored[index]);
-    return {
-      label,
-      value,
-      percentOfGroup: total > 0 ? (value / total) * 100 : 0
-    };
-  });
-}
-
-function normalizeBucketsFromBackend(buckets: PortfolioBodAgingBucketDto[] | undefined): Bucket[] {
-  if (!Array.isArray(buckets) || buckets.length === 0) {
-    return [];
-  }
-
-  const parsed = buckets
-    .map((item) => ({
-      label: item.label,
-      value: toNumber(item.amount)
-    }))
-    .filter((item): item is { label: string; value: number } => item.value !== null && item.value > 0);
-
-  const total = parsed.reduce((acc, item) => acc + item.value, 0);
-  if (total <= 0) {
-    return [];
-  }
-
-  return parsed.map((item) => ({
-    label: item.label,
-    value: item.value,
-    percentOfGroup: (item.value / total) * 100
+  return FIXED_BUCKETS.map((bucket) => ({
+    bucket,
+    values: BU_ORDER.map((bu) => ({ bu, amount: bucketMap.get(bucket)?.[bu] ?? 0 }))
   }));
 }
 
-type WaterfallCardProps = {
+type StackedBucketsChartProps = {
   title: string;
   subtitle: string;
-  buckets: Bucket[];
-  groupTotal: number;
-  colors: string[];
+  buckets: BucketStack[];
   sourceHint?: string;
-  criticalHint?: string;
 };
 
-function WaterfallCard({ title, subtitle, buckets, groupTotal, colors, sourceHint, criticalHint }: WaterfallCardProps) {
-  const maxBucketValue = Math.max(...buckets.map((item) => item.value), 1);
+function StackedBucketsChart({ title, subtitle, buckets, sourceHint }: StackedBucketsChartProps) {
+  const totals = buckets.map((bucket) => ({
+    bucket: bucket.bucket,
+    total: bucket.values.reduce((acc, item) => acc + item.amount, 0),
+    values: bucket.values
+  }));
+  const maxBucketValue = Math.max(...totals.map((item) => item.total), 1);
+  const columnsClass = totals.length <= 4 ? "grid-cols-4" : "grid-cols-5 xl:grid-cols-6";
 
   return (
     <article className="min-h-[320px] rounded-2xl border border-[#e5e9f2] bg-white p-4 shadow-sm xl:min-h-[360px] xl:p-6 2xl:min-h-[400px] 2xl:p-8">
-      <div className="mb-4 flex items-start justify-between gap-2">
+      <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-[#0f172a] 2xl:text-lg">{title}</h3>
           <p className="mt-1 text-xs text-[#8fa3b4]">{subtitle}</p>
         </div>
-        {sourceHint ? <p className="text-[11px] font-medium text-[#64748b]">{sourceHint}</p> : null}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-[11px] text-[#475569]">
+            {BU_ORDER.map((bu) => (
+              <span key={bu} className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: BU_COLORS[bu] }} />
+                {bu}
+              </span>
+            ))}
+          </div>
+          {sourceHint ? <p className="text-[11px] font-medium text-[#64748b]">{sourceHint}</p> : null}
+        </div>
       </div>
 
-      <div className={cn("grid h-[230px] items-end gap-3 xl:h-[260px] 2xl:h-[340px]", buckets.length <= 4 ? "grid-cols-4" : "grid-cols-5 xl:grid-cols-6")}>
-        {buckets.map((bucket, index) => {
-          const height = Math.max((bucket.value / maxBucketValue) * 100, bucket.value > 0 ? 16 : 0);
-          const isCriticalBucket = bucket.label.includes("90+");
+      <div className="relative">
+        <div className={cn("grid h-[190px] items-end gap-3 border-b border-[rgba(15,30,58,0.15)] xl:h-[220px] 2xl:h-[280px]", columnsClass)}>
+        {totals.map((bucket, index) => {
+          const height = bucket.total > 0 ? Math.max((bucket.total / maxBucketValue) * 100, 16) : 0;
+          const nonZeroValues = bucket.values.filter((value) => value.amount > 0);
           return (
-            <div key={`${bucket.label}-${index}`} className="group relative flex h-full flex-col justify-end">
-              <div className="absolute -top-2 left-1/2 z-10 hidden w-[180px] -translate-x-1/2 rounded-lg border border-[#d7deea] bg-[#0f172a] px-2.5 py-2 text-xs text-[#e2e8f0] shadow-lg group-hover:block group-focus-within:block">
-                <p className="font-semibold text-white">{bucket.label}</p>
-                <p>{formatCurrencyInThousands(bucket.value)}</p>
-                <p>{formatPercent(bucket.percentOfGroup)} do grupo</p>
-                <p className="mt-1 text-[#94a3b8]">{formatPercent(groupTotal > 0 ? (bucket.value / groupTotal) * 100 : 0)} do total em aberto</p>
+            <div key={`${bucket.bucket}-${index}`} className="group relative flex h-full flex-col justify-end">
+              <div className="flex w-full flex-col overflow-hidden rounded-t-lg border border-transparent" style={{ height: `${height}%` }}>
+                {bucket.values.map((value) => (
+                  <div
+                    key={`${bucket.bucket}-${value.bu}`}
+                    className="w-full transition-all duration-200 group-hover:opacity-90"
+                    style={{
+                      height: `${bucket.total > 0 ? (value.amount / bucket.total) * 100 : 0}%`,
+                      backgroundColor: BU_COLORS[value.bu] ?? BU_COLORS["Não informado"]
+                    }}
+                  />
+                ))}
               </div>
-
-              <div
-                className={cn(
-                  "w-full rounded-t-lg transition-all duration-200 group-hover:opacity-90",
-                  colors[index % colors.length],
-                  isCriticalBucket ? "ring-2 ring-rose-300/80 ring-offset-1 ring-offset-white" : ""
+              <div className="pointer-events-none absolute -top-2 left-1/2 z-10 hidden w-[260px] -translate-x-1/2 rounded-lg border border-[#dbe3ef] bg-white px-3 py-2 text-xs text-[#334155] shadow-[0_8px_24px_rgba(15,23,42,0.12)] group-hover:block">
+                <p className="mb-1 font-semibold text-[#0f172a]">{bucket.bucket} dias</p>
+                {nonZeroValues.length > 0 ? (
+                  <div className="space-y-1">
+                    {nonZeroValues.map((value) => {
+                      const share = bucket.total > 0 ? (value.amount / bucket.total) * 100 : 0;
+                      return (
+                        <p key={`${bucket.bucket}-${value.bu}`} className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className="inline-block h-2 w-2 rounded-full"
+                              style={{ backgroundColor: BU_COLORS[value.bu] ?? BU_COLORS["Não informado"] }}
+                            />
+                            <span>{value.bu}</span>
+                          </span>
+                          <span className="font-medium text-[#0f172a]">
+                            {formatCurrencyInThousands(value.amount)} ({formatSharePercent(share)})
+                          </span>
+                        </p>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-[#64748b]">Sem valor neste bucket</p>
                 )}
-                style={{ height: `${height}%` }}
-              />
-              <p className="mt-2 text-center text-[11px] font-semibold text-[#334155] 2xl:text-xs">{formatCurrencyInThousands(bucket.value)}</p>
-              <p className={cn("mt-1 text-center text-[11px] font-medium text-[#64748b] 2xl:text-xs", isCriticalBucket ? "text-rose-700" : "")}>{bucket.label}</p>
+              </div>
             </div>
           );
         })}
+        </div>
+        <div className={cn("grid gap-3 pt-2", columnsClass)}>
+          {totals.map((bucket, index) => (
+            <div key={`${bucket.bucket}-label-${index}`} className="text-center">
+              <p className="text-[11px] font-semibold text-[#334155] 2xl:text-xs">{formatCurrencyInThousands(bucket.total)}</p>
+              <p className="mt-1 text-[11px] font-medium text-[#64748b] 2xl:text-xs">{bucket.bucket}</p>
+            </div>
+          ))}
+        </div>
       </div>
-      {criticalHint ? <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">{criticalHint}</div> : null}
     </article>
   );
 }
@@ -297,12 +332,14 @@ export function DashboardPageView(_: DashboardPageViewProps) {
     const overdue = asMoney(totalOverdueAmount);
     const notDue = asMoney(totalNotDueAmount);
     const insured = asMoney(insuredLimitAmount);
+    const litigationTotal = toNumber((aging?.litigation_summary as { total_open?: number | string } | undefined)?.total_open);
 
     return {
       totalOpenAmount,
       totalOverdueAmount,
       totalNotDueAmount,
       insuredLimitAmount,
+      litigationTotal,
       customersCount: Number(aging?.distinct_customers ?? 0),
       overduePct: totalOpen > 0 ? (overdue / totalOpen) * 100 : 0,
       notDuePct: totalOpen > 0 ? (notDue / totalOpen) * 100 : 0,
@@ -340,23 +377,14 @@ export function DashboardPageView(_: DashboardPageViewProps) {
   const atRiskPct = atRiskAmount !== null && asMoney(kpis.totalOpenAmount) > 0 ? (atRiskAmount / asMoney(kpis.totalOpenAmount)) * 100 : null;
   const probablePct = probableAmount !== null && asMoney(kpis.totalOpenAmount) > 0 ? (probableAmount / asMoney(kpis.totalOpenAmount)) * 100 : null;
 
-  const notDueRealBuckets = useMemo(() => normalizeBucketsFromBackend(bodSnapshot?.aging_buckets?.not_due), [bodSnapshot?.aging_buckets?.not_due]);
-  const overdueRealBuckets = useMemo(() => normalizeBucketsFromBackend(bodSnapshot?.aging_buckets?.overdue), [bodSnapshot?.aging_buckets?.overdue]);
-
-  const notDueFallback = useMemo(
-    () => distributeToBuckets(asMoney(kpis.totalNotDueAmount), ["0–30 dias", "31–60 dias", "61–90 dias", "90+ dias"], [0.48, 0.27, 0.17, 0.08]),
-    [kpis.totalNotDueAmount]
-  );
-  const overdueFallback = useMemo(
-    () => distributeToBuckets(asMoney(kpis.totalOverdueAmount), ["1–30 dias", "31–60 dias", "61–90 dias", "90+ dias"], [0.34, 0.29, 0.22, 0.15]),
-    [kpis.totalOverdueAmount]
-  );
-
-  const useRealNotDue = notDueRealBuckets.length > 0;
-  const useRealOverdue = overdueRealBuckets.length > 0;
-  const notDueBuckets = useRealNotDue ? notDueRealBuckets : notDueFallback;
-  const overdueBuckets = useRealOverdue ? overdueRealBuckets : overdueFallback;
-  const usingAnyFallback = !useRealNotDue || !useRealOverdue;
+  const agingBuckets: BucketStackMap = useMemo(() => {
+    const notDueByBu = normalizeBucketsByBuFromBackend(agingQuery.data?.aging_buckets_by_bu?.not_due, "not_due");
+    const overdueByBu = normalizeBucketsByBuFromBackend(agingQuery.data?.aging_buckets_by_bu?.overdue, "overdue");
+    return {
+      not_due: notDueByBu,
+      overdue: overdueByBu
+    };
+  }, [agingQuery.data?.aging_buckets_by_bu?.not_due, agingQuery.data?.aging_buckets_by_bu?.overdue]);
 
   const hasNoImport =
     kpis.customersCount === 0 &&
@@ -410,23 +438,27 @@ export function DashboardPageView(_: DashboardPageViewProps) {
         <div className="relative grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <div className="xl:pr-4">
             <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Total em Aberto</p>
-            <p className="mt-1 text-2xl font-semibold text-[#75D4EE]">{formatCurrencyInThousands(kpis.totalOpenAmount)}</p>
+            <p className="mt-1 text-3xl font-semibold text-[#75D4EE]">{formatCurrencyInThousands(kpis.totalOpenAmount)}</p>
+            <p className="mt-1 text-xs text-white/55">A vencer: {formatPercent(kpis.notDuePct)} | Em atraso: {formatPercent(kpis.overduePct)}</p>
           </div>
           <div className="xl:border-l xl:border-white/10 xl:pl-4">
-            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">% Overdue</p>
-            <p className="mt-1 text-2xl font-semibold text-[#E8B83A]">{formatPercent(kpis.overduePct)}</p>
+            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Em Litígio</p>
+            <p className="mt-1 text-2xl font-semibold text-white">{formatCurrencyInThousands(kpis.litigationTotal)}</p>
+            <p className="mt-1 text-xs text-white/45">Valores classificados como litígio</p>
           </div>
           <div className="xl:border-l xl:border-white/10 xl:pl-4">
-            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Cobertura segurada</p>
-            <p className="mt-1 text-2xl font-semibold text-white">{formatPercent(kpis.insuredCoveragePct)}</p>
+            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Limite segurado</p>
+            <p className="mt-1 text-2xl font-semibold text-white">{formatCurrencyInThousands(kpis.insuredLimitAmount)}</p>
+            <p className="mt-1 text-xs text-white/45">Cobertura COFACE</p>
           </div>
           <div className="xl:border-l xl:border-white/10 xl:pl-4">
-            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Clientes na carteira</p>
-            <p className="mt-1 text-2xl font-semibold text-white">{kpis.customersCount}</p>
-          </div>
-          <div className="xl:border-l xl:border-white/10 xl:pl-4">
-            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Exposição líquida</p>
+            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Exposição Líquida</p>
             <p className="mt-1 text-2xl font-semibold text-white">{formatCurrencyInThousands(kpis.netExposure)}</p>
+            <p className="mt-1 text-xs text-white/45">Saldo sem cobertura</p>
+          </div>
+          <div className="xl:border-l xl:border-white/10 xl:pl-4">
+            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-white/45">Clientes</p>
+            <p className="mt-1 text-2xl font-semibold text-white">{kpis.customersCount}</p>
           </div>
         </div>
       </section>
@@ -438,80 +470,29 @@ export function DashboardPageView(_: DashboardPageViewProps) {
         </div>
       ) : null}
 
-            <div className="grid grid-cols-1 gap-4 xl:gap-6 2xl:gap-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border-2 border-rose-300 bg-rose-50/70 px-4 py-4 shadow-sm xl:px-5 xl:py-5 2xl:px-6 2xl:py-6">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-rose-700">Overdue</p>
-            <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold text-white">{formatPercent(kpis.overduePct)}</span>
-          </div>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#1e3a8a] 2xl:text-[40px]">{formatCurrencyInThousands(kpis.totalOverdueAmount)}</p>
-          <p className="mt-2 text-[11px] text-rose-700/80">Vencido · em cobrança</p>
-        </article>
-        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#fde68a] bg-[#fffdf4] px-4 py-4 shadow-sm xl:px-5 xl:py-5 2xl:px-6 2xl:py-6">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#a16207]">Not Due</p>
-            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">{formatPercent(kpis.notDuePct)}</span>
-          </div>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#854d0e] 2xl:text-[40px]">{formatCurrencyInThousands(kpis.totalNotDueAmount)}</p>
-          <p className="mt-2 text-[11px] text-[#8fa3b4]">A vencer · adimplente</p>
-        </article>
-        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#bbf7d0] bg-[#f4fdf6] px-4 py-4 shadow-sm xl:px-5 xl:py-5 2xl:px-6 2xl:py-6">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#047857]">Limite Segurado</p>
-            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">{formatPercent(kpis.insuredCoveragePct)}</span>
-          </div>
-          <p className="whitespace-nowrap text-[34px] font-bold leading-none tracking-[-0.02em] text-[#065f46] 2xl:text-[40px]">{formatCurrencyInThousands(kpis.insuredLimitAmount)}</p>
-          <p className="mt-2 text-[11px] text-[#8fa3b4]">Cobertura COFACE</p>
-        </article>
-        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-[#dbe3ef] bg-[#f8fafe] px-4 py-4 shadow-sm xl:px-5 xl:py-5 2xl:px-6 2xl:py-6">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-[#64748b]">At Risk Exposure</p>
-            <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700">
-              {atRiskPct === null ? "Sem dado" : formatPercent(atRiskPct)}
-            </span>
-          </div>
-          <p className="whitespace-nowrap text-[32px] font-bold leading-none tracking-[-0.02em] text-[#0f172a] 2xl:text-[38px]">
-            {atRiskAmount === null ? "Sem dado estruturado" : formatCurrencyInThousands(atRiskAmount)}
-          </p>
-          <p className="mt-2 text-[11px] text-[#8fa3b4]">Probable + Possible</p>
-        </article>
-        <article className="flex min-h-[132px] flex-col justify-between rounded-2xl border border-rose-200 bg-rose-50/50 px-4 py-4 shadow-sm xl:px-5 xl:py-5 2xl:px-6 2xl:py-6">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium uppercase tracking-[0.06em] text-rose-800">Probable</p>
-            <span className="rounded-full border border-rose-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-              {probablePct === null ? "Sem dado" : formatPercent(probablePct)}
-            </span>
-          </div>
-          <p className="whitespace-nowrap text-[32px] font-bold leading-none tracking-[-0.02em] text-rose-900 2xl:text-[38px]">
-            {probableAmount === null ? "Sem dado estruturado" : formatCurrencyInThousands(probableAmount)}
-          </p>
-          <p className="mt-2 text-[11px] text-rose-800/80">Alta probabilidade de perda</p>
-        </article>
-      </div>
-      {usingAnyFallback ? (
-        <div className="rounded-xl border border-[#fde68a] bg-[#fffdf4] px-4 py-3 text-sm text-[#92400e]">
-          Buckets estimados por distribuição visual, pois a origem ainda não retornou faixas estruturadas.
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border border-[#dbe3ef] bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#64748b]">Total Not Due</p>
+          <p className="mt-1 text-xl font-bold text-[#0f172a]">{formatCurrencyInThousands(kpis.totalNotDueAmount)}</p>
         </div>
-      ) : null}
+        <div className="rounded-xl border border-[#dbe3ef] bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#64748b]">Total Overdue</p>
+          <p className="mt-1 text-xl font-bold text-[#0f172a]">{formatCurrencyInThousands(kpis.totalOverdueAmount)}</p>
+        </div>
+      </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:gap-8 2xl:gap-10 xl:grid-cols-2">
-        <WaterfallCard
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <StackedBucketsChart
           title="A Vencer (Not Due)"
           subtitle="Distribuição por faixa de vencimento"
-          buckets={notDueBuckets}
-          groupTotal={asMoney(kpis.totalOpenAmount)}
-          colors={["bg-emerald-500", "bg-emerald-400", "bg-amber-400", "bg-pink-500"]}
-          sourceHint={useRealNotDue ? "Dados derivados da importação Aging AR." : "Distribuição visual controlada"}
-          criticalHint="Faixa 90+ dias indica maior pressão de risco temporal."
+          buckets={agingBuckets.not_due}
+          sourceHint={agingBuckets.not_due.length > 0 ? "Dados da base vigente (bucket + BU)." : "Sem bucket estruturado na base"}
         />
-        <WaterfallCard
+        <StackedBucketsChart
           title="Vencido (Overdue)"
           subtitle="Distribuição por faixa de atraso"
-          buckets={overdueBuckets}
-          groupTotal={asMoney(kpis.totalOpenAmount)}
-          colors={["bg-amber-500", "bg-orange-500", "bg-rose-500", "bg-red-700"]}
-          sourceHint={useRealOverdue ? "Dados derivados da importação Aging AR." : "Distribuição visual controlada"}
-          criticalHint="Monitorar especialmente 90+ dias para priorização de cobrança."
+          buckets={agingBuckets.overdue}
+          sourceHint={agingBuckets.overdue.length > 0 ? "Dados da base vigente (bucket + BU)." : "Sem bucket estruturado na base"}
         />
       </div>
 

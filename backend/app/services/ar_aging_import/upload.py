@@ -127,9 +127,10 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
             else:
                 customers.add(cnpj_normalized)
 
-            bu_raw = as_optional_string(row.get("bu"))
-            bu_normalized = normalize_bu(row.get("bu"))
-            if bu_normalized and bu_normalized not in {"ADITIVOS", "FERTILIZANTES"}:
+            bu_meta = normalize_bu(row.get("bu"))
+            bu_raw = bu_meta.bu_original or None
+            bu_normalized = bu_meta.bu_normalized
+            if bu_normalized and bu_normalized not in {"Additive", "Fertilizer", "Additive Intl", "Não informado"}:
                 unexpected_bu_values.add(bu_normalized)
 
             if group_normalized is None:
@@ -152,12 +153,20 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
                     due_amount=normalize_money(row.get("due_amount")),
                     overdue_amount=normalize_money(row.get("overdue_amount")),
                     aging_label=as_optional_string(row.get("aging")),
-                    raw_payload_json=_safe_json_value(row.get("raw", {})),
+                    raw_payload_json=_safe_json_value(
+                        {
+                            **(row.get("raw", {}) if isinstance(row.get("raw", {}), dict) else {}),
+                            "bu_original": bu_meta.bu_original,
+                            "bu_normalized": bu_meta.bu_normalized,
+                            "is_litigation": bu_meta.is_litigation,
+                        }
+                    ),
                 )
             )
 
         for row in parsed.consolidated_rows:
             group_normalized = normalize_text_key(row.get("group"))
+            bu_meta = normalize_bu(row.get("bu"))
             if group_normalized:
                 groups.add(group_normalized)
             db.add(
@@ -172,7 +181,29 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
                     insured_limit_amount=normalize_money(row.get("insured_limit")),
                     approved_credit_amount=normalize_money(row.get("approved_credit")),
                     exposure_amount=normalize_money(row.get("exposure")),
-                    raw_payload_json=_safe_json_value(row.get("raw", {})),
+                    raw_payload_json=_safe_json_value(
+                        {
+                            **(row.get("raw", {}) if isinstance(row.get("raw", {}), dict) else {}),
+                            "bu_original": bu_meta.bu_original,
+                            "bu_normalized": bu_meta.bu_normalized,
+                            "is_litigation": bu_meta.is_litigation,
+                            "total_ar": row.get("total_ar"),
+                            "overdue_bucket_1_30": row.get("overdue_bucket_1_30"),
+                            "overdue_bucket_31_60": row.get("overdue_bucket_31_60"),
+                            "overdue_bucket_61_90": row.get("overdue_bucket_61_90"),
+                            "overdue_bucket_91_120": row.get("overdue_bucket_91_120"),
+                            "overdue_bucket_121_180": row.get("overdue_bucket_121_180"),
+                            "overdue_bucket_181_360": row.get("overdue_bucket_181_360"),
+                            "overdue_bucket_above_360": row.get("overdue_bucket_above_360"),
+                            "not_due_bucket_1_30": row.get("not_due_bucket_1_30"),
+                            "not_due_bucket_31_60": row.get("not_due_bucket_31_60"),
+                            "not_due_bucket_61_90": row.get("not_due_bucket_61_90"),
+                            "not_due_bucket_91_120": row.get("not_due_bucket_91_120"),
+                            "not_due_bucket_121_180": row.get("not_due_bucket_121_180"),
+                            "not_due_bucket_181_360": row.get("not_due_bucket_181_360"),
+                            "not_due_bucket_above_360": row.get("not_due_bucket_above_360"),
+                        }
+                    ),
                 )
             )
 

@@ -21,11 +21,28 @@ class ArAgingImportValidationTestCase(unittest.TestCase):
         self.assertIsNone(normalize_cnpj("00000000000000"))
 
     def test_normalize_bu(self) -> None:
-        self.assertEqual(normalize_bu("ADTIVES"), "ADITIVOS")
-        self.assertEqual(normalize_bu("ADDITIVES"), "ADITIVOS")
-        self.assertEqual(normalize_bu("Aditivos"), "ADITIVOS")
-        self.assertEqual(normalize_bu("FERTILIZER"), "FERTILIZANTES")
-        self.assertEqual(normalize_bu("fertilizantes"), "FERTILIZANTES")
+        fertilizer_litigation = normalize_bu("Fertilizer / Litigation")
+        self.assertEqual(fertilizer_litigation.bu_normalized, "Fertilizer")
+        self.assertTrue(fertilizer_litigation.is_litigation)
+
+        additive_litigation = normalize_bu("Additive / Litigation")
+        self.assertEqual(additive_litigation.bu_normalized, "Additive")
+        self.assertTrue(additive_litigation.is_litigation)
+
+        fertilizer = normalize_bu("Fertilizer")
+        self.assertEqual(fertilizer.bu_normalized, "Fertilizer")
+        self.assertFalse(fertilizer.is_litigation)
+
+        additive_intl = normalize_bu("Additive Intl")
+        self.assertEqual(additive_intl.bu_normalized, "Additive Intl")
+        self.assertFalse(additive_intl.is_litigation)
+        additive_intl_dot = normalize_bu("Additive Intl.")
+        self.assertEqual(additive_intl_dot.bu_normalized, "Additive Intl")
+        self.assertFalse(additive_intl_dot.is_litigation)
+
+        empty_bu = normalize_bu("")
+        self.assertEqual(empty_bu.bu_normalized, "Não informado")
+        self.assertFalse(empty_bu.is_litigation)
 
     def test_normalize_group_key(self) -> None:
         self.assertEqual(normalize_text_key("Grupo São João  "), "GRUPO SAO JOAO")

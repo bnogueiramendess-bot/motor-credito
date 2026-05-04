@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
 import re
 import unicodedata
 
@@ -30,19 +31,48 @@ def normalize_text_key(value: object) -> str | None:
     return cleaned.upper()
 
 
-def normalize_bu(value: object) -> str | None:
-    key = normalize_text_key(value)
-    if key is None:
-        return None
-    if key in {"ADTIVES", "ADDITIVES", "ADITIVOS"}:
-        return "ADITIVOS"
-    if key in {"FERTILIZANTES", "FERTILIZER", "FERTILIZERS"}:
-        return "FERTILIZANTES"
-    if "ADIT" in key:
-        return "ADITIVOS"
-    if "FERT" in key:
-        return "FERTILIZANTES"
-    return key
+@dataclass(frozen=True, slots=True)
+class BuNormalizationResult:
+    bu_original: str
+    bu_normalized: str
+    is_litigation: bool
+
+
+def normalize_bu(value: object) -> BuNormalizationResult:
+    original = as_optional_string(value) or ""
+    compact = re.sub(r"\s+", " ", original).strip()
+    if not compact:
+        return BuNormalizationResult(
+            bu_original="",
+            bu_normalized="Não informado",
+            is_litigation=False,
+        )
+
+    lowered = compact.casefold()
+    is_litigation = "litigation" in lowered
+    base = re.sub(r"\s*/\s*litigation\b", "", compact, flags=re.IGNORECASE).strip()
+    if not base:
+        base = compact
+
+    key = normalize_text_key(base) or ""
+    if key in {"ADDITIVE", "ADDITIVE"}:
+        normalized = "Additive"
+    elif key in {"FERTILIZER", "FERTILIZERS"}:
+        normalized = "Fertilizer"
+    elif key in {"ADDITIVE INTL", "ADDITIVE INTL.", "ADDITIVE INTERNATIONAL"}:
+        normalized = "Additive Intl"
+    elif key in {"ADTIVES", "ADDITIVES", "ADITIVOS"}:
+        normalized = "Additive"
+    elif key in {"FERTILIZANTES"}:
+        normalized = "Fertilizer"
+    else:
+        normalized = base
+
+    return BuNormalizationResult(
+        bu_original=compact,
+        bu_normalized=normalized,
+        is_litigation=is_litigation,
+    )
 
 
 def normalize_money(value: object) -> Decimal | None:

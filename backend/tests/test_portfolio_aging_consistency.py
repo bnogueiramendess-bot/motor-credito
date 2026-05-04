@@ -34,11 +34,11 @@ class PortfolioAgingConsistencyTestCase(unittest.TestCase):
 
     def test_bu_filter_uses_canonical_value(self) -> None:
         with SessionLocal() as db:
-            response = list_portfolio_customers(bu="ADITIVOS", cnpj=None, db=db)
+            response = list_portfolio_customers(bu="Additive", cnpj=None, db=db)
             expected = db.execute(
                 select(func.count(func.distinct(ArAgingDataTotalRow.cnpj_normalized))).where(
                     ArAgingDataTotalRow.import_run_id == response.import_meta.import_run_id,
-                    ArAgingDataTotalRow.bu_normalized == "ADITIVOS",
+                    ArAgingDataTotalRow.bu_normalized == "Additive",
                     ArAgingDataTotalRow.cnpj_normalized.is_not(None),
                 )
             ).scalar_one()
@@ -64,6 +64,18 @@ class PortfolioAgingConsistencyTestCase(unittest.TestCase):
         self.assertTrue(
             len(response.bod_snapshot["aging_buckets"]["not_due"]) > 0 or len(response.bod_snapshot["aging_buckets"]["overdue"]) > 0
         )
+        total_open = response.totals["total_open_amount"]
+        bu_sum = sum((item["total_open"] for item in response.totals["bu_breakdown"]), Decimal("0"))
+        bucket_sum = sum(
+            (
+                sum((entry["amount"] for entry in bucket["values"]), Decimal("0"))
+                for section in ("not_due", "overdue")
+                for bucket in response.totals["aging_buckets_by_bu"][section]
+            ),
+            Decimal("0"),
+        )
+        self.assertEqual(total_open, bu_sum)
+        self.assertEqual(total_open, bucket_sum)
 
 
 if __name__ == "__main__":
