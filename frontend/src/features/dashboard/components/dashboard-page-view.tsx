@@ -332,16 +332,22 @@ export function DashboardPageView(_: DashboardPageViewProps) {
 
   return (
     <section className="mx-auto w-full max-w-[min(1800px,calc(100vw-64px))] space-y-6 xl:space-y-8 2xl:space-y-10 px-4 sm:px-6 lg:px-8 2xl:px-10">
-      <header className="rounded-2xl border border-[#dbe3ef] bg-gradient-to-br from-white to-[#f8fbff] p-4 shadow-sm xl:p-6 2xl:p-8">
-        <h2 className="text-2xl font-semibold tracking-[-0.01em] text-[#0f172a] xl:text-[30px]">Clientes — Dashboard</h2>
-        <p className="mt-1 text-sm text-[#64748b]">Visão executiva da carteira de contas a receber e análise de risco</p>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <label className="text-sm font-medium text-[#334155]">
-            Visão da carteira:
+      <header className="rounded-2xl border border-[#dde5f0] bg-gradient-to-br from-white via-[#fbfdff] to-[#f7faff] px-5 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] xl:px-7 xl:py-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#7b8797]">Gestão de Carteira</p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-[-0.015em] text-[#0f172a] xl:text-[32px]">Dashboard de Clientes</h2>
+            <p className="mt-3 max-w-2xl text-sm text-[#5b6b7f]">
+              Monitoramento executivo da carteira, exposição financeira e risco de crédito.
+            </p>
+          </div>
+
+          <div className="w-full self-center rounded-xl border border-[#e2e8f0] bg-white/95 p-4 lg:w-[360px] lg:self-center">
+            <label className="block text-xs font-semibold uppercase tracking-[0.08em] text-[#64748b]">Visão da carteira</label>
             <select
               value={selectedSnapshotId}
               onChange={(event) => setSelectedSnapshotId(event.target.value)}
-              className="ml-2 h-9 rounded-md border border-[#dbe3ef] bg-white px-2 text-sm"
+              className="mt-2 h-10 w-full rounded-md border border-[#dbe3ef] bg-white px-3 text-sm text-[#0f172a]"
             >
               <option value="current">Atual</option>
               {(snapshotsQuery.data ?? []).filter((item) => !item.is_current).map((item) => (
@@ -350,12 +356,14 @@ export function DashboardPageView(_: DashboardPageViewProps) {
                 </option>
               ))}
             </select>
-          </label>
-          <span className="rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
-            {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
-          </span>
+
+            <span className="mt-3 inline-flex rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
+              {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
+            </span>
+
+            {baseDateLabel ? <p className="mt-2 text-xs font-medium text-[#475569]">Base Aging vigente: {baseDateLabel}</p> : null}
+          </div>
         </div>
-        {baseDateLabel ? <p className="mt-2 text-xs font-medium text-[#475569]">Base Aging vigente: {baseDateLabel}</p> : null}
       </header>
 
       <section className="relative overflow-hidden rounded-2xl border border-[#1f3754] bg-[#0d1b2a] p-4 shadow-sm xl:p-6 2xl:p-8">
