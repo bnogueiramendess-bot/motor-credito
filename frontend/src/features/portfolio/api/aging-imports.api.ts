@@ -13,6 +13,12 @@ export type AgingImportItem = {
   totals: Record<string, unknown>;
   created_at: string;
   imported_by?: string | null;
+  snapshot_type?: "daily" | "monthly_closing";
+  is_month_end_closing?: boolean;
+  closing_month?: number | null;
+  closing_year?: number | null;
+  closing_label?: string | null;
+  closing_status?: "official" | "superseded" | "cancelled" | null;
 };
 
 type AgingImportHistoryResponse = {
@@ -26,6 +32,9 @@ export type CreateAgingImportInput = {
   file_content_base64: string;
   overwrite?: boolean;
   imported_by?: string;
+  snapshot_type?: "daily" | "monthly_closing";
+  closing_month?: number;
+  closing_year?: number;
 };
 
 export async function createAgingImport(payload: CreateAgingImportInput) {
@@ -39,4 +48,3 @@ export async function getAgingImportsHistory(limit = 10) {
   }
   return Array.isArray(payload.items) ? payload.items : [];
 }
-

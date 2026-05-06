@@ -60,6 +60,9 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
   const currentUserName = useMemo(() => getCurrentUserDisplayName(), []);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [snapshotType, setSnapshotType] = useState<"daily" | "monthly_closing">("daily");
+  const [closingMonth, setClosingMonth] = useState<string>("");
+  const [closingYear, setClosingYear] = useState<string>(String(new Date().getFullYear()));
   const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [duplicateMessage, setDuplicateMessage] = useState<string | null>(null);
   const [drawerErrorMessage, setDrawerErrorMessage] = useState<string | null>(null);
@@ -69,6 +72,9 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
     file_size: number;
     file_content_base64: string;
     imported_by: string;
+    snapshot_type?: "daily" | "monthly_closing";
+    closing_month?: number;
+    closing_year?: number;
   } | null>(null);
   const [toastState, setToastState] = useState<{ message: string; tone: "success" | "error" } | null>(null);
 
@@ -97,6 +103,7 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
         queryClient.invalidateQueries({ queryKey: ["portfolio-aging-latest"] }),
         queryClient.invalidateQueries({ queryKey: ["portfolio-aging-alerts-latest"] }),
         queryClient.invalidateQueries({ queryKey: ["portfolio-aging-movements-latest"] }),
+        queryClient.invalidateQueries({ queryKey: ["portfolio-snapshots"] }),
         queryClient.invalidateQueries({ queryKey: ["ar-aging-imports-history"] })
       ]);
     }
@@ -124,8 +131,22 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
       mime_type: selectedFile.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       file_size: selectedFile.size,
       file_content_base64: await toBase64(selectedFile),
-      imported_by: currentUserName
+      imported_by: currentUserName,
+      snapshot_type: snapshotType as "daily" | "monthly_closing",
+      closing_month: undefined as number | undefined,
+      closing_year: undefined as number | undefined
     };
+
+    if (snapshotType === "monthly_closing") {
+      const month = Number(closingMonth);
+      const year = Number(closingYear);
+      if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000) {
+        setDrawerErrorMessage("Informe mês e ano válidos para o fechamento mensal.");
+        return;
+      }
+      payload.closing_month = month;
+      payload.closing_year = year;
+    }
 
     setLastPayload(payload);
 
@@ -212,6 +233,49 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
             </div>
             {selectedFile ? <p className="mt-2 text-xs text-[#475569]">Tamanho: {formatFileSize(selectedFile.size)}</p> : null}
             <p className="mt-2 text-xs text-[#64748b]">A nova base substituirá a base vigente para fins de dashboard.</p>
+            <div className="mt-4 rounded-md border border-[#dbe3ef] bg-white p-3">
+              <p className="text-sm font-semibold text-[#0f172a]">Tipo da importação</p>
+              <label className="mt-2 flex items-start gap-2 text-sm text-[#334155]">
+                <input type="radio" name="snapshot_type" checked={snapshotType === "daily"} onChange={() => setSnapshotType("daily")} />
+                <span>
+                  <strong>Importação diária</strong>
+                  <br />
+                  Utilizada para atualização operacional da carteira no dia a dia.
+                </span>
+              </label>
+              <label className="mt-2 flex items-start gap-2 text-sm text-[#334155]">
+                <input type="radio" name="snapshot_type" checked={snapshotType === "monthly_closing"} onChange={() => setSnapshotType("monthly_closing")} />
+                <span>
+                  <strong>Fechamento mensal</strong>
+                  <br />
+                  Cria um snapshot oficial da carteira para consulta histórica.
+                </span>
+              </label>
+              {snapshotType === "monthly_closing" ? (
+                <div className="mt-3">
+                  <p className="mb-2 text-sm font-semibold text-[#0f172a]">Competência do fechamento</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select value={closingMonth} onChange={(event) => setClosingMonth(event.target.value)} className="h-10 rounded-md border border-[#dbe3ef] px-2 text-sm">
+                      <option value="">Mês</option>
+                      {Array.from({ length: 12 }).map((_, index) => {
+                        const month = index + 1;
+                        return (
+                          <option key={month} value={String(month)}>
+                            {String(month).padStart(2, "0")}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <input
+                      value={closingYear}
+                      onChange={(event) => setClosingYear(event.target.value.replace(/\D/g, "").slice(0, 4))}
+                      placeholder="Ano"
+                      className="h-10 rounded-md border border-[#dbe3ef] px-2 text-sm"
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
 
             <label className="mb-2 mt-4 block text-sm font-semibold text-[#0f172a]">Importado por</label>
             <input

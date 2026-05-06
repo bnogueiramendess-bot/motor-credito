@@ -182,3 +182,15 @@ export type PortfolioRiskSummaryDto = {
     risk_level: "critical" | "attention";
   }>;
 };
+
+export type PortfolioSnapshotDto = {
+  id: string;
+  label: string;
+  import_run_id: number;
+  snapshot_type: string;
+  base_date: string;
+  closing_month?: number | null;
+  closing_year?: number | null;
+  closing_status?: string | null;
+  is_current: boolean;
+};

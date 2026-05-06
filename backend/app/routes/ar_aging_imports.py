@@ -27,6 +27,13 @@ def _to_response(entry: ArAgingImportRun) -> ArAgingImportResponse:
         totals=entry.totals_json or {},
         created_at=entry.created_at,
         imported_by=imported_by,
+        snapshot_type=entry.snapshot_type,  # type: ignore[arg-type]
+        is_month_end_closing=entry.is_month_end_closing,
+        closing_month=entry.closing_month,
+        closing_year=entry.closing_year,
+        closing_label=entry.closing_label,
+        closing_status=entry.closing_status,  # type: ignore[arg-type]
+        closing_created_at=entry.closing_created_at,
     )
 
 

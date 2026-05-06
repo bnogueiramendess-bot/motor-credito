@@ -9,8 +9,10 @@ export async function GET(request: Request) {
   const query = new URLSearchParams();
   const bu = searchParams.get("bu");
   const q = searchParams.get("q");
+  const snapshotId = searchParams.get("snapshot_id");
   if (bu) query.set("bu", bu);
   if (q) query.set("q", q);
+  if (snapshotId) query.set("snapshot_id", snapshotId);
   const suffix = query.toString();
   const path = suffix ? `/portfolio/groups?${suffix}` : "/portfolio/groups";
   try {

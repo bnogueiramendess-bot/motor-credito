@@ -40,9 +40,9 @@ function RiskMiniCard({
   );
 }
 
-export function PortfolioRiskSection() {
-  const query = usePortfolioRiskSummaryQuery();
-  const agingQuery = usePortfolioAgingLatestQuery();
+export function PortfolioRiskSection({ snapshotId }: { snapshotId?: string }) {
+  const query = usePortfolioRiskSummaryQuery(snapshotId);
+  const agingQuery = usePortfolioAgingLatestQuery({ snapshot_id: snapshotId });
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [showTopClients, setShowTopClients] = useState(false);
 

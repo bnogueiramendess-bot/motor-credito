@@ -7,31 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
 from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
-from app.models.ar_aging_import_run import ArAgingImportRun
+from app.services.portfolio_snapshots import previous_valid_import_run, resolve_snapshot_import_run
 
 MIN_DELTA = Decimal("1000")
 MAX_MOVEMENTS = 10
-
-
-def _latest_valid_import_run(db: Session) -> ArAgingImportRun | None:
-    return db.scalar(
-        select(ArAgingImportRun)
-        .where(ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]))
-        .order_by(ArAgingImportRun.id.desc())
-        .limit(1)
-    )
-
-
-def _previous_valid_import_run(db: Session, current_run: ArAgingImportRun) -> ArAgingImportRun | None:
-    return db.scalar(
-        select(ArAgingImportRun)
-        .where(
-            ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
-            ArAgingImportRun.id < current_run.id,
-        )
-        .order_by(ArAgingImportRun.id.desc())
-        .limit(1)
-    )
 
 
 def _as_decimal(value: Decimal | None) -> Decimal:
@@ -134,12 +113,10 @@ def _movement_item(
     }
 
 
-def build_latest_portfolio_movements(db: Session) -> dict | None:
-    current_run = _latest_valid_import_run(db)
-    if current_run is None:
-        return None
+def build_latest_portfolio_movements(db: Session, *, snapshot_id: str | None = None) -> dict | None:
+    current_run = resolve_snapshot_import_run(db, snapshot_id)
 
-    previous_run = _previous_valid_import_run(db, current_run)
+    previous_run = previous_valid_import_run(db, current_run)
     if previous_run is None:
         return {
             "base_date": current_run.base_date,
@@ -236,4 +213,3 @@ def build_latest_portfolio_movements(db: Session) -> dict | None:
         "message": None,
         "movements": ranked,
     }
-

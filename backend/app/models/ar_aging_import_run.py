@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, String, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,14 @@ class ArAgingImportRun(Base):
 
     warnings_json: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     totals_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    snapshot_type: Mapped[str] = mapped_column(String(30), nullable=False, default="daily", index=True)
+    is_month_end_closing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    closing_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closing_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closing_label: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    closing_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    closing_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closing_created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -4,9 +4,12 @@ import { BackendError, fetchBackendOptional } from "@/shared/server/backend-clie
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const snapshotId = searchParams.get("snapshot_id");
+  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
   try {
-    const payload = await fetchBackendOptional<Record<string, unknown>>("/portfolio/aging/alerts/latest");
+    const payload = await fetchBackendOptional<Record<string, unknown>>(`/portfolio/aging/alerts/latest${suffix}`);
     return NextResponse.json(payload);
   } catch (error) {
     if (error instanceof BackendError) {
@@ -16,4 +19,3 @@ export async function GET() {
     return NextResponse.json({ detail: "Falha ao carregar alertas da carteira." }, { status: 500 });
   }
 }
-

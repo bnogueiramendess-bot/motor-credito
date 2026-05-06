@@ -7,28 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
 from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
-from app.models.ar_aging_import_run import ArAgingImportRun
-
-
-def _latest_valid_import_run(db: Session) -> ArAgingImportRun | None:
-    return db.scalar(
-        select(ArAgingImportRun)
-        .where(ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]))
-        .order_by(ArAgingImportRun.id.desc())
-        .limit(1)
-    )
-
-
-def _previous_valid_import_run(db: Session, current_run: ArAgingImportRun) -> ArAgingImportRun | None:
-    return db.scalar(
-        select(ArAgingImportRun)
-        .where(
-            ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
-            ArAgingImportRun.id < current_run.id,
-        )
-        .order_by(ArAgingImportRun.id.desc())
-        .limit(1)
-    )
+from app.services.portfolio_snapshots import previous_valid_import_run, resolve_snapshot_import_run
 
 
 def _as_decimal(value: Decimal | int | float | str | None) -> Decimal:
@@ -103,15 +82,13 @@ def _delta_payload(value: Decimal, *, kind: str) -> dict:
     }
 
 
-def build_latest_portfolio_alerts(db: Session) -> dict | None:
-    run = _latest_valid_import_run(db)
-    if run is None:
-        return None
+def build_latest_portfolio_alerts(db: Session, *, snapshot_id: str | None = None) -> dict | None:
+    run = resolve_snapshot_import_run(db, snapshot_id)
 
     totals = run.totals_json if isinstance(run.totals_json, dict) else {}
     total_overdue, total_not_due, total_open, insured_limit = _compute_run_totals(db, run.id)
 
-    previous_run = _previous_valid_import_run(db, run)
+    previous_run = previous_valid_import_run(db, run)
     overdue_pct_delta: Decimal | None = None
     uncovered_delta: Decimal | None = None
     probable_delta: Decimal | None = None

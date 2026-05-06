@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import HTTPException, status
 from typing import Any
@@ -72,6 +73,25 @@ def _find_duplicate_import_run(
     return None
 
 
+def _closing_label(month: int, year: int) -> str:
+    return f"Fechamento {month:02d}/{year}"
+
+
+def _find_official_monthly_closing(db: Session, *, month: int, year: int) -> ArAgingImportRun | None:
+    return db.scalar(
+        select(ArAgingImportRun)
+        .where(
+            ArAgingImportRun.snapshot_type == "monthly_closing",
+            ArAgingImportRun.closing_status == "official",
+            ArAgingImportRun.closing_month == month,
+            ArAgingImportRun.closing_year == year,
+            ArAgingImportRun.status.in_(["processing", "valid", "valid_with_warnings"]),
+        )
+        .order_by(ArAgingImportRun.id.desc())
+        .limit(1)
+    )
+
+
 def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArAgingImportRun:
     base_date = extract_base_date_from_filename(payload.original_filename)
     file_bytes = base64.b64decode(payload.file_content_base64)
@@ -90,6 +110,18 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
         )
 
     latest_valid_run = _latest_valid_import_run(db)
+    is_monthly_closing = payload.snapshot_type == "monthly_closing"
+    closing_month = payload.closing_month if is_monthly_closing else None
+    closing_year = payload.closing_year if is_monthly_closing else None
+    closing_label = _closing_label(closing_month, closing_year) if (closing_month and closing_year) else None
+
+    if is_monthly_closing and closing_month and closing_year:
+        existing = _find_official_monthly_closing(db, month=closing_month, year=closing_year)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Já existe um fechamento oficial para {closing_month:02d}/{closing_year}.",
+            )
 
     entry = ArAgingImportRun(
         base_date=base_date,
@@ -99,6 +131,14 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
         file_size=payload.file_size,
         warnings_json=[],
         totals_json={},
+        snapshot_type=payload.snapshot_type,
+        is_month_end_closing=is_monthly_closing,
+        closing_month=closing_month,
+        closing_year=closing_year,
+        closing_label=closing_label,
+        closing_status="official" if is_monthly_closing else None,
+        closing_created_at=datetime.now(timezone.utc) if is_monthly_closing else None,
+        closing_created_by=payload.imported_by if is_monthly_closing else None,
     )
     db.add(entry)
     db.flush()

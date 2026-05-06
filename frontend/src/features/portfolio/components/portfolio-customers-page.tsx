@@ -6,6 +6,7 @@ import { ChevronDown, ChevronUp, Search } from "lucide-react";
 import { PortfolioGroupCardDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioGroupsQuery } from "@/features/portfolio/hooks/use-portfolio-groups-query";
 import { usePortfolioOpenInvoicesQuery } from "@/features/portfolio/hooks/use-portfolio-open-invoices-query";
+import { usePortfolioSnapshotsQuery } from "@/features/portfolio/hooks/use-portfolio-snapshots-query";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
@@ -85,8 +86,8 @@ function LimitConsumptionBar({ consumed, total, overLimit }: { consumed: number;
   );
 }
 
-function PortfolioGroupInvoices({ economicGroup }: { economicGroup: string }) {
-  const query = usePortfolioOpenInvoicesQuery({ economicGroup, enabled: true });
+function PortfolioGroupInvoices({ economicGroup, snapshotId }: { economicGroup: string; snapshotId: string }) {
+  const query = usePortfolioOpenInvoicesQuery({ economicGroup, snapshotId, enabled: true });
   if (query.isLoading) return <div className="py-3 text-sm text-[#475569]">Carregando NFs em aberto...</div>;
   if (query.isError) return <p className="py-3 text-sm text-rose-700">Nao foi possivel carregar as NFs em aberto.</p>;
   if (!query.data || query.data.length === 0) return <p className="py-3 text-sm text-[#64748b]">Nenhuma NF em aberto encontrada para este cliente/grupo.</p>;
@@ -136,7 +137,7 @@ function PortfolioGroupInvoices({ economicGroup }: { economicGroup: string }) {
   );
 }
 
-function PortfolioGroupCard({ group }: { group: PortfolioGroupCardDto }) {
+function PortfolioGroupCard({ group, snapshotId }: { group: PortfolioGroupCardDto; snapshotId: string }) {
   const [expanded, setExpanded] = useState(false);
   const creditLimit = toNumber(group.credit_limit_amount) ?? 0;
   const available = toNumber(group.credit_limit_available) ?? 0;
@@ -175,17 +176,23 @@ function PortfolioGroupCard({ group }: { group: PortfolioGroupCardDto }) {
           </Button>
         </div>
       </div>
-      {expanded ? <PortfolioGroupInvoices economicGroup={group.economic_group} /> : null}
+      {expanded ? <PortfolioGroupInvoices economicGroup={group.economic_group} snapshotId={snapshotId} /> : null}
     </article>
   );
 }
 
 export function PortfolioCustomersPage() {
+  const snapshotsQuery = usePortfolioSnapshotsQuery();
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState("current");
   const [search, setSearch] = useState("");
   const [bu, setBu] = useState("Todos");
   const [status, setStatus] = useState("Todos");
   const [sortBy, setSortBy] = useState<SortOption>("open_desc");
-  const query = usePortfolioGroupsQuery({ bu: bu === "Todos" ? undefined : bu, q: search || undefined });
+  const query = usePortfolioGroupsQuery({ bu: bu === "Todos" ? undefined : bu, q: search || undefined, snapshot_id: selectedSnapshotId });
+  const selectedSnapshot = useMemo(
+    () => (snapshotsQuery.data ?? []).find((item) => item.id === selectedSnapshotId) ?? null,
+    [snapshotsQuery.data, selectedSnapshotId]
+  );
 
   const filteredGroups = useMemo(() => {
     const base = query.data ?? [];
@@ -211,6 +218,26 @@ export function PortfolioCustomersPage() {
       <header className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
         <h1 className="text-2xl font-semibold tracking-[-0.01em] text-[#111827]">Carteira de Clientes</h1>
         <p className="mt-2 text-sm text-[#4b5563]">Base consolidada dos clientes importados no ultimo AR Aging.</p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="text-sm font-medium text-[#334155]">
+            Visão da carteira:
+            <select
+              value={selectedSnapshotId}
+              onChange={(event) => setSelectedSnapshotId(event.target.value)}
+              className="ml-2 h-9 rounded-md border border-[#dbe3ef] bg-white px-2 text-sm"
+            >
+              <option value="current">Atual</option>
+              {(snapshotsQuery.data ?? []).filter((item) => !item.is_current).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
+            {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
+          </span>
+        </div>
       </header>
       <div className="rounded-2xl border border-[#e2e8f0] bg-white p-4 shadow-sm">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -227,7 +254,7 @@ export function PortfolioCustomersPage() {
       {query.isLoading ? <div className="space-y-3">{[...Array.from({ length: 4 })].map((_, index) => <div key={index} className="rounded-2xl border border-[#e2e8f0] bg-white p-4"><Skeleton className="h-6 w-1/3" /><Skeleton className="mt-3 h-5 w-full" /></div>)}</div> : null}
       {query.isError ? <ErrorState title="Falha ao carregar carteira" description="Nao foi possivel carregar os grupos da carteira." onRetry={query.refetch} /> : null}
       {!query.isLoading && !query.isError && filteredGroups.length === 0 ? <EmptyState title="Nenhum grupo encontrado" description="Ajuste os filtros para visualizar grupos da carteira." /> : null}
-      {!query.isLoading && !query.isError && filteredGroups.length > 0 ? <div className="space-y-3">{filteredGroups.map((group) => <PortfolioGroupCard key={group.economic_group} group={group} />)}</div> : null}
+      {!query.isLoading && !query.isError && filteredGroups.length > 0 ? <div className="space-y-3">{filteredGroups.map((group) => <PortfolioGroupCard key={group.economic_group} group={group} snapshotId={selectedSnapshotId} />)}</div> : null}
     </section>
   );
 }

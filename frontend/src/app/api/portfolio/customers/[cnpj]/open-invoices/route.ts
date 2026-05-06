@@ -10,10 +10,13 @@ type RouteContext = {
   };
 };
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
   const cnpj = decodeURIComponent(context.params.cnpj);
+  const { searchParams } = new URL(request.url);
+  const snapshotId = searchParams.get("snapshot_id");
+  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
   try {
-    const payload = await fetchBackend<unknown>(`/portfolio/customers/${encodeURIComponent(cnpj)}/open-invoices`);
+    const payload = await fetchBackend<unknown>(`/portfolio/customers/${encodeURIComponent(cnpj)}/open-invoices${suffix}`);
     return NextResponse.json(payload);
   } catch (error) {
     if (error instanceof BackendError) {

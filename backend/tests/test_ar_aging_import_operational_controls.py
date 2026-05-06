@@ -103,6 +103,45 @@ class ArAgingImportOperationalControlsTestCase(unittest.TestCase):
         self.assertEqual(created.status, "valid_with_warnings")
         self.assertEqual(created.totals_json.get("_imported_by"), "qa_teste")
 
+    def test_should_block_duplicate_official_monthly_closing_for_same_competence(self) -> None:
+        with SessionLocal() as db:
+            run = ArAgingImportRun(
+                base_date=date(2025, 4, 30),
+                status="valid",
+                original_filename="30042025-AR-FECHAMENTO.xlsx",
+                mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_size=100,
+                warnings_json=[],
+                totals_json={},
+                snapshot_type="monthly_closing",
+                is_month_end_closing=True,
+                closing_month=4,
+                closing_year=2026,
+                closing_label="Fechamento 04/2026",
+                closing_status="official",
+            )
+            db.add(run)
+            db.commit()
+            db.refresh(run)
+            self.created_import_run_ids.append(run.id)
+
+        payload = ArAgingImportCreate(
+            original_filename="01052025-AR.xlsx",
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file_size=3,
+            file_content_base64=base64.b64encode(b"abc").decode("ascii"),
+            overwrite=True,
+            snapshot_type="monthly_closing",
+            closing_month=4,
+            closing_year=2026,
+        )
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as context:
+                create_ar_aging_import_run(db, payload)
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertIn("04/2026", str(context.exception.detail))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,12 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { getPortfolioAgingAlertsLatest } from "@/features/portfolio/api/portfolio.api";
+import { getPortfolioAgingAlertsLatestBySnapshot } from "@/features/portfolio/api/portfolio.api";
 
-export function usePortfolioAgingAlertsLatestQuery() {
+export function usePortfolioAgingAlertsLatestQuery(snapshotId?: string) {
   return useQuery({
-    queryKey: ["portfolio-aging-alerts-latest"],
-    queryFn: () => getPortfolioAgingAlertsLatest()
+    queryKey: ["portfolio-aging-alerts-latest", snapshotId ?? "current"],
+    queryFn: () => getPortfolioAgingAlertsLatestBySnapshot(snapshotId)
   });
 }
-

@@ -13,6 +13,11 @@ class PortfolioImportMeta(BaseModel):
     created_at: datetime
     imported_at: datetime
     imported_by: str | None = None
+    snapshot_type: str = "daily"
+    closing_month: int | None = None
+    closing_year: int | None = None
+    closing_label: str | None = None
+    closing_status: str | None = None
 
 
 class PortfolioAgingLatestResponse(BaseModel):
@@ -148,6 +153,22 @@ class PortfolioGroupsResponse(BaseModel):
     import_meta: PortfolioImportMeta
     total_groups: int
     items: list[PortfolioGroupCardSummary]
+
+
+class PortfolioSnapshotItem(BaseModel):
+    id: str
+    label: str
+    import_run_id: int
+    snapshot_type: str
+    base_date: date
+    closing_month: int | None = None
+    closing_year: int | None = None
+    closing_status: str | None = None
+    is_current: bool = False
+
+
+class PortfolioSnapshotsResponse(BaseModel):
+    items: list[PortfolioSnapshotItem]
 
 
 class PortfolioRiskDistributionItem(BaseModel):

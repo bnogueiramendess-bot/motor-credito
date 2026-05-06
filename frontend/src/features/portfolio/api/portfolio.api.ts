@@ -7,12 +7,14 @@ import {
   PortfolioGroupCardDto,
   PortfolioMovementsLatestDto,
   PortfolioOpenInvoiceDto,
-  PortfolioRiskSummaryDto
+  PortfolioRiskSummaryDto,
+  PortfolioSnapshotDto
 } from "@/features/portfolio/api/contracts";
 
 type PortfolioQueryParams = {
   cnpj?: string;
   bu?: string;
+  snapshot_id?: string;
 };
 
 function buildQuery(params?: PortfolioQueryParams) {
@@ -24,6 +26,9 @@ function buildQuery(params?: PortfolioQueryParams) {
 
   if (params?.bu) {
     query.set("bu", params.bu);
+  }
+  if (params?.snapshot_id) {
+    query.set("snapshot_id", params.snapshot_id);
   }
 
   const encoded = query.toString();
@@ -96,8 +101,19 @@ export async function getPortfolioAgingAlertsLatest() {
   return alertsCandidate as PortfolioAgingAlertDto[];
 }
 
-export async function getPortfolioAgingMovementsLatest() {
-  const payload = await apiClient.get<unknown>("/api/portfolio/aging/movements/latest");
+export async function getPortfolioAgingAlertsLatestBySnapshot(snapshotId?: string) {
+  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
+  const payload = await apiClient.get<unknown>(`/api/portfolio/aging/alerts/latest${suffix}`);
+  if (!payload || typeof payload !== "object") {
+    return [] as PortfolioAgingAlertDto[];
+  }
+  const asRecord = payload as Record<string, unknown>;
+  return Array.isArray(asRecord.alerts) ? (asRecord.alerts as PortfolioAgingAlertDto[]) : [];
+}
+
+export async function getPortfolioAgingMovementsLatest(snapshotId?: string) {
+  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
+  const payload = await apiClient.get<unknown>(`/api/portfolio/aging/movements/latest${suffix}`);
   if (!payload || typeof payload !== "object") {
     return { base_date: "", previous_base_date: null, message: "Ainda não há base anterior suficiente para comparação.", movements: [] } as PortfolioMovementsLatestDto;
   }
@@ -124,9 +140,23 @@ export async function getPortfolioRiskSummary() {
   return asRecord as unknown as PortfolioRiskSummaryDto;
 }
 
-export async function getPortfolioGroupOpenInvoices(economicGroup: string) {
+export async function getPortfolioRiskSummaryBySnapshot(snapshotId?: string) {
+  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
+  const payload = await apiClient.get<unknown>(`/api/portfolio/risk-summary${suffix}`);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const asRecord = payload as Record<string, unknown>;
+  if (!asRecord.distribution || typeof asRecord.distribution !== "object" || Array.isArray(asRecord.distribution)) {
+    return null;
+  }
+  return asRecord as unknown as PortfolioRiskSummaryDto;
+}
+
+export async function getPortfolioGroupOpenInvoices(economicGroup: string, snapshotId?: string) {
   const encodedGroup = encodeURIComponent(economicGroup);
-  const payload = await apiClient.get<unknown>(`/api/portfolio/groups/${encodedGroup}/open-invoices`);
+  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
+  const payload = await apiClient.get<unknown>(`/api/portfolio/groups/${encodedGroup}/open-invoices${suffix}`);
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return [] as PortfolioOpenInvoiceDto[];
   }
@@ -134,9 +164,10 @@ export async function getPortfolioGroupOpenInvoices(economicGroup: string) {
   return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioOpenInvoiceDto[]) : [];
 }
 
-export async function getPortfolioCustomerOpenInvoices(cnpj: string) {
+export async function getPortfolioCustomerOpenInvoices(cnpj: string, snapshotId?: string) {
   const encodedCnpj = encodeURIComponent(cnpj);
-  const payload = await apiClient.get<unknown>(`/api/portfolio/customers/${encodedCnpj}/open-invoices`);
+  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
+  const payload = await apiClient.get<unknown>(`/api/portfolio/customers/${encodedCnpj}/open-invoices${suffix}`);
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return [] as PortfolioOpenInvoiceDto[];
   }
@@ -144,10 +175,11 @@ export async function getPortfolioCustomerOpenInvoices(cnpj: string) {
   return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioOpenInvoiceDto[]) : [];
 }
 
-export async function getPortfolioGroups(params?: { bu?: string; q?: string }) {
+export async function getPortfolioGroups(params?: { bu?: string; q?: string; snapshot_id?: string }) {
   const query = new URLSearchParams();
   if (params?.bu) query.set("bu", params.bu);
   if (params?.q) query.set("q", params.q);
+  if (params?.snapshot_id) query.set("snapshot_id", params.snapshot_id);
   const suffix = query.toString();
   const payload = await apiClient.get<unknown>(`/api/portfolio/groups${suffix ? `?${suffix}` : ""}`);
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -155,4 +187,13 @@ export async function getPortfolioGroups(params?: { bu?: string; q?: string }) {
   }
   const asRecord = payload as Record<string, unknown>;
   return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioGroupCardDto[]) : [];
+}
+
+export async function getPortfolioSnapshots() {
+  const payload = await apiClient.get<unknown>("/api/portfolio/snapshots");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [] as PortfolioSnapshotDto[];
+  }
+  const asRecord = payload as Record<string, unknown>;
+  return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioSnapshotDto[]) : [];
 }

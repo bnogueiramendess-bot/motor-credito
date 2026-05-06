@@ -27,6 +27,8 @@ from app.schemas.portfolio import (
     PortfolioGroupsResponse,
     PortfolioGroupSummary,
     PortfolioImportMeta,
+    PortfolioSnapshotItem,
+    PortfolioSnapshotsResponse,
     PortfolioOpenInvoiceItem,
     PortfolioOpenInvoicesResponse,
     PortfolioRiskSummaryResponse,
@@ -34,6 +36,7 @@ from app.schemas.portfolio import (
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_money, normalize_text_key
 from app.services.portfolio_alerts import build_latest_portfolio_alerts
 from app.services.portfolio_movements import build_latest_portfolio_movements
+from app.services.portfolio_snapshots import resolve_snapshot_import_run
 from app.services.portfolio_risk_service import (
     calculate_portfolio_risk_from_bod,
     calculate_portfolio_risk_from_bod_raw_rows,
@@ -44,18 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 def _latest_valid_import_run(db: Session) -> ArAgingImportRun:
-    entry = db.scalar(
-        select(ArAgingImportRun)
-        .where(ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]))
-        .order_by(ArAgingImportRun.id.desc())
-        .limit(1)
-    )
-    if entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Nao existe importacao Aging AR valida.",
-        )
-    return entry
+    return resolve_snapshot_import_run(db, None)
 
 
 def _import_meta(entry: ArAgingImportRun) -> PortfolioImportMeta:
@@ -71,11 +63,26 @@ def _import_meta(entry: ArAgingImportRun) -> PortfolioImportMeta:
         created_at=entry.created_at,
         imported_at=entry.created_at,
         imported_by=imported_by,
+        snapshot_type=entry.snapshot_type,
+        closing_month=entry.closing_month,
+        closing_year=entry.closing_year,
+        closing_label=entry.closing_label,
+        closing_status=entry.closing_status,
     )
 
 
 def _as_decimal(value: Decimal | None) -> Decimal:
     return value if value is not None else Decimal("0")
+
+
+def _snapshot_label(run: ArAgingImportRun, current_id: int) -> str:
+    if run.id == current_id:
+        return "Atual"
+    if run.snapshot_type == "monthly_closing" and run.closing_label:
+        return run.closing_label
+    if run.snapshot_type == "monthly_closing" and run.closing_month and run.closing_year:
+        return f"Fechamento {run.closing_month:02d}/{run.closing_year}"
+    return "Atual"
 
 
 def _derive_open_amount(open_amount: Decimal | None, overdue_amount: Decimal | None, not_due_amount: Decimal | None) -> Decimal:
@@ -302,9 +309,59 @@ def _build_bod_snapshot_payload(db: Session, import_run_id: int) -> dict | None:
     }
 
 
+@router.get("/snapshots", response_model=PortfolioSnapshotsResponse)
+def list_portfolio_snapshots(db: Session = Depends(get_db)) -> PortfolioSnapshotsResponse:
+    current = _latest_valid_import_run(db)
+    closings = db.scalars(
+        select(ArAgingImportRun)
+        .where(
+            ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
+            ArAgingImportRun.snapshot_type == "monthly_closing",
+            ArAgingImportRun.closing_status == "official",
+            ArAgingImportRun.closing_month.is_not(None),
+            ArAgingImportRun.closing_year.is_not(None),
+            ArAgingImportRun.id != current.id,
+        )
+        .order_by(ArAgingImportRun.closing_year.desc(), ArAgingImportRun.closing_month.desc(), ArAgingImportRun.id.desc())
+    ).all()
+
+    items: list[PortfolioSnapshotItem] = [
+        PortfolioSnapshotItem(
+            id=f"current-{current.id}",
+            label="Atual",
+            import_run_id=current.id,
+            snapshot_type=current.snapshot_type,
+            base_date=current.base_date,
+            closing_month=current.closing_month,
+            closing_year=current.closing_year,
+            closing_status=current.closing_status,
+            is_current=True,
+        )
+    ]
+    for run in closings:
+        items.append(
+            PortfolioSnapshotItem(
+                id=f"closing-{run.closing_year:04d}-{run.closing_month:02d}",
+                label=_snapshot_label(run, current.id),
+                import_run_id=run.id,
+                snapshot_type=run.snapshot_type,
+                base_date=run.base_date,
+                closing_month=run.closing_month,
+                closing_year=run.closing_year,
+                closing_status=run.closing_status,
+                is_current=False,
+            )
+        )
+
+    return PortfolioSnapshotsResponse(items=items)
+
+
 @router.get("/aging/latest", response_model=PortfolioAgingLatestResponse)
-def get_latest_aging_summary(db: Session = Depends(get_db)) -> PortfolioAgingLatestResponse:
-    run = _latest_valid_import_run(db)
+def get_latest_aging_summary(
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioAgingLatestResponse:
+    run = resolve_snapshot_import_run(db, snapshot_id)
 
     counts = db.execute(
         select(
@@ -458,8 +515,11 @@ def get_latest_aging_summary(db: Session = Depends(get_db)) -> PortfolioAgingLat
 
 
 @router.get("/aging/alerts/latest", response_model=PortfolioAgingAlertsLatestResponse)
-def get_latest_aging_alerts(db: Session = Depends(get_db)) -> PortfolioAgingAlertsLatestResponse:
-    payload = build_latest_portfolio_alerts(db)
+def get_latest_aging_alerts(
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioAgingAlertsLatestResponse:
+    payload = build_latest_portfolio_alerts(db, snapshot_id=snapshot_id)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -469,8 +529,11 @@ def get_latest_aging_alerts(db: Session = Depends(get_db)) -> PortfolioAgingAler
 
 
 @router.get("/aging/movements/latest", response_model=PortfolioAgingMovementsLatestResponse)
-def get_latest_aging_movements(db: Session = Depends(get_db)) -> PortfolioAgingMovementsLatestResponse:
-    payload = build_latest_portfolio_movements(db)
+def get_latest_aging_movements(
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioAgingMovementsLatestResponse:
+    payload = build_latest_portfolio_movements(db, snapshot_id=snapshot_id)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -480,8 +543,11 @@ def get_latest_aging_movements(db: Session = Depends(get_db)) -> PortfolioAgingM
 
 
 @router.get("/risk-summary", response_model=PortfolioRiskSummaryResponse)
-def get_portfolio_risk_summary(db: Session = Depends(get_db)) -> PortfolioRiskSummaryResponse:
-    run = _latest_valid_import_run(db)
+def get_portfolio_risk_summary(
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioRiskSummaryResponse:
+    run = resolve_snapshot_import_run(db, snapshot_id)
     file_path = None
     if isinstance(run.totals_json, dict):
         candidate = run.totals_json.get("_stored_file_path")
@@ -512,9 +578,10 @@ def get_portfolio_risk_summary(db: Session = Depends(get_db)) -> PortfolioRiskSu
 def list_portfolio_customers(
     bu: str | None = Query(default=None),
     cnpj: str | None = Query(default=None),
+    snapshot_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> PortfolioCustomersResponse:
-    run = _latest_valid_import_run(db)
+    run = resolve_snapshot_import_run(db, snapshot_id)
 
     query = select(
         ArAgingDataTotalRow.cnpj_normalized,
@@ -568,8 +635,12 @@ def list_portfolio_customers(
 
 
 @router.get("/customers/{cnpj}", response_model=PortfolioCustomerDetailResponse)
-def get_portfolio_customer(cnpj: str, db: Session = Depends(get_db)) -> PortfolioCustomerDetailResponse:
-    run = _latest_valid_import_run(db)
+def get_portfolio_customer(
+    cnpj: str,
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioCustomerDetailResponse:
+    run = resolve_snapshot_import_run(db, snapshot_id)
     cnpj_normalized = normalize_cnpj(cnpj)
     if not cnpj_normalized:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CNPJ invalido.")
@@ -629,9 +700,10 @@ def get_portfolio_customer(cnpj: str, db: Session = Depends(get_db)) -> Portfoli
 def list_portfolio_groups(
     bu: str | None = Query(default=None),
     q: str | None = Query(default=None),
+    snapshot_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> PortfolioGroupsResponse:
-    run = _latest_valid_import_run(db)
+    run = resolve_snapshot_import_run(db, snapshot_id)
 
     query = select(
         ArAgingDataTotalRow.economic_group_normalized,
@@ -733,8 +805,12 @@ def list_portfolio_groups(
 
 
 @router.get("/groups/{economic_group}", response_model=PortfolioGroupDetailResponse)
-def get_portfolio_group(economic_group: str, db: Session = Depends(get_db)) -> PortfolioGroupDetailResponse:
-    run = _latest_valid_import_run(db)
+def get_portfolio_group(
+    economic_group: str,
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioGroupDetailResponse:
+    run = resolve_snapshot_import_run(db, snapshot_id)
     group_key = normalize_text_key(economic_group)
     if group_key is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Grupo economico invalido.")
@@ -815,8 +891,12 @@ def get_portfolio_group(economic_group: str, db: Session = Depends(get_db)) -> P
 
 
 @router.get("/groups/{economic_group}/open-invoices", response_model=PortfolioOpenInvoicesResponse)
-def list_group_open_invoices(economic_group: str, db: Session = Depends(get_db)) -> PortfolioOpenInvoicesResponse:
-    run = _latest_valid_import_run(db)
+def list_group_open_invoices(
+    economic_group: str,
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioOpenInvoicesResponse:
+    run = resolve_snapshot_import_run(db, snapshot_id)
     group_key = normalize_text_key(economic_group)
     if group_key is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Grupo economico invalido.")
@@ -878,8 +958,12 @@ def list_group_open_invoices(economic_group: str, db: Session = Depends(get_db))
 
 
 @router.get("/customers/{cnpj}/open-invoices", response_model=PortfolioOpenInvoicesResponse)
-def list_customer_open_invoices(cnpj: str, db: Session = Depends(get_db)) -> PortfolioOpenInvoicesResponse:
-    run = _latest_valid_import_run(db)
+def list_customer_open_invoices(
+    cnpj: str,
+    snapshot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioOpenInvoicesResponse:
+    run = resolve_snapshot_import_run(db, snapshot_id)
     cnpj_normalized = normalize_cnpj(cnpj)
     if not cnpj_normalized:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CNPJ invalido.")

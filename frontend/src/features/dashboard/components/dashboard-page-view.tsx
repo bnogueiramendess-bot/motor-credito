@@ -8,6 +8,7 @@ import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-
 import { PortfolioMovementDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
 import { usePortfolioAgingMovementsLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-movements-latest-query";
+import { usePortfolioSnapshotsQuery } from "@/features/portfolio/hooks/use-portfolio-snapshots-query";
 import { ErrorState } from "@/shared/components/states/error-state";
 import { cn } from "@/shared/lib/utils";
 
@@ -231,9 +232,15 @@ function movementReadableMessage(movement: PortfolioMovementDto) {
 }
 
 export function DashboardPageView(_: DashboardPageViewProps) {
-  const agingQuery = usePortfolioAgingLatestQuery();
-  const movementsQuery = usePortfolioAgingMovementsLatestQuery();
+  const snapshotsQuery = usePortfolioSnapshotsQuery();
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState<string>("current");
+  const agingQuery = usePortfolioAgingLatestQuery({ snapshot_id: selectedSnapshotId });
+  const movementsQuery = usePortfolioAgingMovementsLatestQuery(selectedSnapshotId);
   const [showTopMovements, setShowTopMovements] = useState(false);
+  const selectedSnapshot = useMemo(
+    () => (snapshotsQuery.data ?? []).find((item) => item.id === selectedSnapshotId) ?? null,
+    [snapshotsQuery.data, selectedSnapshotId]
+  );
   const baseDateLabel = useMemo(() => {
     const rawBaseDate = agingQuery.data?.import_meta?.base_date;
     if (!rawBaseDate || typeof rawBaseDate !== "string") {
@@ -326,6 +333,26 @@ export function DashboardPageView(_: DashboardPageViewProps) {
       <header className="rounded-2xl border border-[#dbe3ef] bg-gradient-to-br from-white to-[#f8fbff] p-4 shadow-sm xl:p-6 2xl:p-8">
         <h2 className="text-2xl font-semibold tracking-[-0.01em] text-[#0f172a] xl:text-[30px]">Clientes — Dashboard</h2>
         <p className="mt-1 text-sm text-[#64748b]">Visão executiva da carteira de contas a receber e análise de risco</p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="text-sm font-medium text-[#334155]">
+            Visão da carteira:
+            <select
+              value={selectedSnapshotId}
+              onChange={(event) => setSelectedSnapshotId(event.target.value)}
+              className="ml-2 h-9 rounded-md border border-[#dbe3ef] bg-white px-2 text-sm"
+            >
+              <option value="current">Atual</option>
+              {(snapshotsQuery.data ?? []).filter((item) => !item.is_current).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
+            {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
+          </span>
+        </div>
         {baseDateLabel ? <p className="mt-2 text-xs font-medium text-[#475569]">Base Aging vigente: {baseDateLabel}</p> : null}
       </header>
 
@@ -392,7 +419,7 @@ export function DashboardPageView(_: DashboardPageViewProps) {
         />
       </div>
 
-      <PortfolioRiskSection />
+      <PortfolioRiskSection snapshotId={selectedSnapshotId} />
 
       
 

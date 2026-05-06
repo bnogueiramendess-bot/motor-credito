@@ -7,10 +7,14 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const bu = searchParams.get("bu");
+  const snapshotId = searchParams.get("snapshot_id");
   const query = new URLSearchParams();
 
   if (bu) {
     query.set("bu", bu);
+  }
+  if (snapshotId) {
+    query.set("snapshot_id", snapshotId);
   }
 
   const suffix = query.toString();
