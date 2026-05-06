@@ -164,6 +164,8 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
                             "bu_original": bu_meta.bu_original,
                             "bu_normalized": bu_meta.bu_normalized,
                             "is_litigation": bu_meta.is_litigation,
+                            "document_number": as_optional_string(row.get("document_number")),
+                            "due_date": as_optional_string(row.get("due_date")),
                         }
                     ),
                 )

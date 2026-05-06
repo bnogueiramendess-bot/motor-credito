@@ -4,7 +4,9 @@ import {
   PortfolioAgingAlertDto,
   PortfolioAgingLatestDto,
   PortfolioCustomerDto,
+  PortfolioGroupCardDto,
   PortfolioMovementsLatestDto,
+  PortfolioOpenInvoiceDto,
   PortfolioRiskSummaryDto
 } from "@/features/portfolio/api/contracts";
 
@@ -120,4 +122,37 @@ export async function getPortfolioRiskSummary() {
   }
 
   return asRecord as unknown as PortfolioRiskSummaryDto;
+}
+
+export async function getPortfolioGroupOpenInvoices(economicGroup: string) {
+  const encodedGroup = encodeURIComponent(economicGroup);
+  const payload = await apiClient.get<unknown>(`/api/portfolio/groups/${encodedGroup}/open-invoices`);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [] as PortfolioOpenInvoiceDto[];
+  }
+  const asRecord = payload as Record<string, unknown>;
+  return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioOpenInvoiceDto[]) : [];
+}
+
+export async function getPortfolioCustomerOpenInvoices(cnpj: string) {
+  const encodedCnpj = encodeURIComponent(cnpj);
+  const payload = await apiClient.get<unknown>(`/api/portfolio/customers/${encodedCnpj}/open-invoices`);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [] as PortfolioOpenInvoiceDto[];
+  }
+  const asRecord = payload as Record<string, unknown>;
+  return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioOpenInvoiceDto[]) : [];
+}
+
+export async function getPortfolioGroups(params?: { bu?: string; q?: string }) {
+  const query = new URLSearchParams();
+  if (params?.bu) query.set("bu", params.bu);
+  if (params?.q) query.set("q", params.q);
+  const suffix = query.toString();
+  const payload = await apiClient.get<unknown>(`/api/portfolio/groups${suffix ? `?${suffix}` : ""}`);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [] as PortfolioGroupCardDto[];
+  }
+  const asRecord = payload as Record<string, unknown>;
+  return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioGroupCardDto[]) : [];
 }

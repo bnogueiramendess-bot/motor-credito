@@ -106,6 +106,50 @@ class PortfolioGroupDetailResponse(BaseModel):
     remarks: list[str]
 
 
+class PortfolioOpenInvoiceItem(BaseModel):
+    customer_name: str | None
+    cnpj: str | None
+    document_number: str | None = None
+    data_total_col_m: str | None = None
+    bu: str | None
+    open_amount: Decimal
+    due_date: date | None = None
+    status: str
+    days_overdue: int | None = None
+
+
+class PortfolioOpenInvoicesResponse(BaseModel):
+    import_meta: PortfolioImportMeta
+    total_items: int
+    items: list[PortfolioOpenInvoiceItem]
+
+
+class PortfolioGroupCardSummary(BaseModel):
+    economic_group: str
+    display_name: str
+    main_customer_name: str | None = None
+    main_cnpj: str | None = None
+    bu: str | None = None
+    total_open_amount: Decimal
+    total_not_due_amount: Decimal
+    total_overdue_amount: Decimal
+    insured_limit_amount: Decimal | None = None
+    credit_limit_amount: Decimal | None = None
+    credit_limit_available: Decimal | None = None
+    credit_limit_consumed: Decimal | None = None
+    net_exposure_amount: Decimal | None = None
+    status: str
+    is_litigation: bool = False
+    customers_count: int
+    customer_names: list[str] = []
+
+
+class PortfolioGroupsResponse(BaseModel):
+    import_meta: PortfolioImportMeta
+    total_groups: int
+    items: list[PortfolioGroupCardSummary]
+
+
 class PortfolioRiskDistributionItem(BaseModel):
     amount: float
     percentage: float

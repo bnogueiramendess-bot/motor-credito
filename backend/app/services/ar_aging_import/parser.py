@@ -395,6 +395,13 @@ def _pick_with_fallback(row: tuple[Any, ...], mapping: dict[str, int], key: str,
     return _cell(row, fallback_index)
 
 
+def _pick_optional(row: tuple[Any, ...], mapping: dict[str, int], key: str) -> Any:
+    mapped_value = _cell(row, mapping.get(key))
+    if mapped_value is not None and str(mapped_value).strip() != "":
+        return mapped_value
+    return None
+
+
 def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkbook:
     try:
         from openpyxl import load_workbook
@@ -417,8 +424,10 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
         data_total_raw,
         {
             "customer_name": ("cliente", "customer"),
+            "document_number": ("nf", "nf ", "nota fiscal", "documento", "doc", "invoice"),
+            "due_date": ("vencimento", "due date", "dt venc", "data venc"),
             "group": ("grupo", "grupo economico", "grupo economico"),
-            "open_amount": ("em aberto", "open", "saldo"),
+            "open_amount": ("valor", "em aberto", "open", "saldo"),
             "due_amount": ("not due", "a vencer", "vencer"),
             "overdue_amount": ("overdue", "vencido"),
             "aging": ("aging",),
@@ -438,9 +447,13 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
             "row_number": idx,
             "cnpj": cnpj,
             "customer_name": _pick_with_fallback(row, dt_header, "customer_name", 1),
+            # Data Total: coluna J = Numero NF, coluna F = Data de vencimento
+            "document_number": _pick_optional(row, dt_header, "document_number") or _cell(row, 9),
+            "due_date": _pick_optional(row, dt_header, "due_date") or _cell(row, 5),
             "bu": bu,
-            "group": _pick_with_fallback(row, dt_header, "group", 9),
-            "open_amount": _pick_with_fallback(row, dt_header, "open_amount", 10),
+            "group": _pick_with_fallback(row, dt_header, "group", 15),
+            # Data Total: coluna D = Valor (fonte oficial de valor em aberto)
+            "open_amount": _pick_with_fallback(row, dt_header, "open_amount", 3),
             "due_amount": _pick_with_fallback(row, dt_header, "due_amount", 11),
             "overdue_amount": _pick_with_fallback(row, dt_header, "overdue_amount", 12),
             "aging": _pick_with_fallback(row, dt_header, "aging", 13),

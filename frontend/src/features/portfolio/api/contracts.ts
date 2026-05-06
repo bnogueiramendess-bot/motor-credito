@@ -73,13 +73,54 @@ export type PortfolioCustomerDto = {
   legal_name?: string | null;
   trade_name?: string | null;
   document_number?: string | null;
-  cnpj?: string | null;
   score?: unknown;
   decision?: unknown;
   requested_limit?: number | string | null;
   suggested_limit?: number | string | null;
   final_limit?: number | string | null;
+  cnpj?: string | null;
+  customer_name?: string | null;
+  bu?: string | null;
+  economic_group?: string | null;
+  total_open_amount?: number | string | null;
+  total_overdue_amount?: number | string | null;
+  total_not_due_amount?: number | string | null;
+  insured_limit_amount?: number | string | null;
+  approved_credit_amount?: number | string | null;
+  exposure_amount?: number | string | null;
   [key: string]: unknown;
+};
+
+export type PortfolioOpenInvoiceDto = {
+  customer_name?: string | null;
+  cnpj?: string | null;
+  document_number?: string | null;
+  data_total_col_m?: string | null;
+  bu?: string | null;
+  open_amount?: number | string | null;
+  due_date?: string | null;
+  status?: "current" | "overdue" | string;
+  days_overdue?: number | null;
+};
+
+export type PortfolioGroupCardDto = {
+  economic_group: string;
+  display_name: string;
+  main_customer_name?: string | null;
+  main_cnpj?: string | null;
+  bu?: string | null;
+  total_open_amount?: number | string | null;
+  total_not_due_amount?: number | string | null;
+  total_overdue_amount?: number | string | null;
+  insured_limit_amount?: number | string | null;
+  credit_limit_amount?: number | string | null;
+  credit_limit_available?: number | string | null;
+  credit_limit_consumed?: number | string | null;
+  net_exposure_amount?: number | string | null;
+  status?: "current" | "overdue" | "at_risk" | "uncovered" | string;
+  is_litigation?: boolean;
+  customers_count?: number | null;
+  customer_names?: string[];
 };
 
 export type PortfolioAgingAlertSeverity = "critical" | "warning" | "info";

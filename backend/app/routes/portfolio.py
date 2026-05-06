@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal
 from collections import defaultdict
 import logging
@@ -22,8 +23,12 @@ from app.schemas.portfolio import (
     PortfolioCustomersResponse,
     PortfolioCustomerSummary,
     PortfolioGroupDetailResponse,
+    PortfolioGroupCardSummary,
+    PortfolioGroupsResponse,
     PortfolioGroupSummary,
     PortfolioImportMeta,
+    PortfolioOpenInvoiceItem,
+    PortfolioOpenInvoicesResponse,
     PortfolioRiskSummaryResponse,
 )
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_money, normalize_text_key
@@ -97,7 +102,7 @@ def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[s
         .group_by(ArAgingGroupConsolidatedRow.economic_group_normalized)
     ).all()
 
-    mapped: dict[str, dict[str, Decimal | None]] = {}
+    mapped: dict[str, dict[str, Decimal | None | bool]] = {}
     for group_key, overdue, not_due, aging, insured, approved_credit, exposure in rows:
         if not group_key:
             continue
@@ -108,7 +113,24 @@ def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[s
             "insured": insured,
             "approved_credit": approved_credit,
             "exposure": exposure,
+            "is_litigation": False,
         }
+
+    litigation_rows = db.execute(
+        select(
+            ArAgingGroupConsolidatedRow.economic_group_normalized,
+            ArAgingGroupConsolidatedRow.raw_payload_json,
+        ).where(ArAgingGroupConsolidatedRow.import_run_id == import_run_id)
+    ).all()
+    for group_key, raw_payload in litigation_rows:
+        if not group_key:
+            continue
+        entry = mapped.get(group_key)
+        if entry is None:
+            continue
+        if _parse_is_litigation(raw_payload):
+            entry["is_litigation"] = True
+
     return mapped
 
 
@@ -197,6 +219,58 @@ def _raw_decimal_with_fallback(raw: dict | None, key: str, fallback_col: int) ->
     if parsed > 0:
         return parsed
     return _raw_decimal(raw, f"col_{fallback_col}")
+
+
+def _parse_due_date_from_raw(raw_payload: dict | None) -> date | None:
+    if not isinstance(raw_payload, dict):
+        return None
+    candidate = raw_payload.get("due_date")
+    if candidate is None:
+        return None
+    text = str(candidate).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_open_invoice_status(*, overdue_amount: Decimal, due_date_value: date | None, base_date: date) -> tuple[str, int | None]:
+    if overdue_amount > Decimal("0"):
+        days_overdue = (base_date - due_date_value).days if due_date_value else None
+        return "overdue", days_overdue if days_overdue is None or days_overdue > 0 else 0
+    return "current", None
+
+
+def _derive_group_status(*, total_open: Decimal, overdue: Decimal, insured_limit: Decimal, net_exposure: Decimal) -> str:
+    if total_open <= 0:
+        return "current"
+    if insured_limit <= 0:
+        return "uncovered"
+    if overdue > 0 and net_exposure > 0:
+        return "at_risk"
+    if overdue > 0:
+        return "overdue"
+    return "current"
+
+
+def _fallback_group_key(customer_name: str | None, cnpj: str | None) -> str:
+    if customer_name:
+        return f"NO_GROUP::{normalize_text_key(customer_name) or customer_name.strip()}"
+    if cnpj:
+        return f"NO_GROUP::{cnpj}"
+    return "NO_GROUP::SEM_IDENTIFICACAO"
+
+
+def _is_fretes_diversos(raw_payload: dict | None) -> bool:
+    natureza = _raw_text(raw_payload, "col_13")
+    if not natureza:
+        return False
+    normalized = normalize_text_key(natureza)
+    return normalized == "FRETES DIVERSOS"
 
 
 def _build_bod_snapshot_payload(db: Session, import_run_id: int) -> dict | None:
@@ -551,6 +625,113 @@ def get_portfolio_customer(cnpj: str, db: Session = Depends(get_db)) -> Portfoli
     return PortfolioCustomerDetailResponse(import_meta=_import_meta(run), customer=customer, remarks=[r for r in remarks if r])
 
 
+@router.get("/groups", response_model=PortfolioGroupsResponse)
+def list_portfolio_groups(
+    bu: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PortfolioGroupsResponse:
+    run = _latest_valid_import_run(db)
+
+    query = select(
+        ArAgingDataTotalRow.economic_group_normalized,
+        ArAgingDataTotalRow.customer_name,
+        ArAgingDataTotalRow.cnpj_normalized,
+        ArAgingDataTotalRow.bu_normalized,
+        ArAgingDataTotalRow.open_amount,
+        ArAgingDataTotalRow.overdue_amount,
+        ArAgingDataTotalRow.due_amount,
+        ArAgingDataTotalRow.raw_payload_json,
+    ).where(ArAgingDataTotalRow.import_run_id == run.id)
+
+    bu_normalized = normalize_bu(bu).bu_normalized if bu else None
+    if bu_normalized:
+        query = query.where(ArAgingDataTotalRow.bu_normalized == bu_normalized)
+
+    rows = db.execute(query).all()
+    consolidated_by_group = _group_consolidated_map(db, run.id)
+
+    grouped: dict[str, dict] = {}
+    for group_key, customer_name, cnpj_value, bu_value, open_amount, overdue_amount, due_amount, raw_payload in rows:
+        resolved_key = group_key or _fallback_group_key(customer_name, cnpj_value)
+        entry = grouped.setdefault(
+            resolved_key,
+            {
+                "economic_group": resolved_key,
+                "display_name": group_key or customer_name or cnpj_value or "Sem grupo econômico",
+                "main_customer_name": customer_name,
+                "main_cnpj": cnpj_value,
+                "bu": bu_value,
+                "total_open_amount": Decimal("0"),
+                "total_overdue_amount": Decimal("0"),
+                "risk_overdue_amount": Decimal("0"),
+                "total_not_due_amount": Decimal("0"),
+                "customer_names": set(),
+            },
+        )
+        entry["total_open_amount"] += _derive_open_amount(open_amount, overdue_amount, due_amount)
+        entry["total_overdue_amount"] += _as_decimal(overdue_amount)
+        if not _is_fretes_diversos(raw_payload):
+            entry["risk_overdue_amount"] += _as_decimal(overdue_amount)
+        entry["total_not_due_amount"] += _as_decimal(due_amount)
+        if customer_name:
+            entry["customer_names"].add(customer_name)
+
+    query_norm = normalize_text_key(q) if q else None
+    items: list[PortfolioGroupCardSummary] = []
+    for key, entry in grouped.items():
+        if query_norm:
+            haystack = " ".join(
+                [
+                    str(entry["display_name"] or ""),
+                    str(entry["main_customer_name"] or ""),
+                    str(entry["main_cnpj"] or ""),
+                    " ".join(sorted(entry["customer_names"])),
+                ]
+            )
+            if query_norm not in normalize_text_key(haystack or ""):
+                continue
+
+        group_metrics = consolidated_by_group.get(key, {})
+        insured_limit = _as_decimal(group_metrics.get("insured"))
+        # Limite Total Aprovado: coluna F da aba Clientes Consolidados (approved_credit_amount)
+        credit_limit = _as_decimal(group_metrics.get("approved_credit"))
+        net_exposure = _as_decimal(group_metrics.get("exposure"))
+        # Regra solicitada: Limite Disponivel = Limite Total Aprovado - Valor em Aberto
+        available = credit_limit - entry["total_open_amount"] if credit_limit > 0 else -entry["total_open_amount"]
+        status_label = _derive_group_status(
+            total_open=entry["total_open_amount"],
+            overdue=entry["risk_overdue_amount"],
+            insured_limit=insured_limit,
+            net_exposure=net_exposure,
+        )
+
+        items.append(
+            PortfolioGroupCardSummary(
+                economic_group=entry["economic_group"],
+                display_name=entry["display_name"],
+                main_customer_name=entry["main_customer_name"],
+                main_cnpj=entry["main_cnpj"],
+                bu=entry["bu"],
+                total_open_amount=entry["total_open_amount"],
+                total_not_due_amount=entry["total_not_due_amount"],
+                total_overdue_amount=entry["total_overdue_amount"],
+                insured_limit_amount=insured_limit if insured_limit > 0 else None,
+                credit_limit_amount=credit_limit if credit_limit > 0 else None,
+                credit_limit_available=available,
+                credit_limit_consumed=None,
+                net_exposure_amount=net_exposure if net_exposure > 0 else None,
+                status=status_label,
+                is_litigation=bool(group_metrics.get("is_litigation") is True),
+                customers_count=len(entry["customer_names"]),
+                customer_names=sorted(entry["customer_names"]),
+            )
+        )
+
+    items.sort(key=lambda item: item.total_open_amount, reverse=True)
+    return PortfolioGroupsResponse(import_meta=_import_meta(run), total_groups=len(items), items=items)
+
+
 @router.get("/groups/{economic_group}", response_model=PortfolioGroupDetailResponse)
 def get_portfolio_group(economic_group: str, db: Session = Depends(get_db)) -> PortfolioGroupDetailResponse:
     run = _latest_valid_import_run(db)
@@ -631,3 +812,119 @@ def get_portfolio_group(economic_group: str, db: Session = Depends(get_db)) -> P
     )
 
     return PortfolioGroupDetailResponse(import_meta=_import_meta(run), group=group, customers=customers, remarks=[r for r in remarks if r])
+
+
+@router.get("/groups/{economic_group}/open-invoices", response_model=PortfolioOpenInvoicesResponse)
+def list_group_open_invoices(economic_group: str, db: Session = Depends(get_db)) -> PortfolioOpenInvoicesResponse:
+    run = _latest_valid_import_run(db)
+    group_key = normalize_text_key(economic_group)
+    if group_key is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Grupo economico invalido.")
+    base_select = select(
+        ArAgingDataTotalRow.customer_name,
+        ArAgingDataTotalRow.cnpj_normalized,
+        ArAgingDataTotalRow.bu_normalized,
+        ArAgingDataTotalRow.open_amount,
+        ArAgingDataTotalRow.overdue_amount,
+        ArAgingDataTotalRow.due_amount,
+        ArAgingDataTotalRow.raw_payload_json,
+    ).where(
+        ArAgingDataTotalRow.import_run_id == run.id,
+    )
+
+    if group_key.startswith("NO_GROUP::"):
+        fallback_token = group_key.replace("NO_GROUP::", "", 1)
+        rows = db.execute(
+            base_select.where(
+                ArAgingDataTotalRow.economic_group_normalized.is_(None),
+                or_(
+                    ArAgingDataTotalRow.cnpj_normalized == fallback_token,
+                    func.upper(func.coalesce(ArAgingDataTotalRow.customer_name, "")) == fallback_token,
+                ),
+            )
+        ).all()
+    else:
+        rows = db.execute(base_select.where(ArAgingDataTotalRow.economic_group_normalized == group_key)).all()
+
+    items: list[PortfolioOpenInvoiceItem] = []
+    for customer_name, cnpj_value, bu_value, open_amount, overdue_amount, due_amount, raw_payload in rows:
+        resolved_open_amount = _as_decimal(open_amount)
+        if resolved_open_amount <= 0:
+            continue
+        due_date_value = _parse_due_date_from_raw(raw_payload)
+        row_status, days_overdue = _resolve_open_invoice_status(
+            overdue_amount=_as_decimal(overdue_amount),
+            due_date_value=due_date_value,
+            base_date=run.base_date,
+        )
+        document_number = _raw_text(raw_payload, "document_number")
+        col_m_value = _raw_text(raw_payload, "col_13")
+        items.append(
+            PortfolioOpenInvoiceItem(
+                customer_name=customer_name,
+                cnpj=cnpj_value,
+                document_number=document_number,
+                data_total_col_m=col_m_value,
+                bu=bu_value,
+                open_amount=resolved_open_amount,
+                due_date=due_date_value,
+                status=row_status,
+                days_overdue=days_overdue,
+            )
+        )
+
+    items.sort(key=lambda item: item.open_amount, reverse=True)
+    return PortfolioOpenInvoicesResponse(import_meta=_import_meta(run), total_items=len(items), items=items)
+
+
+@router.get("/customers/{cnpj}/open-invoices", response_model=PortfolioOpenInvoicesResponse)
+def list_customer_open_invoices(cnpj: str, db: Session = Depends(get_db)) -> PortfolioOpenInvoicesResponse:
+    run = _latest_valid_import_run(db)
+    cnpj_normalized = normalize_cnpj(cnpj)
+    if not cnpj_normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CNPJ invalido.")
+
+    rows = db.execute(
+        select(
+            ArAgingDataTotalRow.customer_name,
+            ArAgingDataTotalRow.cnpj_normalized,
+            ArAgingDataTotalRow.bu_normalized,
+            ArAgingDataTotalRow.open_amount,
+            ArAgingDataTotalRow.overdue_amount,
+            ArAgingDataTotalRow.due_amount,
+            ArAgingDataTotalRow.raw_payload_json,
+        ).where(
+            ArAgingDataTotalRow.import_run_id == run.id,
+            ArAgingDataTotalRow.cnpj_normalized == cnpj_normalized,
+        )
+    ).all()
+
+    items: list[PortfolioOpenInvoiceItem] = []
+    for customer_name, cnpj_value, bu_value, open_amount, overdue_amount, due_amount, raw_payload in rows:
+        resolved_open_amount = _as_decimal(open_amount)
+        if resolved_open_amount <= 0:
+            continue
+        due_date_value = _parse_due_date_from_raw(raw_payload)
+        row_status, days_overdue = _resolve_open_invoice_status(
+            overdue_amount=_as_decimal(overdue_amount),
+            due_date_value=due_date_value,
+            base_date=run.base_date,
+        )
+        document_number = _raw_text(raw_payload, "document_number")
+        col_m_value = _raw_text(raw_payload, "col_13")
+        items.append(
+            PortfolioOpenInvoiceItem(
+                customer_name=customer_name,
+                cnpj=cnpj_value,
+                document_number=document_number,
+                data_total_col_m=col_m_value,
+                bu=bu_value,
+                open_amount=resolved_open_amount,
+                due_date=due_date_value,
+                status=row_status,
+                days_overdue=days_overdue,
+            )
+        )
+
+    items.sort(key=lambda item: item.open_amount, reverse=True)
+    return PortfolioOpenInvoicesResponse(import_meta=_import_meta(run), total_items=len(items), items=items)
