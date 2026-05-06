@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
-import { FileUp } from "lucide-react";
+import { FileUp, Settings } from "lucide-react";
 
+import { resetOperationalData } from "@/features/admin/api/admin.api";
 import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
+import { OPEN_AGING_IMPORT_DRAWER_EVENT } from "@/shared/lib/events";
+import { ApiError } from "@/shared/lib/http/http-client";
 import { cn } from "@/shared/lib/utils";
 
 type NavItem = {
@@ -139,10 +142,40 @@ export function AppTopbar() {
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
+  const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
+  const [isResettingBase, setIsResettingBase] = useState(false);
   const openGroup = navGroups.find((group) => group.id === openGroupId) ?? null;
 
   function toggleGroup(groupId: string) {
     setOpenGroupId((current) => (current === groupId ? null : groupId));
+  }
+
+  useEffect(() => {
+    const openDrawer = () => setIsImportDrawerOpen(true);
+    window.addEventListener(OPEN_AGING_IMPORT_DRAWER_EVENT, openDrawer);
+    return () => window.removeEventListener(OPEN_AGING_IMPORT_DRAWER_EVENT, openDrawer);
+  }, []);
+
+  async function handleResetOperationalData() {
+    setIsSettingsMenuOpen(false);
+    const confirmation = window.prompt(
+      'Esta ação limpará todos os dados operacionais. Digite "Confirmo" para confirmar:'
+    );
+    if (confirmation !== "Confirmo") {
+      return;
+    }
+
+    setIsResettingBase(true);
+    try {
+      const response = await resetOperationalData("RESET_OPERATIONAL_DATA");
+      window.alert(`Reset concluído com sucesso. Registros removidos: ${response.total_deleted}.`);
+      window.location.reload();
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : "Falha ao executar reset operacional.";
+      window.alert(message);
+    } finally {
+      setIsResettingBase(false);
+    }
   }
 
   return (
@@ -188,6 +221,29 @@ export function AppTopbar() {
           <div className="hidden h-8 w-px bg-[#334155] xl:block" aria-hidden="true" />
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsSettingsMenuOpen((current) => !current)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E2E8F0]/40 bg-white/5 text-[#E2E8F0] transition hover:bg-white/10"
+                aria-label="Configurações"
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+              {isSettingsMenuOpen ? (
+                <div className="absolute right-0 top-12 z-40 min-w-[220px] rounded-lg border border-[#dbe3ef] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
+                  <button
+                    type="button"
+                    onClick={() => void handleResetOperationalData()}
+                    disabled={isResettingBase}
+                    className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isResettingBase ? "Resetando base..." : "Reset da Base"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
             <button
               type="button"
               onClick={() => setIsImportDrawerOpen(true)}

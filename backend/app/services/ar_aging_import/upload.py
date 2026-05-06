@@ -118,10 +118,12 @@ def create_ar_aging_import_run(db: Session, payload: ArAgingImportCreate) -> ArA
     if is_monthly_closing and closing_month and closing_year:
         existing = _find_official_monthly_closing(db, month=closing_month, year=closing_year)
         if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Já existe um fechamento oficial para {closing_month:02d}/{closing_year}.",
-            )
+            if not payload.overwrite:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Já existe um fechamento oficial para {closing_month:02d}/{closing_year}.",
+                )
+            existing.closing_status = "superseded"
 
     entry = ArAgingImportRun(
         base_date=base_date,

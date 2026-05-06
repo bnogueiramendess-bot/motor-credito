@@ -13,6 +13,7 @@ import { ErrorState } from "@/shared/components/states/error-state";
 import { Badge } from "@/shared/components/ui/badge";
 import { Button } from "@/shared/components/ui/button";
 import { Skeleton } from "@/shared/components/ui/skeleton";
+import { openAgingImportDrawer } from "@/shared/lib/events";
 import { cn } from "@/shared/lib/utils";
 
 type SortOption = "open_desc" | "overdue_desc" | "net_exposure_desc" | "consumed_limit_desc";
@@ -213,6 +214,15 @@ export function PortfolioCustomersPage() {
     });
   }, [query.data, status, sortBy]);
 
+  const isInitialPortfolioImplantation =
+    !query.isLoading &&
+    !query.isError &&
+    filteredGroups.length === 0 &&
+    (snapshotsQuery.data?.length ?? 0) === 0 &&
+    !search.trim() &&
+    bu === "Todos" &&
+    status === "Todos";
+
   return (
     <section className="space-y-4">
       <header className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
@@ -253,7 +263,15 @@ export function PortfolioCustomersPage() {
 
       {query.isLoading ? <div className="space-y-3">{[...Array.from({ length: 4 })].map((_, index) => <div key={index} className="rounded-2xl border border-[#e2e8f0] bg-white p-4"><Skeleton className="h-6 w-1/3" /><Skeleton className="mt-3 h-5 w-full" /></div>)}</div> : null}
       {query.isError ? <ErrorState title="Falha ao carregar carteira" description="Nao foi possivel carregar os grupos da carteira." onRetry={query.refetch} /> : null}
-      {!query.isLoading && !query.isError && filteredGroups.length === 0 ? <EmptyState title="Nenhum grupo encontrado" description="Ajuste os filtros para visualizar grupos da carteira." /> : null}
+      {!query.isLoading && !query.isError && filteredGroups.length === 0 && isInitialPortfolioImplantation ? (
+        <EmptyState
+          title="Ambiente pronto para a primeira importação AR Aging"
+          description="Importe o relatório AR Aging para iniciar a gestão da carteira de clientes, acompanhar exposição, inadimplência, limites e snapshots históricos."
+          actionLabel="Importar AR Aging"
+          onActionClick={openAgingImportDrawer}
+        />
+      ) : null}
+      {!query.isLoading && !query.isError && filteredGroups.length === 0 && !isInitialPortfolioImplantation ? <EmptyState title="Nenhum grupo encontrado" description="Ajuste os filtros para visualizar grupos da carteira." /> : null}
       {!query.isLoading && !query.isError && filteredGroups.length > 0 ? <div className="space-y-3">{filteredGroups.map((group) => <PortfolioGroupCard key={group.economic_group} group={group} snapshotId={selectedSnapshotId} />)}</div> : null}
     </section>
   );

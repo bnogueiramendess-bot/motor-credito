@@ -56,11 +56,18 @@ class ParsedAgingWorkbook:
 
 
 def extract_base_date_from_filename(filename: str) -> date:
-    match = re.search(r"(\d{2})(\d{2})(\d{4})", filename)
-    if not match:
-        raise ValueError("Nao foi possivel extrair a data-base do nome do arquivo.")
-    day, month, year = match.groups()
-    return date(int(year), int(month), int(day))
+    # Preferred format: DDMMAAAA, but also support DDMMAA (assumed 2000+YY).
+    match_8 = re.search(r"(?<!\d)(\d{2})(\d{2})(\d{4})(?!\d)", filename)
+    if match_8:
+        day, month, year = match_8.groups()
+        return date(int(year), int(month), int(day))
+
+    match_6 = re.search(r"(?<!\d)(\d{2})(\d{2})(\d{2})(?!\d)", filename)
+    if match_6:
+        day, month, year_2d = match_6.groups()
+        return date(2000 + int(year_2d), int(month), int(day))
+
+    raise ValueError("Nao foi possivel extrair a data-base do nome do arquivo.")
 
 
 def _extract_base_date_or_today(filename: str, warnings: list[str]) -> date:

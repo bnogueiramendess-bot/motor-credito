@@ -1,4 +1,5 @@
 import { apiClient } from "@/shared/lib/http/http-client";
+import { ApiError } from "@/shared/lib/http/http-client";
 
 import {
   PortfolioAgingAlertDto,
@@ -16,6 +17,23 @@ type PortfolioQueryParams = {
   bu?: string;
   snapshot_id?: string;
 };
+
+function normalizeText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function isNoAgingImportError(error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 404) {
+    return false;
+  }
+
+  const normalizedMessage = normalizeText(error.message ?? "");
+  return normalizedMessage.includes("nao existe importacao aging ar valida");
+}
 
 function buildQuery(params?: PortfolioQueryParams) {
   const query = new URLSearchParams();
@@ -36,7 +54,15 @@ function buildQuery(params?: PortfolioQueryParams) {
 }
 
 export async function getPortfolioAgingLatest(params?: Pick<PortfolioQueryParams, "bu">) {
-  const payload = await apiClient.get<unknown>(`/api/portfolio/aging/latest${buildQuery(params)}`);
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>(`/api/portfolio/aging/latest${buildQuery(params)}`);
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return null;
+    }
+    throw error;
+  }
 
   if (!payload || typeof payload !== "object") {
     return null;
@@ -69,7 +95,15 @@ export async function getPortfolioAgingLatest(params?: Pick<PortfolioQueryParams
 }
 
 export async function getPortfolioCustomers(params?: PortfolioQueryParams) {
-  const payload = await apiClient.get<unknown>(`/api/portfolio/customers${buildQuery(params)}`);
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>(`/api/portfolio/customers${buildQuery(params)}`);
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return [] as PortfolioCustomerDto[];
+    }
+    throw error;
+  }
 
   if (Array.isArray(payload)) {
     return payload as PortfolioCustomerDto[];
@@ -87,7 +121,15 @@ export async function getPortfolioCustomers(params?: PortfolioQueryParams) {
 }
 
 export async function getPortfolioAgingAlertsLatest() {
-  const payload = await apiClient.get<unknown>("/api/portfolio/aging/alerts/latest");
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>("/api/portfolio/aging/alerts/latest");
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return [] as PortfolioAgingAlertDto[];
+    }
+    throw error;
+  }
   if (!payload || typeof payload !== "object") {
     return [];
   }
@@ -103,7 +145,15 @@ export async function getPortfolioAgingAlertsLatest() {
 
 export async function getPortfolioAgingAlertsLatestBySnapshot(snapshotId?: string) {
   const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
-  const payload = await apiClient.get<unknown>(`/api/portfolio/aging/alerts/latest${suffix}`);
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>(`/api/portfolio/aging/alerts/latest${suffix}`);
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return [] as PortfolioAgingAlertDto[];
+    }
+    throw error;
+  }
   if (!payload || typeof payload !== "object") {
     return [] as PortfolioAgingAlertDto[];
   }
@@ -113,7 +163,20 @@ export async function getPortfolioAgingAlertsLatestBySnapshot(snapshotId?: strin
 
 export async function getPortfolioAgingMovementsLatest(snapshotId?: string) {
   const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
-  const payload = await apiClient.get<unknown>(`/api/portfolio/aging/movements/latest${suffix}`);
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>(`/api/portfolio/aging/movements/latest${suffix}`);
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return {
+        base_date: "",
+        previous_base_date: null,
+        message: "Ainda não há base importada de Aging AR.",
+        movements: []
+      } as PortfolioMovementsLatestDto;
+    }
+    throw error;
+  }
   if (!payload || typeof payload !== "object") {
     return { base_date: "", previous_base_date: null, message: "Ainda não há base anterior suficiente para comparação.", movements: [] } as PortfolioMovementsLatestDto;
   }
@@ -127,7 +190,15 @@ export async function getPortfolioAgingMovementsLatest(snapshotId?: string) {
 }
 
 export async function getPortfolioRiskSummary() {
-  const payload = await apiClient.get<unknown>("/api/portfolio/risk-summary");
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>("/api/portfolio/risk-summary");
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return null;
+    }
+    throw error;
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
@@ -142,7 +213,15 @@ export async function getPortfolioRiskSummary() {
 
 export async function getPortfolioRiskSummaryBySnapshot(snapshotId?: string) {
   const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
-  const payload = await apiClient.get<unknown>(`/api/portfolio/risk-summary${suffix}`);
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>(`/api/portfolio/risk-summary${suffix}`);
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return null;
+    }
+    throw error;
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
@@ -181,7 +260,15 @@ export async function getPortfolioGroups(params?: { bu?: string; q?: string; sna
   if (params?.q) query.set("q", params.q);
   if (params?.snapshot_id) query.set("snapshot_id", params.snapshot_id);
   const suffix = query.toString();
-  const payload = await apiClient.get<unknown>(`/api/portfolio/groups${suffix ? `?${suffix}` : ""}`);
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>(`/api/portfolio/groups${suffix ? `?${suffix}` : ""}`);
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return [] as PortfolioGroupCardDto[];
+    }
+    throw error;
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return [] as PortfolioGroupCardDto[];
   }
@@ -190,7 +277,15 @@ export async function getPortfolioGroups(params?: { bu?: string; q?: string; sna
 }
 
 export async function getPortfolioSnapshots() {
-  const payload = await apiClient.get<unknown>("/api/portfolio/snapshots");
+  let payload: unknown;
+  try {
+    payload = await apiClient.get<unknown>("/api/portfolio/snapshots");
+  } catch (error) {
+    if (isNoAgingImportError(error)) {
+      return [] as PortfolioSnapshotDto[];
+    }
+    throw error;
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return [] as PortfolioSnapshotDto[];
   }

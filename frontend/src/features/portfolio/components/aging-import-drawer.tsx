@@ -55,6 +55,22 @@ function statusTone(status: AgingImportItem["status"]) {
   return "bg-slate-50 text-slate-700 border-slate-200";
 }
 
+function closingStatusBadge(item: AgingImportItem): { label: string; className: string } | null {
+  if (item.closing_status === "superseded") {
+    return {
+      label: "Base substituída",
+      className: "border border-slate-200 bg-slate-100 text-slate-700"
+    };
+  }
+  if (item.closing_status === "cancelled") {
+    return {
+      label: "Fechamento cancelado",
+      className: "border border-rose-200 bg-rose-50 text-rose-700"
+    };
+  }
+  return null;
+}
+
 export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps) {
   const queryClient = useQueryClient();
   const currentUserName = useMemo(() => getCurrentUserDisplayName(), []);
@@ -293,7 +309,7 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
             {duplicateMessage ? (
               <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{duplicateMessage}</div>
             ) : null}
-            {drawerErrorMessage ? (
+            {drawerErrorMessage && !duplicateMessage ? (
               <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{drawerErrorMessage}</div>
             ) : null}
 
@@ -338,6 +354,7 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
               {historyQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar o histórico.</p> : null}
               {sortedHistory.map((item) => {
                   const isCurrentBase = currentBaseId === item.id;
+                  const closingBadge = closingStatusBadge(item);
                   return (
                 <article key={item.id} className="rounded-lg border border-[#e2e8f0] bg-white p-3">
                   <div className="flex items-start justify-between gap-2">
@@ -348,6 +365,9 @@ export function AgingImportDrawer({ open, onOpenChange }: AgingImportDrawerProps
                     </div>
                     <div className="flex flex-col items-end gap-1">
                       <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold", statusTone(item.status))}>{statusLabel(item.status)}</span>
+                      {closingBadge ? (
+                        <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", closingBadge.className)}>{closingBadge.label}</span>
+                      ) : null}
                       {isCurrentBase ? <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">Base atual</span> : null}
                     </div>
                   </div>

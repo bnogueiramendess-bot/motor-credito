@@ -9,7 +9,9 @@ import { PortfolioMovementDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
 import { usePortfolioAgingMovementsLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-movements-latest-query";
 import { usePortfolioSnapshotsQuery } from "@/features/portfolio/hooks/use-portfolio-snapshots-query";
+import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { openAgingImportDrawer } from "@/shared/lib/events";
 import { cn } from "@/shared/lib/utils";
 
 type DashboardPageViewProps = {
@@ -387,10 +389,12 @@ export function DashboardPageView(_: DashboardPageViewProps) {
       </section>
 
       {hasNoImport ? (
-        <div className="rounded-2xl border border-[#e2e8f0] bg-gradient-to-br from-white to-[#f8fbff] px-6 py-6 shadow-sm">
-          <h3 className="text-base font-semibold text-[#0f172a]">Nenhum dado de carteira disponível</h3>
-          <p className="mt-1 text-sm text-[#64748b]">Importe dados de aging para visualizar os KPIs e gráficos executivos.</p>
-        </div>
+        <EmptyState
+          title="Ambiente pronto para a primeira importação AR Aging"
+          description="Importe o relatório AR Aging para iniciar a gestão da carteira de clientes, acompanhar exposição, inadimplência, limites e snapshots históricos."
+          actionLabel="Importar AR Aging"
+          onActionClick={openAgingImportDrawer}
+        />
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
