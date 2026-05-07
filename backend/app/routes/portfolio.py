@@ -32,11 +32,17 @@ from app.schemas.portfolio import (
     PortfolioOpenInvoiceItem,
     PortfolioOpenInvoicesResponse,
     PortfolioRiskSummaryResponse,
+    PortfolioComparisonGroupDelta,
+    PortfolioComparisonMetric,
+    PortfolioComparisonResponse,
+    PortfolioComparisonSnapshot,
+    PortfolioComparisonSummary,
+    PortfolioComparisonWaterfall,
 )
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_money, normalize_text_key
 from app.services.portfolio_alerts import build_latest_portfolio_alerts
 from app.services.portfolio_movements import build_latest_portfolio_movements
-from app.services.portfolio_snapshots import resolve_snapshot_import_run
+from app.services.portfolio_snapshots import resolve_monthly_closing_snapshot, resolve_snapshot_import_run
 from app.services.portfolio_risk_service import (
     calculate_portfolio_risk_from_bod,
     calculate_portfolio_risk_from_bod_raw_rows,
@@ -226,6 +232,139 @@ def _raw_decimal_with_fallback(raw: dict | None, key: str, fallback_col: int) ->
     if parsed > 0:
         return parsed
     return _raw_decimal(raw, f"col_{fallback_col}")
+
+
+def _build_comparison_snapshot(snapshot_id: str, run: ArAgingImportRun) -> PortfolioComparisonSnapshot:
+    normalized = snapshot_id.strip().lower()
+    if normalized == "current":
+        label = "Atual"
+    else:
+        label = run.closing_label or f"Fechamento {run.closing_month:02d}/{run.closing_year}"
+
+    return PortfolioComparisonSnapshot(
+        id=snapshot_id,
+        label=label,
+        base_date=run.base_date,
+        import_run_id=run.id,
+        closing_month=run.closing_month,
+        closing_year=run.closing_year,
+    )
+
+
+def _build_metric(from_value: Decimal, to_value: Decimal) -> PortfolioComparisonMetric:
+    delta = to_value - from_value
+    delta_pct = None if from_value == Decimal("0") else (delta / from_value) * Decimal("100")
+    return PortfolioComparisonMetric(
+        from_value=from_value,
+        to_value=to_value,
+        delta=delta,
+        delta_pct=delta_pct,
+    )
+
+
+def _group_base_map(db: Session, import_run_id: int) -> dict[str, dict[str, Decimal | int]]:
+    consolidated_rows = db.execute(
+        select(
+            ArAgingGroupConsolidatedRow.economic_group_normalized,
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.overdue_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.not_due_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
+            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.exposure_amount), 0),
+        )
+        .where(
+            ArAgingGroupConsolidatedRow.import_run_id == import_run_id,
+            ArAgingGroupConsolidatedRow.economic_group_normalized.is_not(None),
+        )
+        .group_by(ArAgingGroupConsolidatedRow.economic_group_normalized)
+    ).all()
+
+    data_total_rows = db.execute(
+        select(
+            ArAgingDataTotalRow.economic_group_normalized,
+            func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
+            func.coalesce(func.sum(ArAgingDataTotalRow.overdue_amount), 0),
+            func.coalesce(func.sum(ArAgingDataTotalRow.due_amount), 0),
+            func.count(func.distinct(ArAgingDataTotalRow.cnpj_normalized)),
+        )
+        .where(
+            ArAgingDataTotalRow.import_run_id == import_run_id,
+            ArAgingDataTotalRow.economic_group_normalized.is_not(None),
+        )
+        .group_by(ArAgingDataTotalRow.economic_group_normalized)
+    ).all()
+
+    data_total_map: dict[str, dict[str, Decimal | int]] = {}
+    for group_key, open_amount, overdue_amount, not_due_amount, count in data_total_rows:
+        if not group_key:
+            continue
+        data_total_map[group_key] = {
+            "total_open_amount": _derive_open_amount(open_amount, overdue_amount, not_due_amount),
+            "total_overdue_amount": _as_decimal(overdue_amount),
+            "total_not_due_amount": _as_decimal(not_due_amount),
+            "customers_count": int(count or 0),
+        }
+
+    result: dict[str, dict[str, Decimal | int]] = {}
+    for group_key, aging_amount, overdue_amount, not_due_amount, insured_limit_amount, exposure_amount in consolidated_rows:
+        if not group_key:
+            continue
+        total_open = _derive_open_amount(aging_amount, overdue_amount, not_due_amount)
+        data_total_metrics = data_total_map.get(group_key, {})
+        result[group_key] = {
+            "total_open_amount": total_open,
+            "total_overdue_amount": _as_decimal(overdue_amount),
+            "total_not_due_amount": _as_decimal(not_due_amount),
+            "insured_limit_amount": _as_decimal(insured_limit_amount),
+            "exposure_amount": _as_decimal(exposure_amount),
+            "customers_count": int(data_total_metrics.get("customers_count", 0)),
+        }
+
+    # Fallback de robustez: se um grupo nao vier na aba Clientes Consolidados,
+    # preserva o grupo com base na Data Total para nao quebrar a comparacao.
+    for group_key, metrics in data_total_map.items():
+        if group_key in result:
+            continue
+        result[group_key] = {
+            "total_open_amount": _as_decimal(metrics.get("total_open_amount")),  # type: ignore[arg-type]
+            "total_overdue_amount": _as_decimal(metrics.get("total_overdue_amount")),  # type: ignore[arg-type]
+            "total_not_due_amount": _as_decimal(metrics.get("total_not_due_amount")),  # type: ignore[arg-type]
+            "insured_limit_amount": Decimal("0"),
+            "exposure_amount": Decimal("0"),
+            "customers_count": int(metrics.get("customers_count", 0)),
+        }
+    return result
+
+
+def _build_group_delta(group_name: str, from_row: dict[str, Decimal | int], to_row: dict[str, Decimal | int]) -> PortfolioComparisonGroupDelta:
+    from_open = _as_decimal(from_row.get("total_open_amount"))  # type: ignore[arg-type]
+    to_open = _as_decimal(to_row.get("total_open_amount"))  # type: ignore[arg-type]
+    from_exposure = _as_decimal(from_row.get("exposure_amount"))  # type: ignore[arg-type]
+    to_exposure = _as_decimal(to_row.get("exposure_amount"))  # type: ignore[arg-type]
+    from_overdue = _as_decimal(from_row.get("total_overdue_amount"))  # type: ignore[arg-type]
+    to_overdue = _as_decimal(to_row.get("total_overdue_amount"))  # type: ignore[arg-type]
+    delta_open = to_open - from_open
+    delta_exposure = to_exposure - from_exposure
+    delta_overdue = to_overdue - from_overdue
+    delta_pct = None if from_open == Decimal("0") else (delta_open / from_open) * Decimal("100")
+    delta_exposure_pct = None if from_exposure == Decimal("0") else (delta_exposure / from_exposure) * Decimal("100")
+
+    return PortfolioComparisonGroupDelta(
+        economic_group=group_name,
+        from_total_open_amount=from_open,
+        to_total_open_amount=to_open,
+        delta_total_open_amount=delta_open,
+        delta_pct=delta_pct,
+        from_exposure_amount=from_exposure,
+        to_exposure_amount=to_exposure,
+        delta_exposure_amount=delta_exposure,
+        delta_exposure_pct=delta_exposure_pct,
+        from_overdue_amount=from_overdue,
+        to_overdue_amount=to_overdue,
+        delta_overdue_amount=delta_overdue,
+        customers_count_from=int(from_row.get("customers_count", 0)),
+        customers_count_to=int(to_row.get("customers_count", 0)),
+    )
 
 
 def _parse_due_date_from_raw(raw_payload: dict | None) -> date | None:
@@ -511,6 +650,133 @@ def get_latest_aging_summary(
         totals=payload_totals,
         warnings=run.warnings_json or [],
         bod_snapshot=_build_bod_snapshot_payload(db, run.id),
+    )
+
+
+@router.get("/comparison", response_model=PortfolioComparisonResponse)
+def get_portfolio_comparison(
+    from_snapshot_id: str = Query(...),
+    to_snapshot_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> PortfolioComparisonResponse:
+    normalized_from = from_snapshot_id.strip().lower()
+    normalized_to = to_snapshot_id.strip().lower()
+
+    if normalized_from == normalized_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Snapshots de origem e destino devem ser diferentes.",
+        )
+
+    if normalized_from == "current":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Snapshot de origem deve ser um fechamento mensal oficial.",
+        )
+
+    from_run = resolve_monthly_closing_snapshot(db, from_snapshot_id)
+    to_run = resolve_snapshot_import_run(db, to_snapshot_id) if normalized_to == "current" else resolve_monthly_closing_snapshot(db, to_snapshot_id)
+
+    from_groups = _group_base_map(db, from_run.id)
+    to_groups = _group_base_map(db, to_run.id)
+    all_group_names = sorted(set(from_groups.keys()) | set(to_groups.keys()))
+
+    zero_row = {
+        "total_open_amount": Decimal("0"),
+        "total_overdue_amount": Decimal("0"),
+        "total_not_due_amount": Decimal("0"),
+        "insured_limit_amount": Decimal("0"),
+        "exposure_amount": Decimal("0"),
+        "customers_count": 0,
+    }
+
+    deltas: list[PortfolioComparisonGroupDelta] = []
+    for group_name in all_group_names:
+        deltas.append(
+            _build_group_delta(
+                group_name,
+                from_groups.get(group_name, zero_row),
+                to_groups.get(group_name, zero_row),
+            )
+        )
+
+    from_total_open = sum((_as_decimal(group["total_open_amount"]) for group in from_groups.values()), Decimal("0"))
+    to_total_open = sum((_as_decimal(group["total_open_amount"]) for group in to_groups.values()), Decimal("0"))
+    from_total_overdue = sum((_as_decimal(group["total_overdue_amount"]) for group in from_groups.values()), Decimal("0"))
+    to_total_overdue = sum((_as_decimal(group["total_overdue_amount"]) for group in to_groups.values()), Decimal("0"))
+    from_total_not_due = sum((_as_decimal(group["total_not_due_amount"]) for group in from_groups.values()), Decimal("0"))
+    to_total_not_due = sum((_as_decimal(group["total_not_due_amount"]) for group in to_groups.values()), Decimal("0"))
+    from_insured = sum((_as_decimal(group["insured_limit_amount"]) for group in from_groups.values()), Decimal("0"))
+    to_insured = sum((_as_decimal(group["insured_limit_amount"]) for group in to_groups.values()), Decimal("0"))
+    from_exposure = sum((_as_decimal(group["exposure_amount"]) for group in from_groups.values()), Decimal("0"))
+    to_exposure = sum((_as_decimal(group["exposure_amount"]) for group in to_groups.values()), Decimal("0"))
+    from_customers = sum((int(group["customers_count"]) for group in from_groups.values()))
+    to_customers = sum((int(group["customers_count"]) for group in to_groups.values()))
+    from_groups_count = len(from_groups)
+    to_groups_count = len(to_groups)
+
+    top_increases = sorted(
+        [item for item in deltas if item.delta_exposure_amount > 0],
+        key=lambda item: item.delta_exposure_amount,
+        reverse=True,
+    )[:10]
+    top_decreases = sorted(
+        [item for item in deltas if item.delta_exposure_amount < 0],
+        key=lambda item: item.delta_exposure_amount,
+    )[:10]
+    new_groups = [item for item in deltas if item.from_exposure_amount == 0 and item.to_exposure_amount > 0][:10]
+    removed_groups = [item for item in deltas if item.from_exposure_amount > 0 and item.to_exposure_amount == 0][:10]
+
+    new_groups_amount = sum((item.to_total_open_amount for item in deltas if item.from_total_open_amount == 0 and item.to_total_open_amount > 0), Decimal("0"))
+    removed_groups_amount = sum((item.delta_total_open_amount for item in deltas if item.from_total_open_amount > 0 and item.to_total_open_amount == 0), Decimal("0"))
+    existing_growth_amount = sum(
+        (
+            item.delta_total_open_amount
+            for item in deltas
+            if item.from_total_open_amount > 0 and item.to_total_open_amount > 0 and item.delta_total_open_amount > 0
+        ),
+        Decimal("0"),
+    )
+    existing_reduction_amount = sum(
+        (
+            item.delta_total_open_amount
+            for item in deltas
+            if item.from_total_open_amount > 0 and item.to_total_open_amount > 0 and item.delta_total_open_amount < 0
+        ),
+        Decimal("0"),
+    )
+
+    waterfall_total = from_total_open + new_groups_amount + existing_growth_amount + existing_reduction_amount + removed_groups_amount
+    if waterfall_total != to_total_open:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Falha ao fechar composicao do waterfall da comparacao.",
+        )
+
+    return PortfolioComparisonResponse(
+        from_snapshot=_build_comparison_snapshot(from_snapshot_id, from_run),
+        to_snapshot=_build_comparison_snapshot(to_snapshot_id, to_run),
+        summary=PortfolioComparisonSummary(
+            total_open_amount=_build_metric(from_total_open, to_total_open),
+            total_overdue_amount=_build_metric(from_total_overdue, to_total_overdue),
+            total_not_due_amount=_build_metric(from_total_not_due, to_total_not_due),
+            insured_limit_amount=_build_metric(from_insured, to_insured),
+            exposure_amount=_build_metric(from_exposure, to_exposure),
+            customers_count=_build_metric(Decimal(from_customers), Decimal(to_customers)),
+            groups_count=_build_metric(Decimal(from_groups_count), Decimal(to_groups_count)),
+        ),
+        waterfall=PortfolioComparisonWaterfall(
+            starting_amount=from_total_open,
+            new_groups_amount=new_groups_amount,
+            existing_growth_amount=existing_growth_amount,
+            existing_reduction_amount=existing_reduction_amount,
+            removed_groups_amount=removed_groups_amount,
+            ending_amount=to_total_open,
+        ),
+        top_increases=top_increases,
+        top_decreases=top_decreases,
+        new_groups=new_groups,
+        removed_groups=removed_groups,
     )
 
 

@@ -197,3 +197,66 @@ class PortfolioRiskSummaryResponse(BaseModel):
     clients_at_risk: int
     distribution: PortfolioRiskDistribution
     top_clients_at_risk: list[TopClientAtRiskItem]
+
+
+class PortfolioComparisonSnapshot(BaseModel):
+    id: str
+    label: str
+    base_date: date
+    import_run_id: int
+    closing_month: int | None = None
+    closing_year: int | None = None
+
+
+class PortfolioComparisonMetric(BaseModel):
+    from_value: Decimal
+    to_value: Decimal
+    delta: Decimal
+    delta_pct: Decimal | None
+
+
+class PortfolioComparisonGroupDelta(BaseModel):
+    economic_group: str
+    from_total_open_amount: Decimal
+    to_total_open_amount: Decimal
+    delta_total_open_amount: Decimal
+    delta_pct: Decimal | None
+    from_exposure_amount: Decimal
+    to_exposure_amount: Decimal
+    delta_exposure_amount: Decimal
+    delta_exposure_pct: Decimal | None
+    from_overdue_amount: Decimal
+    to_overdue_amount: Decimal
+    delta_overdue_amount: Decimal
+    customers_count_from: int
+    customers_count_to: int
+
+
+class PortfolioComparisonSummary(BaseModel):
+    total_open_amount: PortfolioComparisonMetric
+    total_overdue_amount: PortfolioComparisonMetric
+    total_not_due_amount: PortfolioComparisonMetric
+    insured_limit_amount: PortfolioComparisonMetric
+    exposure_amount: PortfolioComparisonMetric
+    customers_count: PortfolioComparisonMetric
+    groups_count: PortfolioComparisonMetric
+
+
+class PortfolioComparisonWaterfall(BaseModel):
+    starting_amount: Decimal
+    new_groups_amount: Decimal
+    existing_growth_amount: Decimal
+    existing_reduction_amount: Decimal
+    removed_groups_amount: Decimal
+    ending_amount: Decimal
+
+
+class PortfolioComparisonResponse(BaseModel):
+    from_snapshot: PortfolioComparisonSnapshot
+    to_snapshot: PortfolioComparisonSnapshot
+    summary: PortfolioComparisonSummary
+    waterfall: PortfolioComparisonWaterfall
+    top_increases: list[PortfolioComparisonGroupDelta]
+    top_decreases: list[PortfolioComparisonGroupDelta]
+    new_groups: list[PortfolioComparisonGroupDelta]
+    removed_groups: list[PortfolioComparisonGroupDelta]

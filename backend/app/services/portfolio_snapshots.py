@@ -59,4 +59,21 @@ def resolve_snapshot_import_run(db: Session, snapshot_id: str | None) -> ArAging
             if run is not None:
                 return run
 
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot informado não foi encontrado.")
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot informado nao foi encontrado.")
+
+
+def resolve_monthly_closing_snapshot(db: Session, snapshot_id: str | None) -> ArAgingImportRun:
+    normalized = snapshot_id.strip().lower() if isinstance(snapshot_id, str) else None
+    if normalized in (None, "", "current"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Comparacao aceita apenas snapshots de fechamento mensal (closing-YYYY-MM).",
+        )
+
+    run = resolve_snapshot_import_run(db, snapshot_id)
+    if run.snapshot_type != "monthly_closing" or run.closing_status != "official":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Snapshot informado precisa ser um fechamento mensal oficial.",
+        )
+    return run

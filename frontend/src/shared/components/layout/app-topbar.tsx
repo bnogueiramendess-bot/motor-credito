@@ -31,7 +31,8 @@ const navGroups: NavGroup[] = [
     activePrefix: "/clientes",
     items: [
       { type: "link", href: "/clientes/dashboard", label: "Dashboard" },
-      { type: "link", href: "/clientes/carteira", label: "Carteira de Clientes" }
+      { type: "link", href: "/clientes/carteira", label: "Carteira de Clientes" },
+      { type: "link", href: "/clientes/evolucao", label: "Evolução da Carteira" }
     ]
   },
   {
@@ -86,6 +87,13 @@ function resolveTopbarMeta(pathname: string): { title: string; subtitle: string 
     return {
       title: "Clientes · Carteira de Clientes",
       subtitle: "Consulta operacional da carteira"
+    };
+  }
+
+  if (pathname.startsWith("/clientes/evolucao")) {
+    return {
+      title: "Clientes · Evolução da Carteira",
+      subtitle: "Comparação entre fechamentos"
     };
   }
 

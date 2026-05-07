@@ -194,3 +194,62 @@ export type PortfolioSnapshotDto = {
   closing_status?: string | null;
   is_current: boolean;
 };
+
+export type PortfolioComparisonMetricDto = {
+  from_value: number | string;
+  to_value: number | string;
+  delta: number | string;
+  delta_pct: number | string | null;
+};
+
+export type PortfolioComparisonSnapshotDto = {
+  id: string;
+  label: string;
+  base_date: string;
+  import_run_id: number;
+  closing_month: number;
+  closing_year: number;
+};
+
+export type PortfolioComparisonGroupDeltaDto = {
+  economic_group: string;
+  from_total_open_amount: number | string;
+  to_total_open_amount: number | string;
+  delta_total_open_amount: number | string;
+  delta_pct: number | string | null;
+  from_exposure_amount: number | string;
+  to_exposure_amount: number | string;
+  delta_exposure_amount: number | string;
+  delta_exposure_pct: number | string | null;
+  from_overdue_amount: number | string;
+  to_overdue_amount: number | string;
+  delta_overdue_amount: number | string;
+  customers_count_from: number;
+  customers_count_to: number;
+};
+
+export type PortfolioComparisonDto = {
+  from_snapshot: PortfolioComparisonSnapshotDto;
+  to_snapshot: PortfolioComparisonSnapshotDto;
+  summary: {
+    total_open_amount: PortfolioComparisonMetricDto;
+    total_overdue_amount: PortfolioComparisonMetricDto;
+    total_not_due_amount: PortfolioComparisonMetricDto;
+    insured_limit_amount: PortfolioComparisonMetricDto;
+    exposure_amount: PortfolioComparisonMetricDto;
+    customers_count: PortfolioComparisonMetricDto;
+    groups_count: PortfolioComparisonMetricDto;
+  };
+  waterfall?: {
+    starting_amount: number;
+    new_groups_amount: number;
+    existing_growth_amount: number;
+    existing_reduction_amount: number;
+    removed_groups_amount: number;
+    ending_amount: number;
+  };
+  top_increases: PortfolioComparisonGroupDeltaDto[];
+  top_decreases: PortfolioComparisonGroupDeltaDto[];
+  new_groups: PortfolioComparisonGroupDeltaDto[];
+  removed_groups: PortfolioComparisonGroupDeltaDto[];
+};

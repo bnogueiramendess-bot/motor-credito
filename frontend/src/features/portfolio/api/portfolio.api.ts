@@ -9,7 +9,8 @@ import {
   PortfolioMovementsLatestDto,
   PortfolioOpenInvoiceDto,
   PortfolioRiskSummaryDto,
-  PortfolioSnapshotDto
+  PortfolioSnapshotDto,
+  PortfolioComparisonDto
 } from "@/features/portfolio/api/contracts";
 
 type PortfolioQueryParams = {
@@ -291,4 +292,35 @@ export async function getPortfolioSnapshots() {
   }
   const asRecord = payload as Record<string, unknown>;
   return Array.isArray(asRecord.items) ? (asRecord.items as PortfolioSnapshotDto[]) : [];
+}
+
+export async function getPortfolioComparison(fromSnapshotId: string, toSnapshotId: string) {
+  const query = new URLSearchParams();
+  query.set("from_snapshot_id", fromSnapshotId);
+  query.set("to_snapshot_id", toSnapshotId);
+  const payload = await apiClient.get<PortfolioComparisonDto>(`/api/portfolio/comparison?${query.toString()}`);
+  const asNumber = (value: number | string | null | undefined) => {
+    if (typeof value === "number") return value;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+
+  if (!payload.waterfall) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    waterfall: {
+      starting_amount: asNumber(payload.waterfall.starting_amount),
+      new_groups_amount: asNumber(payload.waterfall.new_groups_amount),
+      existing_growth_amount: asNumber(payload.waterfall.existing_growth_amount),
+      existing_reduction_amount: asNumber(payload.waterfall.existing_reduction_amount),
+      removed_groups_amount: asNumber(payload.waterfall.removed_groups_amount),
+      ending_amount: asNumber(payload.waterfall.ending_amount)
+    }
+  };
 }

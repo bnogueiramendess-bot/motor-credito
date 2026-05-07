@@ -513,9 +513,11 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
             "not_due_bucket_181_360": row[22] if len(row) > 22 else None,
             "not_due_bucket_above_360": row[23] if len(row) > 23 else None,
             "aging": row[7] if len(row) > 7 else _pick_with_fallback(row, cc_header, "aging", 7),
-            "insured_limit": row[27] if len(row) > 27 else _pick_with_fallback(row, cc_header, "insured_limit", 27),
+            # Clientes Consolidados: coluna AB (indice 27) = Limite Segurado (fonte obrigatoria)
+            "insured_limit": _cell(row, 27),
             "approved_credit": _pick_with_fallback(row, cc_header, "approved_credit", 5),
-            "exposure": _pick_with_fallback(row, cc_header, "exposure", 6),
+            # Clientes Consolidados: coluna AH = Exposicao (fonte prioritaria)
+            "exposure": row[33] if len(row) > 33 else _pick_with_fallback(row, cc_header, "exposure", 33),
             "raw": _row_to_raw_payload(row),
         }
         if payload["group"] is None and payload["overdue"] is None and payload["insured_limit"] is None:
