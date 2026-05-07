@@ -190,10 +190,13 @@ export function PortfolioCustomersPage() {
   const [status, setStatus] = useState("Todos");
   const [sortBy, setSortBy] = useState<SortOption>("open_desc");
   const query = usePortfolioGroupsQuery({ bu: bu === "Todos" ? undefined : bu, q: search || undefined, snapshot_id: selectedSnapshotId });
-  const selectedSnapshot = useMemo(
-    () => (snapshotsQuery.data ?? []).find((item) => item.id === selectedSnapshotId) ?? null,
-    [snapshotsQuery.data, selectedSnapshotId]
-  );
+  const selectedSnapshot = useMemo(() => {
+    const snapshots = snapshotsQuery.data ?? [];
+    if (selectedSnapshotId === "current") {
+      return snapshots.find((item) => item.is_current) ?? null;
+    }
+    return snapshots.find((item) => item.id === selectedSnapshotId) ?? null;
+  }, [snapshotsQuery.data, selectedSnapshotId]);
 
   const filteredGroups = useMemo(() => {
     const base = query.data ?? [];
@@ -225,16 +228,20 @@ export function PortfolioCustomersPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-semibold tracking-[-0.01em] text-[#111827]">Carteira de Clientes</h1>
-        <p className="mt-2 text-sm text-[#4b5563]">Base consolidada dos clientes importados no ultimo AR Aging.</p>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <label className="text-sm font-medium text-[#334155]">
-            Visão da carteira:
+      <header className="rounded-2xl border border-[#dde5f0] bg-gradient-to-br from-white via-[#fbfdff] to-[#f7faff] px-5 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] xl:px-7 xl:py-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#7b8797]">Gestão de Carteira</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-[-0.015em] text-[#0f172a] xl:text-[32px]">Carteira de Clientes</h1>
+            <p className="mt-3 max-w-2xl text-sm text-[#5b6b7f]">Base consolidada dos clientes importados no último AR Aging.</p>
+          </div>
+
+          <div className="w-full self-center rounded-xl border border-[#e2e8f0] bg-white/95 p-4 lg:w-[360px] lg:self-center">
+            <label className="block text-xs font-semibold uppercase tracking-[0.08em] text-[#64748b]">Visão da Carteira</label>
             <select
               value={selectedSnapshotId}
               onChange={(event) => setSelectedSnapshotId(event.target.value)}
-              className="ml-2 h-9 rounded-md border border-[#dbe3ef] bg-white px-2 text-sm"
+              className="mt-2 h-10 w-full rounded-md border border-[#dbe3ef] bg-white px-3 text-sm text-[#0f172a]"
             >
               <option value="current">Atual</option>
               {(snapshotsQuery.data ?? []).filter((item) => !item.is_current).map((item) => (
@@ -243,10 +250,11 @@ export function PortfolioCustomersPage() {
                 </option>
               ))}
             </select>
-          </label>
-          <span className="rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
-            {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
-          </span>
+            <div className="mt-3 inline-flex rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
+              {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
+            </div>
+            <p className="mt-2 text-xs font-medium text-[#475569]">Base Aging vigente: {formatDate(selectedSnapshot?.base_date)}</p>
+          </div>
         </div>
       </header>
       <div className="rounded-2xl border border-[#e2e8f0] bg-white p-4 shadow-sm">
