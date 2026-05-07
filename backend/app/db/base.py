@@ -1,9 +1,12 @@
 ﻿from app.db.session import Base
 from app.models import (
+    AuditLog,
     ArAgingDataTotalRow,
     ArAgingGroupConsolidatedRow,
     ArAgingImportRun,
     ArAgingRemarkRow,
+    BusinessUnit,
+    Company,
     CreditAnalysis,
     CreditReportRead,
     CreditPolicy,
@@ -12,7 +15,14 @@ from app.models import (
     DecisionEvent,
     ExternalDataEntry,
     ExternalDataFile,
+    Permission,
+    RefreshToken,
+    Role,
+    RolePermission,
     ScoreResult,
+    User,
+    UserBusinessUnitScope,
+    UserInvitation,
 )
 
 __all__ = [
@@ -30,4 +40,14 @@ __all__ = [
     "ExternalDataEntry",
     "ExternalDataFile",
     "ScoreResult",
+    "Company",
+    "BusinessUnit",
+    "User",
+    "Role",
+    "Permission",
+    "RolePermission",
+    "UserBusinessUnitScope",
+    "UserInvitation",
+    "RefreshToken",
+    "AuditLog",
 ]

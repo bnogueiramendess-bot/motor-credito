@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { FileUp, Settings } from "lucide-react";
+import { Building2, ChevronDown, FileUp, Settings, Users } from "lucide-react";
 
 import { resetOperationalData } from "@/features/admin/api/admin.api";
 import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
@@ -49,109 +49,85 @@ const navGroups: NavGroup[] = [
   }
 ];
 
+function getPermissionsFromCookie() {
+  if (typeof document === "undefined") return [] as string[];
+  const cookie = document.cookie.split("; ").find((item) => item.startsWith("gcc_permissions="));
+  if (!cookie) return [];
+  const value = cookie.split("=")[1];
+  if (!value) return [];
+  try {
+    return JSON.parse(decodeURIComponent(value)) as string[];
+  } catch {
+    return [];
+  }
+}
+
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 function isMotorCreditoRoute(pathname: string) {
-  return (
-    pathname.startsWith("/motor-credito") ||
-    pathname.startsWith("/analises") ||
-    pathname.startsWith("/dados-externos")
-  );
+  return pathname.startsWith("/motor-credito") || pathname.startsWith("/analises") || pathname.startsWith("/dados-externos");
 }
 
 function isSubmenuItemActive(pathname: string, groupId: string, href: string) {
   if (groupId === "motor-credito") {
-    if (href === "/analises/nova") {
-      return pathname === "/analises/nova";
-    }
-
-    if (href === "/analises") {
-      return pathname === "/analises" || /^\/analises\/\d+$/.test(pathname);
-    }
+    if (href === "/analises/nova") return pathname === "/analises/nova";
+    if (href === "/analises") return pathname === "/analises" || /^\/analises\/\d+$/.test(pathname);
   }
-
   return isActivePath(pathname, href);
 }
 
 function resolveTopbarMeta(pathname: string): { title: string; subtitle: string } {
   if (pathname.startsWith("/clientes/dashboard")) {
-    return {
-      title: "Clientes · Dashboard",
-      subtitle: "Visão de clientes"
-    };
+    return { title: "Clientes · Dashboard", subtitle: "Visão de clientes" };
   }
-
   if (pathname.startsWith("/clientes/carteira")) {
-    return {
-      title: "Clientes · Carteira de Clientes",
-      subtitle: "Consulta operacional da carteira"
-    };
+    return { title: "Clientes · Carteira de Clientes", subtitle: "Consulta operacional da carteira" };
   }
-
   if (pathname.startsWith("/clientes/evolucao")) {
-    return {
-      title: "Clientes · Evolução da Carteira",
-      subtitle: "Comparação entre fechamentos"
-    };
+    return { title: "Clientes · Evolução da Carteira", subtitle: "Comparação entre fechamentos" };
   }
-
   if (pathname.startsWith("/motor-credito/dashboard") || pathname.startsWith("/dashboard")) {
-    return {
-      title: "Motor de Crédito · Dashboard",
-      subtitle: "Visão executiva"
-    };
+    return { title: "Motor de Crédito · Dashboard", subtitle: "Visão executiva" };
   }
-
   if (pathname.startsWith("/motor-credito/regras") || pathname.startsWith("/regras")) {
-    return {
-      title: "Motor de Crédito · Regras",
-      subtitle: "Políticas e critérios"
-    };
+    return { title: "Motor de Crédito · Regras", subtitle: "Políticas e critérios" };
   }
-
-  if (pathname.startsWith("/relatorios")) {
-    return {
-      title: "Relatórios",
-      subtitle: "Desempenho e histórico"
-    };
-  }
-
   if (pathname.startsWith("/dados-externos")) {
-    return {
-      title: "Dados Externos",
-      subtitle: "Evidências da análise"
-    };
+    return { title: "Dados Externos", subtitle: "Evidências da análise" };
   }
-
   if (pathname.startsWith("/analises/nova")) {
-    return {
-      title: "Nova Análise",
-      subtitle: "Cadastro e consolidação"
-    };
+    return { title: "Nova Análise", subtitle: "Cadastro e consolidação" };
   }
-
   if (/^\/analises\/\d+$/.test(pathname)) {
-    return {
-      title: "Análise de Crédito",
-      subtitle: "Detalhamento da decisão"
-    };
+    return { title: "Análise de Crédito", subtitle: "Detalhamento da decisão" };
   }
-
-  return {
-    title: "Análises de Crédito",
-    subtitle: "Acompanhamento operacional"
-  };
+  return { title: "Análises de Crédito", subtitle: "Acompanhamento operacional" };
 }
 
 export function AppTopbar() {
   const pathname = usePathname();
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
+  const [permissions, setPermissions] = useState<string[]>([]);
+
+  useEffect(() => {
+    setPermissions(getPermissionsFromCookie());
+  }, []);
+
+  const canManageCompany = permissions.includes("company:manage");
+  const canManageBusinessUnits = permissions.includes("bu:manage");
+  const canManageUsers = permissions.includes("users:manage");
+  const canViewProfiles = permissions.includes("profiles:view");
+
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
   const [isResettingBase, setIsResettingBase] = useState(false);
+  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  const [isUsersMenuOpen, setIsUsersMenuOpen] = useState(false);
+  const menusRef = useRef<HTMLDivElement | null>(null);
+
   const openGroup = navGroups.find((group) => group.id === openGroupId) ?? null;
 
   function toggleGroup(groupId: string) {
@@ -164,14 +140,24 @@ export function AppTopbar() {
     return () => window.removeEventListener(OPEN_AGING_IMPORT_DRAWER_EVENT, openDrawer);
   }, []);
 
+  useEffect(() => {
+    function handleOutsideClick(event: MouseEvent) {
+      if (!menusRef.current) return;
+      if (event.target instanceof Node && !menusRef.current.contains(event.target)) {
+        setIsAdminMenuOpen(false);
+        setIsUsersMenuOpen(false);
+        setIsSettingsMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("mousedown", handleOutsideClick);
+    return () => window.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
   async function handleResetOperationalData() {
     setIsSettingsMenuOpen(false);
-    const confirmation = window.prompt(
-      'Esta ação limpará todos os dados operacionais. Digite "Confirmo" para confirmar:'
-    );
-    if (confirmation !== "Confirmo") {
-      return;
-    }
+    const confirmation = window.prompt('Esta ação limpará todos os dados operacionais. Digite "Confirmo" para continuar:');
+    if (confirmation !== "Confirmo") return;
 
     setIsResettingBase(true);
     try {
@@ -218,9 +204,10 @@ export function AppTopbar() {
                   )}
                 >
                   {group.label}
-                  <span className={cn("text-[10px] transition-transform", isOpen ? "rotate-180" : "rotate-0")} aria-hidden="true">
-                    ▾
-                  </span>
+                  <ChevronDown
+                    className={cn("h-3 w-3 transition-transform", isOpen ? "rotate-180" : "rotate-0")}
+                    aria-hidden="true"
+                  />
                 </button>
               );
             })}
@@ -228,13 +215,80 @@ export function AppTopbar() {
 
           <div className="hidden h-8 w-px bg-[#334155] xl:block" aria-hidden="true" />
 
-          <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <div ref={menusRef} className="ml-auto flex items-center gap-2 sm:gap-3">
+            {(canManageCompany || canManageBusinessUnits) ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAdminMenuOpen((current) => !current);
+                    setIsUsersMenuOpen(false);
+                    setIsSettingsMenuOpen(false);
+                  }}
+                  title="Empresa"
+                  aria-label="Empresa"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E2E8F0]/40 bg-white/5 text-[#E2E8F0] transition hover:bg-white/10"
+                >
+                  <Building2 className="h-4 w-4" />
+                </button>
+                {isAdminMenuOpen ? (
+                  <div className="absolute right-0 top-12 z-50 min-w-[220px] rounded-lg border border-[#dbe3ef] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
+                    {canManageCompany ? (
+                      <Link href="/admin/company" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
+                        Cadastro da Empresa
+                      </Link>
+                    ) : null}
+                    {canManageBusinessUnits ? (
+                      <Link href="/admin/business-units" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
+                        Cadastro de BU&apos;s
+                      </Link>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {canManageUsers ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsUsersMenuOpen((current) => !current);
+                    setIsAdminMenuOpen(false);
+                    setIsSettingsMenuOpen(false);
+                  }}
+                  title="Usuários"
+                  aria-label="Usuários"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E2E8F0]/40 bg-white/5 text-[#E2E8F0] transition hover:bg-white/10"
+                >
+                  <Users className="h-4 w-4" />
+                </button>
+                {isUsersMenuOpen ? (
+                  <div className="absolute right-0 top-12 z-50 min-w-[220px] rounded-lg border border-[#dbe3ef] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
+                    <Link href="/admin/users" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
+                      Gestão de Usuários
+                    </Link>
+                    {canViewProfiles ? (
+                      <Link href="/admin/configuracoes" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
+                        Gestão de Perfis
+                      </Link>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setIsSettingsMenuOpen((current) => !current)}
+                onClick={() => {
+                  setIsSettingsMenuOpen((current) => !current);
+                  setIsAdminMenuOpen(false);
+                  setIsUsersMenuOpen(false);
+                }}
+                title="Configurações"
                 className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E2E8F0]/40 bg-white/5 text-[#E2E8F0] transition hover:bg-white/10"
-                aria-label="Configurações"
+                aria-label="Configurações do sistema"
               >
                 <Settings className="h-4 w-4" />
               </button>
@@ -287,10 +341,7 @@ export function AppTopbar() {
                   return <span key={`divider-${openGroup.id}-${index}`} className="mx-1 h-4 w-px bg-[#334155]" aria-hidden="true" />;
                 }
 
-                if (!item.href || !item.label) {
-                  return null;
-                }
-
+                if (!item.href || !item.label) return null;
                 const active = isSubmenuItemActive(pathname, openGroup.id, item.href);
 
                 return (

@@ -24,6 +24,16 @@ from app.models.enums import (
 from app.models.external_data_entry import ExternalDataEntry
 from app.models.external_data_file import ExternalDataFile
 from app.models.score_result import ScoreResult
+from app.models.company import Company
+from app.models.business_unit import BusinessUnit
+from app.models.user import User
+from app.models.role import Role
+from app.models.permission import Permission
+from app.models.role_permission import RolePermission
+from app.models.user_business_unit_scope import UserBusinessUnitScope
+from app.models.user_invitation import UserInvitation
+from app.models.refresh_token import RefreshToken
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "ActorType",
@@ -49,4 +59,14 @@ __all__ = [
     "ScoreBand",
     "ScoreResult",
     "SourceType",
+    "Company",
+    "BusinessUnit",
+    "User",
+    "Role",
+    "Permission",
+    "RolePermission",
+    "UserBusinessUnitScope",
+    "UserInvitation",
+    "RefreshToken",
+    "AuditLog",
 ]

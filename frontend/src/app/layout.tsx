@@ -11,8 +11,8 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Motor Crédito | Análise de crédito",
-  description: "Painel para acompanhamento de análises de crédito"
+  title: "Gestao de Carteira de Clientes",
+  description: "Painel para acompanhamento de clientes e analises de credito"
 };
 
 export default function RootLayout({

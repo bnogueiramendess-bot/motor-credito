@@ -1,4 +1,4 @@
-Ôªø"use client";
+"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -22,21 +22,21 @@ const navSections: NavSection[] = [
     label: "Principal",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
-      { href: "/analises", label: "An√°lise de Cr√©dito", icon: ClipboardList },
-      { label: "Fila de An√°lises", icon: ClipboardList }
+      { href: "/analises", label: "An·lise de CrÈdito", icon: ClipboardList },
+      { label: "Fila de An·lises", icon: ClipboardList }
     ]
   },
   {
-    label: "Configura√ß√£o",
+    label: "ConfiguraÁ„o",
     items: [
-      { label: "Regras de Cr√©dito", icon: Cog },
-      { label: "Importa√ß√£o Auto.", icon: Files },
+      { label: "Regras de CrÈdito", icon: Cog },
+      { label: "ImportaÁ„o Auto.", icon: Files },
       { href: "/dados-externos", label: "Dados Externos", icon: CircleDot }
     ]
   },
   {
     label: "Auditoria",
-    items: [{ label: "Log / Hist√≥rico", icon: FileClock }]
+    items: [{ label: "Log / HistÛrico", icon: FileClock }]
   }
 ];
 
@@ -71,8 +71,8 @@ export function AppSidebar() {
   return (
     <aside className="hidden w-[220px] min-w-[220px] flex-col bg-[#1a2b5e] lg:flex">
       <div className="border-b border-white/10 px-4 pb-4 pt-5">
-        <p className="text-base font-medium tracking-[-0.02em] text-white">Motor de Cr√©dito</p>
-        <p className="mt-0.5 text-[10px] text-white/45">Adfert ¬∑ Indorama Corporation</p>
+        <p className="text-base font-medium tracking-[-0.02em] text-white">Gest„o de Carteira de Clientes</p>
+        <p className="mt-0.5 text-[10px] text-white/45">Adfert ∑ Indorama Corporation</p>
       </div>
 
       {navSections.map((section) => (

@@ -27,6 +27,9 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
     throw new ApiError(await parseError(response), response.status);
   }
 
