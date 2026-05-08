@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Building2, ChevronDown, FileUp, Settings, Users } from "lucide-react";
 
 import { resetOperationalData } from "@/features/admin/api/admin.api";
@@ -107,6 +107,7 @@ function resolveTopbarMeta(pathname: string): { title: string; subtitle: string 
 }
 
 export function AppTopbar() {
+  const router = useRouter();
   const pathname = usePathname();
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
   const [permissions, setPermissions] = useState<string[]>([]);
@@ -124,6 +125,7 @@ export function AppTopbar() {
   const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
   const [isResettingBase, setIsResettingBase] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const [isUsersMenuOpen, setIsUsersMenuOpen] = useState(false);
   const menusRef = useRef<HTMLDivElement | null>(null);
@@ -169,6 +171,24 @@ export function AppTopbar() {
       window.alert(message);
     } finally {
       setIsResettingBase(false);
+    }
+  }
+
+  async function handleLogout() {
+    setIsSettingsMenuOpen(false);
+    setIsLoggingOut(true);
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) {
+        window.alert("Nao foi possivel encerrar a sessao. Tente novamente.");
+        setIsLoggingOut(false);
+        return;
+      }
+      router.push("/login");
+      router.refresh();
+    } catch {
+      window.alert("Nao foi possivel encerrar a sessao. Tente novamente.");
+      setIsLoggingOut(false);
     }
   }
 
@@ -294,6 +314,14 @@ export function AppTopbar() {
               </button>
               {isSettingsMenuOpen ? (
                 <div className="absolute right-0 top-12 z-40 min-w-[220px] rounded-lg border border-[#dbe3ef] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
+                  <button
+                    type="button"
+                    onClick={() => void handleLogout()}
+                    disabled={isLoggingOut}
+                    className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isLoggingOut ? "Saindo..." : "Logoff"}
+                  </button>
                   <button
                     type="button"
                     onClick={() => void handleResetOperationalData()}
