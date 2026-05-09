@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.security import CurrentUser, get_current_user
@@ -70,7 +70,15 @@ def _issue_tokens(db: Session, user: User) -> TokenPairResponse:
 
 @router.post("/login", response_model=AuthResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
-    user = db.scalar(select(User).where(User.email == payload.email.lower()))
+    identifier = (payload.login or payload.email or "").strip().lower()
+    user = db.scalar(
+        select(User).where(
+            or_(
+                func.lower(User.email) == identifier,
+                func.lower(User.username) == identifier,
+            )
+        )
+    )
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais invalidas.")
     if not user.is_active:

@@ -225,3 +225,59 @@ export type ExternalCnpjLookupResponse = {
     };
   } | null;
 };
+
+export type CreditAnalysisTriageRequest = {
+  cnpj: string;
+};
+
+export type CreditAnalysisTriageResponse = {
+  found_in_portfolio: boolean;
+  customer_data: {
+    customer_id?: number | null;
+    company_name?: string | null;
+    cnpj: string;
+    economic_group?: string | null;
+    business_unit?: string | null;
+    city?: string | null;
+    uf?: string | null;
+    registration_status?: string | null;
+  };
+  economic_position?: {
+    open_amount: number | string;
+    total_limit: number | string;
+    available_limit: number | string;
+  } | null;
+  external_lookup_data?: Record<string, unknown> | null;
+  has_recent_analysis?: boolean;
+  last_analysis?: {
+    analysis_id: number;
+    date: string;
+    status: string;
+    approved_limit?: number | string | null;
+    analyst_name?: string | null;
+  } | null;
+  reanalysis_available_at?: string | null;
+  requires_early_review_justification?: boolean;
+  requires_business_unit_selection?: boolean;
+  available_business_units?: Array<{ id: number; code: string; name: string }>;
+  message?: string | null;
+};
+
+export type CreditAnalysisTriageSubmitRequest = {
+  cnpj: string;
+  suggested_limit: number;
+  source: "cliente_existente_carteira" | "cliente_novo_consulta_externa";
+  customer_id?: number | null;
+  company_name?: string | null;
+  business_unit?: string | null;
+  is_early_review_request?: boolean;
+  early_review_justification?: string | null;
+  previous_analysis_id?: number | null;
+};
+
+export type CreditAnalysisTriageSubmitResponse = {
+  analysis_id: number;
+  customer_id: number;
+  status: string;
+  reused_existing?: boolean;
+};

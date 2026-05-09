@@ -240,6 +240,16 @@ def _role_to_profile_read(db: Session, role: Role) -> ProfileRead:
             .order_by(Permission.key.asc())
         ).all()
     )
+    return ProfileRead(
+        id=role.id,
+        code=role.code,
+        name=role.name,
+        description=role.description,
+        type="Sistemico" if role.is_system else "Customizado",
+        status="active" if role.is_active else "inactive",
+        permission_keys=permission_keys,
+        is_protected=role.is_system,
+    )
 
 
 def _user_to_read(db: Session, user: User) -> UserRead:
@@ -264,16 +274,6 @@ def _user_to_read(db: Session, user: User) -> UserRead:
         first_access_pending=user.must_change_password,
         business_unit_ids=bu_ids,
         business_unit_names=bu_names,
-    )
-    return ProfileRead(
-        id=role.id,
-        code=role.code,
-        name=role.name,
-        description=role.description,
-        type="Sistemico" if role.is_system else "Customizado",
-        status="active" if role.is_active else "inactive",
-        permission_keys=permission_keys,
-        is_protected=role.is_system,
     )
 
 

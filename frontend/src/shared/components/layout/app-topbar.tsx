@@ -9,6 +9,7 @@ import { resetOperationalData } from "@/features/admin/api/admin.api";
 import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
 import { OPEN_AGING_IMPORT_DRAWER_EVENT } from "@/shared/lib/events";
 import { ApiError } from "@/shared/lib/http/http-client";
+import { getCurrentUserDisplayName, getCurrentUserLoginName } from "@/shared/lib/auth/current-user";
 import { cn } from "@/shared/lib/utils";
 
 type NavItem = {
@@ -44,6 +45,7 @@ const navGroups: NavGroup[] = [
       { type: "link", href: "/motor-credito/regras", label: "Regras" },
       { type: "divider" },
       { type: "link", href: "/analises/nova", label: "+ Nova análise" },
+      { type: "link", href: "/analises/monitor", label: "Monitor de Solicitações" },
       { type: "link", href: "/analises", label: "Localizar análise" }
     ]
   }
@@ -73,6 +75,7 @@ function isMotorCreditoRoute(pathname: string) {
 function isSubmenuItemActive(pathname: string, groupId: string, href: string) {
   if (groupId === "motor-credito") {
     if (href === "/analises/nova") return pathname === "/analises/nova";
+    if (href === "/analises/monitor") return pathname === "/analises/monitor";
     if (href === "/analises") return pathname === "/analises" || /^\/analises\/\d+$/.test(pathname);
   }
   return isActivePath(pathname, href);
@@ -100,10 +103,44 @@ function resolveTopbarMeta(pathname: string): { title: string; subtitle: string 
   if (pathname.startsWith("/analises/nova")) {
     return { title: "Nova Análise", subtitle: "Cadastro e consolidação" };
   }
+  if (pathname.startsWith("/analises/monitor")) {
+    return { title: "Monitor de Solicitações", subtitle: "Acompanhamento operacional do workflow" };
+  }
   if (/^\/analises\/\d+$/.test(pathname)) {
     return { title: "Análise de Crédito", subtitle: "Detalhamento da decisão" };
   }
   return { title: "Análises de Crédito", subtitle: "Acompanhamento operacional" };
+}
+
+function toFirstAndSecondName(fullName: string): string {
+  const normalized = fullName
+    .trim()
+    .toLowerCase();
+  if (
+    !normalized ||
+    normalized === "usuário não identificado" ||
+    normalized === "usuario nao identificado" ||
+    normalized === "usuário nao identificado"
+  ) {
+    return "Usuário";
+  }
+  const chunks = fullName
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (chunks.length === 0) return "Usuário";
+  if (chunks.length === 1) return chunks[0];
+  return `${chunks[0]} ${chunks[1]}`;
+}
+
+function toInitials(name: string): string {
+  const chunks = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (chunks.length === 0) return "US";
+  if (chunks.length === 1) return chunks[0].slice(0, 2).toUpperCase();
+  return `${chunks[0][0] ?? ""}${chunks[1][0] ?? ""}`.toUpperCase();
 }
 
 export function AppTopbar() {
@@ -111,9 +148,13 @@ export function AppTopbar() {
   const pathname = usePathname();
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [currentUserName, setCurrentUserName] = useState("Usuário");
+  const [currentLoginName, setCurrentLoginName] = useState("Usuário");
 
   useEffect(() => {
     setPermissions(getPermissionsFromCookie());
+    setCurrentUserName(toFirstAndSecondName(getCurrentUserDisplayName()));
+    setCurrentLoginName(getCurrentUserLoginName());
   }, []);
 
   const canManageCompany = permissions.includes("company:manage");
@@ -348,13 +389,13 @@ export function AppTopbar() {
 
             <div className="hidden items-center gap-2 rounded-xl border border-[#E2E8F0]/25 bg-white/5 px-2.5 py-1.5 xl:flex">
               <div className="text-right text-xs text-[#CBD5E1]">
-                <p className="font-medium text-[#E2E8F0]">{meta.subtitle}</p>
-                <p>Analista Backoffice</p>
+                <p className="font-medium text-[#E2E8F0]">{currentUserName}</p>
+                <p>{currentLoginName}</p>
               </div>
-              <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[#E2E8F0]/35 bg-[#1E3A8A] text-[11px] font-semibold text-white">BO</div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[#E2E8F0]/35 bg-[#1E3A8A] text-[11px] font-semibold text-white">{toInitials(currentUserName)}</div>
             </div>
 
-            <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[#E2E8F0]/35 bg-[#1E3A8A] text-xs font-semibold text-white xl:hidden">BO</div>
+            <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[#E2E8F0]/35 bg-[#1E3A8A] text-xs font-semibold text-white xl:hidden">{toInitials(currentUserName)}</div>
           </div>
         </div>
 

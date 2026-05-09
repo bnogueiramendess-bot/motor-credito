@@ -6,7 +6,7 @@ import { useState } from "react";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
@@ -20,7 +20,7 @@ export default function LoginPage() {
     const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ login, password })
     });
 
     if (!response.ok) {
@@ -28,6 +28,22 @@ export default function LoginPage() {
       setError(data.detail ?? "Falha no login.");
       setIsSubmitting(false);
       return;
+    }
+
+    const data = await response.json();
+    if (typeof window !== "undefined") {
+      const fullName = String(data?.user?.full_name ?? "").trim();
+      const email = String(data?.user?.email ?? "").trim();
+      const safeDisplayName = fullName || email || login.trim() || "Usuário";
+      window.localStorage.setItem("currentUserDisplayName", safeDisplayName);
+      window.localStorage.setItem("userDisplayName", safeDisplayName);
+      window.localStorage.setItem("loginUsername", String((data?.user?.username ?? login.trim()) || "Usuário"));
+      if (email) {
+        window.localStorage.setItem("user_name", email);
+      }
+      if (safeDisplayName) {
+        window.localStorage.setItem("username", safeDisplayName);
+      }
     }
 
     router.push("/clientes/dashboard");
@@ -82,21 +98,21 @@ export default function LoginPage() {
 
             <form onSubmit={handleSubmit} className="space-y-3 xl:space-y-4" noValidate>
               <div>
-                <label htmlFor="email" className="mb-2 block text-xs font-medium uppercase tracking-[0.05em] text-white/60">
-                  E-mail corporativo
+                <label htmlFor="login" className="mb-2 block text-xs font-medium uppercase tracking-[0.05em] text-white/60">
+                  Usuário ou e-mail
                 </label>
                 <div className="relative">
                   <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-white/30">
                     <MailIcon />
                   </span>
                   <input
-                    id="email"
+                    id="login"
                     className="w-full rounded-[10px] border border-white/15 bg-white/5 py-2.5 pl-11 pr-4 text-sm text-white placeholder:text-white/25 focus:border-[#2dc99e] focus:bg-[#2dc99e]/10 focus:outline-none focus:ring-4 focus:ring-[#2dc99e]/20 xl:py-3"
-                    type="email"
-                    placeholder="seu@indorama.com"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    type="text"
+                    placeholder="seu.usuario ou seu@dominio.com"
+                    autoComplete="username"
+                    value={login}
+                    onChange={(e) => setLogin(e.target.value)}
                     required
                   />
                 </div>

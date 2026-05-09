@@ -1,9 +1,18 @@
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    login: str | None = None
+    email: str | None = None
     password: str
+
+    @model_validator(mode="after")
+    def validate_login_identifier(self) -> "LoginRequest":
+        candidate = (self.login or self.email or "").strip()
+        if not candidate:
+            raise ValueError("Informe usuario ou e-mail para continuar.")
+        self.login = candidate
+        return self
 
 
 class TokenPairResponse(BaseModel):

@@ -173,6 +173,105 @@ export type CreditAnalysisListItemDto = CreditAnalysisDto & {
 
 export type CreditAnalysisListApiResponse = CreditAnalysisListItemDto[];
 
+export type OperationalQueueItemDto = {
+  analysis_id: number;
+  analysis_code: string;
+  customer_name: string;
+  cnpj: string | null;
+  economic_group: string | null;
+  business_unit: string | null;
+  suggested_limit: number | string | null;
+  available_limit: number | string | null;
+  total_limit: number | string | null;
+  open_amount: number | string | null;
+  has_recent_analysis: boolean;
+  is_early_review_request: boolean;
+  early_review_justification: string | null;
+  previous_analysis_id: number | null;
+  requester_name: string | null;
+  assigned_analyst_name: string | null;
+  created_at: string;
+  current_status: string;
+  aging_days: number;
+  coface_status: string;
+  agrisk_status: string;
+  analysis_type: "cliente_carteira" | "novo_cliente" | "revisao_antecipada" | string;
+  has_analysis_recent_badge: boolean;
+};
+
+export type OperationalQueueKpisDto = {
+  awaiting_analysis: number;
+  early_reviews: number;
+  new_customers: number;
+  awaiting_reports: number;
+  pending_approval: number;
+  total_in_analysis: number;
+};
+
+export type CreditAnalysisOperationalQueueResponse = {
+  items: OperationalQueueItemDto[];
+  kpis: OperationalQueueKpisDto;
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type QueueOptionDto = {
+  value: string;
+  label: string;
+};
+
+export type CreditAnalysisQueueOptionsResponse = {
+  statuses: QueueOptionDto[];
+  business_units: QueueOptionDto[];
+  analysis_types: QueueOptionDto[];
+  requesters: QueueOptionDto[];
+  analysts: QueueOptionDto[];
+};
+
+export type CreditAnalysisMonitorItemDto = {
+  analysis_id: number;
+  protocol: string;
+  customer_name: string;
+  cnpj: string | null;
+  economic_group: string | null;
+  business_unit: string | null;
+  requester_name: string | null;
+  assigned_analyst_name: string | null;
+  approver_name: string | null;
+  current_status: string;
+  status_label: string;
+  workflow_stage: "commercial_submitted" | "financial_review" | "pending_approval" | "decided" | "returned" | string;
+  suggested_limit: number | string | null;
+  approved_limit: number | string | null;
+  is_new_customer: boolean;
+  is_early_review_request: boolean;
+  has_recent_analysis: boolean;
+  created_at: string;
+  updated_at: string;
+  aging_days: number;
+  next_responsible_role: "comercial" | "analista_financeiro" | "aprovador" | string;
+  available_actions: string[];
+};
+
+export type CreditAnalysisMonitorKpisDto = {
+  total: number;
+  awaiting_financial_review: number;
+  in_analysis: number;
+  awaiting_approval: number;
+  returned_for_adjustment: number;
+  completed: number;
+  early_reviews: number;
+};
+
+export type CreditAnalysisMonitorResponse = {
+  items: CreditAnalysisMonitorItemDto[];
+  kpis: CreditAnalysisMonitorKpisDto;
+  total: number;
+  page: number;
+  page_size: number;
+};
+
 export type CreditAnalysisDetailApiResponse = {
   analysis: CreditAnalysisDto;
   customer: CustomerDto | null;

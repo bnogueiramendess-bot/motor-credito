@@ -4,6 +4,10 @@ import {
   AgriskReportReadResponse,
   AnalysisJourneySubmitRequest,
   AnalysisJourneySubmitResponse,
+  CreditAnalysisTriageRequest,
+  CreditAnalysisTriageResponse,
+  CreditAnalysisTriageSubmitRequest,
+  CreditAnalysisTriageSubmitResponse,
   CofaceReportReadResponse,
   ExternalCnpjLookupResponse
 } from "@/features/analysis-journey/api/contracts";
@@ -19,6 +23,14 @@ export async function submitAnalysisJourney(payload: AnalysisJourneySubmitReques
 
 export async function lookupExternalCnpj(cnpj: string) {
   return apiClient.get<ExternalCnpjLookupResponse>(`/api/external/cnpj/${cnpj}`);
+}
+
+export async function triageCreditRequest(payload: CreditAnalysisTriageRequest) {
+  return apiClient.post<CreditAnalysisTriageResponse, CreditAnalysisTriageRequest>("/api/analysis-journey/triage", payload);
+}
+
+export async function submitTriageCreditRequest(payload: CreditAnalysisTriageSubmitRequest) {
+  return apiClient.post<CreditAnalysisTriageSubmitResponse, CreditAnalysisTriageSubmitRequest>("/api/analysis-journey/triage-submit", payload);
 }
 
 function toBase64(file: File) {

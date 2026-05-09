@@ -22,5 +22,9 @@ export async function POST(request: Request) {
   store.set(ACCESS_TOKEN_COOKIE, data.tokens.access_token, { httpOnly: true, sameSite: "lax", path: "/" });
   store.set(REFRESH_TOKEN_COOKIE, data.tokens.refresh_token, { httpOnly: true, sameSite: "lax", path: "/" });
   store.set("gcc_permissions", JSON.stringify(data.user.permissions ?? []), { httpOnly: false, sameSite: "lax", path: "/" });
+  const displayName = String(data?.user?.full_name ?? data?.user?.email ?? data?.user?.username ?? "").trim();
+  const loginName = String(data?.user?.username ?? payload?.login ?? "").trim();
+  store.set("gcc_user_display_name", displayName || "Usuário", { httpOnly: false, sameSite: "lax", path: "/" });
+  store.set("gcc_login_username", loginName || "Usuário", { httpOnly: false, sameSite: "lax", path: "/" });
   return NextResponse.json(data);
 }
