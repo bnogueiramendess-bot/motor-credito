@@ -18,8 +18,12 @@ class RefreshRequest(BaseModel):
 
 class AcceptInviteRequest(BaseModel):
     token: str
-    full_name: str
+    full_name: str | None = None
     password: str
+
+
+class InvitePreviewResponse(BaseModel):
+    username: str
 
 
 class UserContextResponse(BaseModel):

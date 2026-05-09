@@ -164,7 +164,10 @@ export function AppTopbar() {
     setIsResettingBase(true);
     try {
       const response = await resetOperationalData("RESET_OPERATIONAL_DATA");
-      window.alert(`Reset concluído com sucesso. Registros removidos: ${response.total_deleted}.`);
+      const defaultUserInfo = response.default_master_user
+        ? `\nUsuario master padrao: ${response.default_master_user.email}\nSenha padrao: ${response.default_master_user.password}`
+        : "";
+      window.alert(`Reset concluído com sucesso. Registros removidos: ${response.total_deleted}.${defaultUserInfo}`);
       window.location.reload();
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "Falha ao executar reset operacional.";
@@ -289,7 +292,7 @@ export function AppTopbar() {
                       Gestão de Usuários
                     </Link>
                     {canViewProfiles ? (
-                      <Link href="/admin/configuracoes" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
+                      <Link href="/admin/profiles" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
                         Gestão de Perfis
                       </Link>
                     ) : null}
@@ -395,3 +398,4 @@ export function AppTopbar() {
     </header>
   );
 }
+

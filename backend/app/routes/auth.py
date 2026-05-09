@@ -12,7 +12,15 @@ from app.models.user_business_unit_scope import UserBusinessUnitScope
 from app.models.user_invitation import UserInvitation
 from app.models.permission import Permission
 from app.models.role_permission import RolePermission
-from app.schemas.auth import AcceptInviteRequest, AuthResponse, LoginRequest, RefreshRequest, TokenPairResponse, UserContextResponse
+from app.schemas.auth import (
+    AcceptInviteRequest,
+    AuthResponse,
+    InvitePreviewResponse,
+    LoginRequest,
+    RefreshRequest,
+    TokenPairResponse,
+    UserContextResponse,
+)
 from app.services.security import (
     REFRESH_TOKEN_EXPIRE_DAYS,
     create_access_token,
@@ -100,7 +108,8 @@ def accept_invite(payload: AcceptInviteRequest, db: Session = Depends(get_db)) -
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario do convite nao encontrado.")
 
-    user.full_name = payload.full_name.strip()
+    if payload.full_name is not None and payload.full_name.strip():
+        user.full_name = payload.full_name.strip()
     user.password_hash = hash_password(payload.password)
     user.must_change_password = False
     invitation.is_active = False
@@ -108,6 +117,21 @@ def accept_invite(payload: AcceptInviteRequest, db: Session = Depends(get_db)) -
     db.commit()
 
     return AuthResponse(tokens=_issue_tokens(db, user), user=_build_user_context(db, user))
+
+
+@router.get("/invite-preview", response_model=InvitePreviewResponse)
+def invite_preview(token: str, db: Session = Depends(get_db)) -> InvitePreviewResponse:
+    invitation = db.scalar(
+        select(UserInvitation).where(UserInvitation.token_hash == hash_token(token), UserInvitation.is_active.is_(True))
+    )
+    if invitation is None or invitation.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Convite invalido ou expirado.")
+
+    user = db.scalar(select(User).where(User.email == invitation.email))
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario do convite nao encontrado.")
+
+    return InvitePreviewResponse(username=user.username)
 
 
 @router.get("/me", response_model=UserContextResponse)

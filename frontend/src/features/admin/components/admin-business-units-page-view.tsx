@@ -14,7 +14,6 @@ import { useUpdateBusinessUnitStatusMutation } from "@/features/admin/hooks/use-
 type FormState = {
   id?: number;
   name: string;
-  code: string;
   head_name: string;
   head_email: string;
   is_active: boolean;
@@ -22,7 +21,6 @@ type FormState = {
 
 const emptyForm: FormState = {
   name: "",
-  code: "",
   head_name: "",
   head_email: "",
   is_active: true
@@ -63,7 +61,6 @@ export function AdminBusinessUnitsPageView() {
     setFormState({
       id: unit.id,
       name: unit.name,
-      code: unit.code,
       head_name: unit.head_name,
       head_email: unit.head_email,
       is_active: unit.is_active
@@ -75,13 +72,12 @@ export function AdminBusinessUnitsPageView() {
     event.preventDefault();
 
     if (!formState.name.trim() || !formState.head_name.trim() || !formState.head_email.trim() || !emailIsValid(formState.head_email.trim())) {
-      setFeedback("Preencha os campos obrigatorios antes de continuar.");
+      setFeedback("Preencha os campos obrigatórios antes de continuar.");
       return;
     }
 
     const payload = {
       name: formState.name.trim(),
-      code: formState.code.trim() || null,
       head_name: formState.head_name.trim(),
       head_email: formState.head_email.trim().toLowerCase(),
       is_active: formState.is_active
@@ -98,10 +94,10 @@ export function AdminBusinessUnitsPageView() {
       setOpenForm(false);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        setFeedback("Ja existe uma BU cadastrada com essas informacoes.");
+        setFeedback("Já existe uma BU cadastrada com essas informações.");
         return;
       }
-      setFeedback("Nao foi possivel salvar a BU. Tente novamente.");
+      setFeedback("Não foi possível salvar a BU. Tente novamente.");
     }
   }
 
@@ -110,7 +106,7 @@ export function AdminBusinessUnitsPageView() {
       await statusMutation.mutateAsync({ id: unit.id, isActive: !unit.is_active });
       setFeedback(unit.is_active ? "BU desativada com sucesso." : "BU ativada com sucesso.");
     } catch {
-      setFeedback("Nao foi possivel atualizar o status da BU.");
+      setFeedback("Não foi possível atualizar o status da BU.");
     }
   }
 
@@ -119,9 +115,9 @@ export function AdminBusinessUnitsPageView() {
       <header className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Cadastro de BU&apos;s</h1>
+          <h1 className="text-2xl font-semibold text-slate-900">Cadastro de BUs</h1>
             <p className="mt-2 text-sm text-slate-600">
-              Gerencie as unidades de negocio utilizadas para controle de acesso, carteira e governanca.
+              Gerencie as unidades de negócio utilizadas para controle de acesso, carteira e governança.
             </p>
           </div>
           <button
@@ -144,11 +140,11 @@ export function AdminBusinessUnitsPageView() {
       {feedback ? <p className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">{feedback}</p> : null}
 
       <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        {unitsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando unidades de negocio...</p> : null}
-        {unitsQuery.isError ? <p className="text-sm text-rose-700">Nao foi possivel carregar as BUs.</p> : null}
+        {unitsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando unidades de negócio...</p> : null}
+        {unitsQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar as BUs.</p> : null}
         {!unitsQuery.isLoading && !unitsQuery.isError && businessUnits.length === 0 ? (
           <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-            Nenhuma BU cadastrada ainda. Crie a primeira unidade de negocio para organizar o acesso dos usuarios e a visao da carteira.
+            Nenhuma BU cadastrada ainda. Crie a primeira unidade de negócio para organizar o acesso dos usuários e a visão da carteira.
           </p>
         ) : null}
 
@@ -158,11 +154,11 @@ export function AdminBusinessUnitsPageView() {
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-[0.06em] text-slate-500">
                 <tr>
                   <th className="px-3 py-2">BU</th>
-                  <th className="px-3 py-2">Codigo</th>
-                  <th className="px-3 py-2">Head responsavel</th>
-                  <th className="px-3 py-2">E-mail do Head</th>
+                  <th className="px-3 py-2">Código</th>
+                  <th className="px-3 py-2">Head responsável</th>
+                  <th className="px-3 py-2">E-mail do head</th>
                   <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Acoes</th>
+                  <th className="px-3 py-2">Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -218,17 +214,12 @@ export function AdminBusinessUnitsPageView() {
               </label>
 
               <label className="space-y-1 block">
-                <span className="text-sm font-medium text-slate-700">Codigo</span>
-                <input value={formState.code} onChange={(event) => setFormState((prev) => ({ ...prev, code: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm" />
-              </label>
-
-              <label className="space-y-1 block">
-                <span className="text-sm font-medium text-slate-700 inline-flex items-center gap-2"><UserRound className="h-4 w-4" />Head responsavel</span>
+                <span className="text-sm font-medium text-slate-700 inline-flex items-center gap-2"><UserRound className="h-4 w-4" />Head responsável</span>
                 <input value={formState.head_name} onChange={(event) => setFormState((prev) => ({ ...prev, head_name: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm" required />
               </label>
 
               <label className="space-y-1 block">
-                <span className="text-sm font-medium text-slate-700 inline-flex items-center gap-2"><Mail className="h-4 w-4" />E-mail do Head</span>
+                <span className="text-sm font-medium text-slate-700 inline-flex items-center gap-2"><Mail className="h-4 w-4" />E-mail do head</span>
                 <input value={formState.head_email} onChange={(event) => setFormState((prev) => ({ ...prev, head_email: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm" type="email" required />
               </label>
 
@@ -249,7 +240,7 @@ export function AdminBusinessUnitsPageView() {
                 disabled={createMutation.isPending || updateMutation.isPending}
                 className="inline-flex h-10 items-center rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
-                {formState.id ? "Salvar alteracoes" : "Criar BU"}
+                {formState.id ? "Salvar alterações" : "Criar BU"}
               </button>
             </form>
           </div>

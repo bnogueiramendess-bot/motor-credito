@@ -14,6 +14,6 @@ export async function POST(request: Request) {
     if (error instanceof BackendError) {
       return NextResponse.json({ detail: error.message }, { status: error.status });
     }
-    return NextResponse.json({ detail: "Nao foi possivel enviar o convite." }, { status: 500 });
+    return NextResponse.json({ detail: "Nao foi possivel incluir o usuario." }, { status: 500 });
   }
 }

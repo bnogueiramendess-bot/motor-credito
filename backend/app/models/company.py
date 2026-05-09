@@ -25,4 +25,5 @@ class Company(Base):
     )
 
     business_units = relationship("BusinessUnit", back_populates="company", cascade="all, delete-orphan")
+    roles = relationship("Role", back_populates="company")
     users = relationship("User", back_populates="company")

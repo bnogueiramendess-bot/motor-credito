@@ -8,7 +8,8 @@ const ADMIN_RULES: Array<{ prefix: string; permission: string }> = [
   { prefix: "/company/business-units", permission: "bu:manage" },
   { prefix: "/admin/users", permission: "users:manage" },
   { prefix: "/admin/usuarios", permission: "users:manage" },
-  { prefix: "/admin/configuracoes", permission: "profiles:view" }
+  { prefix: "/admin/configuracoes", permission: "profiles:view" },
+  { prefix: "/admin/profiles", permission: "profiles:view" }
 ];
 
 export function middleware(request: NextRequest) {

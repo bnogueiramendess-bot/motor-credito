@@ -31,17 +31,23 @@ export type CompanyUpdatePayload = {
 
 export type AdminUserDto = {
   id: number;
+  user_code: string;
+  username: string;
   full_name: string;
   email: string;
-  role: string;
+  phone: string | null;
+  profile_name: string;
   is_active: boolean;
+  first_access_pending: boolean;
   business_unit_ids: number[];
+  business_unit_names: string[];
 };
 
 export type InviteUserPayload = {
   full_name: string;
   email: string;
-  role: "administrador_master" | "administrador_bu" | "analista" | "visualizador";
+  phone: string;
+  profile_id: number;
   business_unit_ids: number[];
 };
 
@@ -50,14 +56,50 @@ export type InviteUserResponse = {
   email: string;
 };
 
+export type UpdateAdminUserPayload = {
+  full_name: string;
+  phone: string;
+  profile_id: number;
+  business_unit_ids: number[];
+};
+
 export type ResetOperationalDataResponse = {
   status: string;
   total_deleted: number;
+  default_master_user?: {
+    email: string;
+    password: string;
+  };
   tables: Array<{
     table: string;
     deleted: number;
     sequence_reset: boolean;
   }>;
+};
+
+export type RoleMatrixItemDto = {
+  role: string;
+  permissions: string[];
+};
+
+export type ProfileStatus = "active" | "inactive";
+
+export type AdminProfileDto = {
+  id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  type: string;
+  status: ProfileStatus;
+  permission_keys: string[];
+  is_protected: boolean;
+};
+
+export type UpsertAdminProfilePayload = {
+  name: string;
+  description: string | null;
+  status: ProfileStatus;
+  permission_keys: string[];
 };
 
 export async function listAdminUsers() {
@@ -70,7 +112,6 @@ export async function listBusinessUnits() {
 
 export type BusinessUnitPayload = {
   name: string;
-  code?: string | null;
   head_name: string;
   head_email: string;
   is_active: boolean;
@@ -102,9 +143,45 @@ export async function inviteAdminUser(payload: InviteUserPayload) {
   return apiClient.post<InviteUserResponse, InviteUserPayload>("/api/admin/users/invite", payload);
 }
 
+export async function updateAdminUser(id: number, payload: UpdateAdminUserPayload) {
+  return apiClient.patch<AdminUserDto, UpdateAdminUserPayload>(`/api/admin/users/${id}`, payload);
+}
+
+export async function updateAdminUserStatus(id: number, isActive: boolean) {
+  return apiClient.patch<AdminUserDto, { is_active: boolean }>(`/api/admin/users/${id}/status`, { is_active: isActive });
+}
+
+export async function regenerateAdminUserInviteToken(id: number) {
+  return apiClient.post<InviteUserResponse, Record<string, never>>(`/api/admin/users/${id}/invite-token`, {});
+}
+
 export async function resetOperationalData(confirm: string) {
   return apiClient.post<ResetOperationalDataResponse, { confirm: string }>(
     "/api/admin/reset-operational-data",
     { confirm }
   );
+}
+
+export async function getRoleMatrix() {
+  return apiClient.get<RoleMatrixItemDto[]>("/api/admin/roles/matrix");
+}
+
+export async function listAdminProfiles() {
+  return apiClient.get<AdminProfileDto[]>("/api/admin/profiles");
+}
+
+export async function getAdminProfile(id: number) {
+  return apiClient.get<AdminProfileDto>(`/api/admin/profiles/${id}`);
+}
+
+export async function createAdminProfile(payload: UpsertAdminProfilePayload) {
+  return apiClient.post<AdminProfileDto, UpsertAdminProfilePayload>("/api/admin/profiles", payload);
+}
+
+export async function updateAdminProfile(id: number, payload: UpsertAdminProfilePayload) {
+  return apiClient.patch<AdminProfileDto, UpsertAdminProfilePayload>(`/api/admin/profiles/${id}`, payload);
+}
+
+export async function updateAdminProfileStatus(id: number, status: ProfileStatus) {
+  return apiClient.patch<AdminProfileDto, { status: ProfileStatus }>(`/api/admin/profiles/${id}/status`, { status });
 }

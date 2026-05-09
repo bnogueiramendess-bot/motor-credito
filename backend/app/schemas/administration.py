@@ -52,7 +52,6 @@ class CompanyRead(BaseModel):
 
 
 class BusinessUnitCreate(BaseModel):
-    code: str | None = None
     name: str
     head_name: str
     head_email: EmailStr
@@ -60,7 +59,6 @@ class BusinessUnitCreate(BaseModel):
 
 
 class BusinessUnitUpdate(BaseModel):
-    code: str | None = None
     name: str
     head_name: str
     head_email: EmailStr
@@ -86,8 +84,21 @@ class BusinessUnitRead(BaseModel):
 class UserCreate(BaseModel):
     full_name: str
     email: EmailStr
-    role: str
+    phone: str
+    profile_id: int | None = None
+    role: str | None = None
     business_unit_ids: list[int]
+
+
+class UserUpdate(BaseModel):
+    full_name: str
+    phone: str
+    profile_id: int
+    business_unit_ids: list[int]
+
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
 
 
 class InviteRead(BaseModel):
@@ -99,13 +110,40 @@ class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    user_code: str
+    username: str
     full_name: str
     email: str
-    role: str
+    phone: str | None
+    profile_name: str
     is_active: bool
+    first_access_pending: bool
     business_unit_ids: list[int]
+    business_unit_names: list[str]
 
 
 class RoleMatrixItem(BaseModel):
     role: str
     permissions: list[str]
+
+
+class ProfileRead(BaseModel):
+    id: int
+    code: str
+    name: str
+    description: str | None
+    type: str
+    status: str
+    permission_keys: list[str]
+    is_protected: bool
+
+
+class ProfileUpsert(BaseModel):
+    name: str
+    description: str | None = None
+    status: str = "active"
+    permission_keys: list[str]
+
+
+class ProfileStatusUpdate(BaseModel):
+    status: str
