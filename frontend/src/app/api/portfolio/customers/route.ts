@@ -10,6 +10,7 @@ export async function GET(request: Request) {
 
   const cnpj = searchParams.get("cnpj");
   const bu = searchParams.get("bu");
+  const businessUnitContext = searchParams.get("business_unit_context");
 
   if (cnpj) {
     query.set("cnpj", cnpj);
@@ -17,6 +18,9 @@ export async function GET(request: Request) {
 
   if (bu) {
     query.set("bu", bu);
+  }
+  if (businessUnitContext) {
+    query.set("business_unit_context", businessUnitContext);
   }
 
   const suffix = query.toString();

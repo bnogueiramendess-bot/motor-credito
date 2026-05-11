@@ -24,18 +24,6 @@ type OperationSummary = {
   latestProtocol: string;
 };
 
-const kpiThousandsFormatter = new Intl.NumberFormat("pt-BR", {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 1,
-  useGrouping: true
-});
-
-const kpiMillionsFormatter = new Intl.NumberFormat("pt-BR", {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 1,
-  useGrouping: true
-});
-
 function textIncludes(base: string | number | null | undefined, search: string) {
   if (base === null || base === undefined) {
     return false;
@@ -49,17 +37,9 @@ function normalizeDigits(value: string) {
 }
 
 function formatKpiCurrencyInThousands(value: number | string | null | undefined) {
-  const parsed = toNumber(value);
-  if (parsed === null) {
-    return "Não informado";
-  }
-  const absolute = Math.abs(parsed);
-  if (absolute >= 1_000_000) {
-    return `R$ ${kpiMillionsFormatter.format(parsed / 1_000_000)} MM`;
-  }
-
-  return `R$ ${kpiThousandsFormatter.format(parsed / 1_000)} K`;
+  return formatCurrencyInThousands(value);
 }
+
 
 function mapPortfolioCustomerToCard(item: PortfolioCustomerDto, index: number): DashboardAnalysisCardViewModel {
   const scoreBandRaw = typeof item.score === "object" && item.score !== null ? (item.score as { score_band?: unknown }).score_band : null;

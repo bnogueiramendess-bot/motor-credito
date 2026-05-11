@@ -8,10 +8,12 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const fromSnapshotId = searchParams.get("from_snapshot_id");
   const toSnapshotId = searchParams.get("to_snapshot_id");
+  const businessUnitContext = searchParams.get("business_unit_context");
 
   const query = new URLSearchParams();
   if (fromSnapshotId) query.set("from_snapshot_id", fromSnapshotId);
   if (toSnapshotId) query.set("to_snapshot_id", toSnapshotId);
+  if (businessUnitContext) query.set("business_unit_context", businessUnitContext);
   const suffix = query.toString();
   const path = suffix ? `/portfolio/comparison?${suffix}` : "/portfolio/comparison";
 
@@ -25,4 +27,3 @@ export async function GET(request: Request) {
     return NextResponse.json({ detail: "Falha ao carregar comparacao da carteira." }, { status: 500 });
   }
 }
-

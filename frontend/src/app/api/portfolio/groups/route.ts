@@ -8,11 +8,13 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = new URLSearchParams();
   const bu = searchParams.get("bu");
+  const businessUnitContext = searchParams.get("business_unit_context");
   const q = searchParams.get("q");
   const snapshotId = searchParams.get("snapshot_id");
   if (bu) query.set("bu", bu);
   if (q) query.set("q", q);
   if (snapshotId) query.set("snapshot_id", snapshotId);
+  if (businessUnitContext) query.set("business_unit_context", businessUnitContext);
   const suffix = query.toString();
   const path = suffix ? `/portfolio/groups?${suffix}` : "/portfolio/groups";
   try {

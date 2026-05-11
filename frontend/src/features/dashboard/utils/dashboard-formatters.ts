@@ -1,12 +1,7 @@
 ﻿import { toNumber } from "@/features/credit-analyses/utils/formatters";
 
-const integerFormatter = new Intl.NumberFormat("pt-BR", {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2
-});
-
 const thousandFormatter = new Intl.NumberFormat("pt-BR", {
-  minimumFractionDigits: 0,
+  minimumFractionDigits: 1,
   maximumFractionDigits: 1
 });
 
@@ -17,11 +12,12 @@ export function formatCurrencyInThousands(value: number | string | null | undefi
   }
 
   const absoluteValue = Math.abs(parsed);
+  const sign = parsed < 0 ? "-" : "";
   if (absoluteValue < 1000) {
-    return `R$ ${integerFormatter.format(parsed)}`;
+    const valueInThousands = absoluteValue / 1000;
+    return `${sign}R$ ${thousandFormatter.format(valueInThousands)} k`;
   }
 
-  const sign = parsed < 0 ? "-" : "";
   if (absoluteValue >= 1_000_000) {
     const valueInMillions = absoluteValue / 1_000_000;
     return `${sign}R$ ${thousandFormatter.format(valueInMillions)} MM`;

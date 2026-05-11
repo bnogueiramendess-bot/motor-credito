@@ -2,10 +2,14 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CalendarDays, CheckCircle2, ChevronDown, ChevronsLeft, ChevronsRight, Clock3, Filter, FlaskConical, Hourglass, Search, Undo2, UserRoundCheck } from "lucide-react";
 
 import { useCreditAnalysesMonitorOptionsQuery, useCreditAnalysesMonitorQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-monitor-query";
+import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
+import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
 import { formatCurrency } from "@/features/credit-analyses/utils/formatters";
+import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
 
@@ -75,12 +79,15 @@ function typeBadges(item: { is_new_customer: boolean; is_early_review_request: b
 }
 
 export function MonitorPageView() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const businessUnitContext = searchParams.get("business_unit_context") ?? "";
+  const buContextQuery = useBusinessUnitContextQuery();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [filters, setFilters] = useState({
     q: "",
     status_filter: "",
-    bu: "",
     workflow_stage: "",
     analysis_type: "",
     requester: "",
@@ -89,9 +96,12 @@ export function MonitorPageView() {
     date_to: ""
   });
 
-  const params = useMemo(() => ({ ...filters, page, page_size: pageSize }), [filters, page, pageSize]);
+  const params = useMemo(
+    () => ({ ...filters, page, page_size: pageSize, business_unit_context: businessUnitContext || undefined }),
+    [filters, page, pageSize, businessUnitContext]
+  );
   const monitorQuery = useCreditAnalysesMonitorQuery(params);
-  const optionsQuery = useCreditAnalysesMonitorOptionsQuery();
+  const optionsQuery = useCreditAnalysesMonitorOptionsQuery(businessUnitContext || undefined);
 
   if (monitorQuery.isLoading) {
     return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando monitor de solicitações...</div>;
@@ -128,6 +138,24 @@ export function MonitorPageView() {
         <p className="text-[30px] font-semibold tracking-[-0.02em] text-[#0F172A]">Monitor de Solicitações</p>
         <p className="text-[14px] text-[#64748B]">Acompanhe solicitações de crédito, pendências operacionais e decisões em andamento.</p>
       </div>
+      {buContextQuery.data ? (
+        <OperationalContextBar className="mb-3">
+            <BusinessUnitContextSelector
+              value={businessUnitContext || (buContextQuery.data.default_context.consolidated ? "consolidated" : String(buContextQuery.data.default_context.business_unit_code ?? ""))}
+              onChange={(value) => {
+                const next = new URLSearchParams(searchParams.toString());
+                next.set("business_unit_context", value);
+                router.replace(`?${next.toString()}`);
+                setPage(1);
+              }}
+              label="Visão"
+              consolidatedLabel={buContextQuery.data.consolidated_label}
+              canViewConsolidated={buContextQuery.data.can_view_consolidated}
+              options={buContextQuery.data.allowed_business_units.map((item) => ({ code: item.code, name: item.name }))}
+              compact
+            />
+        </OperationalContextBar>
+      ) : null}
 
       <div className="mb-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-7">
         {kpis.map(({ label, value, icon: Icon, tone }) => (
@@ -144,7 +172,7 @@ export function MonitorPageView() {
       </div>
 
       <div className="mb-3 rounded-[12px] border border-[#E2E8F0] bg-white p-2.5">
-        <div className="grid gap-2 xl:grid-cols-[2fr_1.4fr_1.2fr_1.2fr_1.5fr_auto]">
+        <div className="grid gap-2 xl:grid-cols-[2fr_1.4fr_1.2fr_1.5fr_auto]">
           <label className="flex h-10 items-center rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#64748B]">
             <Search className="mr-2 h-4 w-4 text-[#94A3B8]" />
             <input value={filters.q} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, q: e.target.value })); }} placeholder="Buscar por cliente, CNPJ ou protocolo" className="w-full bg-transparent outline-none" />
@@ -152,10 +180,6 @@ export function MonitorPageView() {
           <select value={filters.status_filter} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, status_filter: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#0F172A]">
             <option value="">Status (todos)</option>
             {(optionsQuery.data?.statuses ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <select value={filters.bu} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, bu: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#0F172A]">
-            <option value="">BU (todas)</option>
-            {(optionsQuery.data?.business_units ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
           <select value={filters.analysis_type} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, analysis_type: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#0F172A]">
             <option value="">Tipo (todos)</option>

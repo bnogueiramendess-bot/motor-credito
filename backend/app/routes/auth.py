@@ -15,12 +15,16 @@ from app.models.role_permission import RolePermission
 from app.schemas.auth import (
     AcceptInviteRequest,
     AuthResponse,
+    BusinessUnitContextDefault,
+    BusinessUnitContextItem,
+    BusinessUnitContextResponse,
     InvitePreviewResponse,
     LoginRequest,
     RefreshRequest,
     TokenPairResponse,
     UserContextResponse,
 )
+from app.services.bu_scope import get_user_allowed_business_unit_records, user_has_all_bu_scope
 from app.services.security import (
     REFRESH_TOKEN_EXPIRE_DAYS,
     create_access_token,
@@ -145,3 +149,22 @@ def invite_preview(token: str, db: Session = Depends(get_db)) -> InvitePreviewRe
 @router.get("/me", response_model=UserContextResponse)
 def me(current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> UserContextResponse:
     return _build_user_context(db, current.user)
+
+
+@router.get("/me/business-units/context", response_model=BusinessUnitContextResponse)
+def me_business_units_context(current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> BusinessUnitContextResponse:
+    allowed = get_user_allowed_business_unit_records(db, current)
+    is_global_scope = user_has_all_bu_scope(current)
+    can_view_consolidated = len(allowed) > 1 or is_global_scope
+    default_context = BusinessUnitContextDefault(
+        consolidated=can_view_consolidated,
+        business_unit_code=None if can_view_consolidated else (allowed[0].code if allowed else None),
+    )
+    consolidated_label = "Visao consolidada global" if is_global_scope else "Visao consolidada"
+    return BusinessUnitContextResponse(
+        allowed_business_units=[BusinessUnitContextItem(id=item.id, code=item.code, name=item.name) for item in allowed],
+        can_view_consolidated=can_view_consolidated,
+        is_global_scope=is_global_scope,
+        default_context=default_context,
+        consolidated_label=consolidated_label,
+    )

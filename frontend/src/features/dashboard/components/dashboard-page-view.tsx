@@ -1,7 +1,10 @@
 ﻿"use client";
 
 import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
+import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
+import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { PortfolioRiskSection } from "@/features/dashboard/components/portfolio-risk-section";
 import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
@@ -9,6 +12,7 @@ import { PortfolioMovementDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
 import { usePortfolioAgingMovementsLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-movements-latest-query";
 import { usePortfolioSnapshotsQuery } from "@/features/portfolio/hooks/use-portfolio-snapshots-query";
+import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
 import { openAgingImportDrawer } from "@/shared/lib/events";
@@ -22,6 +26,7 @@ type BucketStackValue = { bu: string; amount: number };
 type BucketStack = { bucket: string; values: BucketStackValue[] };
 type BucketStackMap = { not_due: BucketStack[]; overdue: BucketStack[] };
 type AgingSide = "not_due" | "overdue";
+type AgingBucketsByBuPayload = Array<{ bucket: string; values: Array<{ bu: string; amount: number | string }> }>;
 
 const percentFormatter = new Intl.NumberFormat("pt-BR", {
   minimumFractionDigits: 1,
@@ -50,7 +55,7 @@ const BU_COLORS: Record<string, string> = {
   "Additive Intl": "rgba(15, 30, 58, 0.50)",
   "Não informado": "rgba(15, 30, 58, 0.25)"
 };
-const BU_ORDER = ["Additive", "Fertilizer", "Additive Intl", "Não informado"] as const;
+const DEFAULT_BU_ORDER = ["Additive", "Fertilizer", "Additive Intl", "Não informado"] as const;
 const FIXED_BUCKETS = ["1-30", "31-60", "61-90", "91-120", "121-180", "Above 180"] as const;
 
 function bucketAlias(rawBucket: string): string {
@@ -65,13 +70,39 @@ function bucketAlias(rawBucket: string): string {
   return rawBucket;
 }
 
+function resolveBuSeriesOrder(notDueBuckets: AgingBucketsByBuPayload | undefined, overdueBuckets: AgingBucketsByBuPayload | undefined): string[] {
+  const seen = new Set<string>();
+  const register = (rawBu: string | undefined) => {
+    if (!rawBu) return;
+    const bu = rawBu.trim();
+    if (!bu) return;
+    seen.add(bu in BU_COLORS ? bu : "Não informado");
+  };
+
+  for (const section of [notDueBuckets, overdueBuckets]) {
+    if (!Array.isArray(section)) continue;
+    for (const bucket of section) {
+      for (const value of bucket.values ?? []) {
+        if ((toNumber(value.amount) ?? 0) > 0) {
+          register(value.bu);
+        }
+      }
+    }
+  }
+
+  const scoped = DEFAULT_BU_ORDER.filter((bu) => seen.has(bu));
+  const extras = Array.from(seen).filter((bu) => !DEFAULT_BU_ORDER.includes(bu as (typeof DEFAULT_BU_ORDER)[number])).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  return [...scoped, ...extras];
+}
+
 function normalizeBucketsByBuFromBackend(
-  buckets: Array<{ bucket: string; values: Array<{ bu: string; amount: number | string }> }> | undefined,
-  side: AgingSide
+  buckets: AgingBucketsByBuPayload | undefined,
+  side: AgingSide,
+  buOrder: string[]
 ): BucketStack[] {
   const bucketMap = new Map<string, Record<string, number>>();
   for (const fixedBucket of FIXED_BUCKETS) {
-    bucketMap.set(fixedBucket, Object.fromEntries(BU_ORDER.map((bu) => [bu, 0])));
+    bucketMap.set(fixedBucket, Object.fromEntries(buOrder.map((bu) => [bu, 0])));
   }
 
   if (Array.isArray(buckets)) {
@@ -81,7 +112,10 @@ function normalizeBucketsByBuFromBackend(
       const current = bucketMap.get(canonicalBucket)!;
       for (const value of bucket.values ?? []) {
         const amount = toNumber(value.amount) ?? 0;
-        const bu = BU_ORDER.includes(value.bu as (typeof BU_ORDER)[number]) ? value.bu : "Não informado";
+        const bu = value.bu in BU_COLORS ? value.bu : "Não informado";
+        if (!(bu in current)) {
+          current[bu] = 0;
+        }
         current[bu] = (current[bu] ?? 0) + amount;
       }
     }
@@ -89,18 +123,19 @@ function normalizeBucketsByBuFromBackend(
 
   return FIXED_BUCKETS.map((bucket) => ({
     bucket,
-    values: BU_ORDER.map((bu) => ({ bu, amount: bucketMap.get(bucket)?.[bu] ?? 0 }))
-  }));
+    values: buOrder.map((bu) => ({ bu, amount: bucketMap.get(bucket)?.[bu] ?? 0 })).filter((item) => item.amount > 0)
+  })).filter((bucket) => bucket.values.length > 0);
 }
 
 type StackedBucketsChartProps = {
   title: string;
   subtitle: string;
   buckets: BucketStack[];
+  buOrder: string[];
   sourceHint?: string;
 };
 
-function StackedBucketsChart({ title, subtitle, buckets, sourceHint }: StackedBucketsChartProps) {
+function StackedBucketsChart({ title, subtitle, buckets, buOrder, sourceHint }: StackedBucketsChartProps) {
   const totals = buckets.map((bucket) => ({
     bucket: bucket.bucket,
     total: bucket.values.reduce((acc, item) => acc + item.amount, 0),
@@ -118,7 +153,7 @@ function StackedBucketsChart({ title, subtitle, buckets, sourceHint }: StackedBu
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-[11px] text-[#475569]">
-            {BU_ORDER.map((bu) => (
+            {buOrder.map((bu) => (
               <span key={bu} className="inline-flex items-center gap-1.5">
                 <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: BU_COLORS[bu] }} />
                 {bu}
@@ -234,15 +269,15 @@ function movementReadableMessage(movement: PortfolioMovementDto) {
 }
 
 export function DashboardPageView(_: DashboardPageViewProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const businessUnitContext = searchParams.get("business_unit_context") ?? "";
+  const buContextQuery = useBusinessUnitContextQuery();
   const snapshotsQuery = usePortfolioSnapshotsQuery();
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string>("current");
-  const agingQuery = usePortfolioAgingLatestQuery({ snapshot_id: selectedSnapshotId });
-  const movementsQuery = usePortfolioAgingMovementsLatestQuery(selectedSnapshotId);
+  const agingQuery = usePortfolioAgingLatestQuery({ snapshot_id: selectedSnapshotId, business_unit_context: businessUnitContext || undefined });
+  const movementsQuery = usePortfolioAgingMovementsLatestQuery(selectedSnapshotId, businessUnitContext || undefined);
   const [showTopMovements, setShowTopMovements] = useState(false);
-  const selectedSnapshot = useMemo(
-    () => (snapshotsQuery.data ?? []).find((item) => item.id === selectedSnapshotId) ?? null,
-    [snapshotsQuery.data, selectedSnapshotId]
-  );
   const baseDateLabel = useMemo(() => {
     const rawBaseDate = agingQuery.data?.import_meta?.base_date;
     if (!rawBaseDate || typeof rawBaseDate !== "string") {
@@ -283,13 +318,18 @@ export function DashboardPageView(_: DashboardPageViewProps) {
   }, [agingQuery.data]);
 
   const agingBuckets: BucketStackMap = useMemo(() => {
-    const notDueByBu = normalizeBucketsByBuFromBackend(agingQuery.data?.aging_buckets_by_bu?.not_due, "not_due");
-    const overdueByBu = normalizeBucketsByBuFromBackend(agingQuery.data?.aging_buckets_by_bu?.overdue, "overdue");
+    const buOrder = resolveBuSeriesOrder(agingQuery.data?.aging_buckets_by_bu?.not_due, agingQuery.data?.aging_buckets_by_bu?.overdue);
+    const notDueByBu = normalizeBucketsByBuFromBackend(agingQuery.data?.aging_buckets_by_bu?.not_due, "not_due", buOrder);
+    const overdueByBu = normalizeBucketsByBuFromBackend(agingQuery.data?.aging_buckets_by_bu?.overdue, "overdue", buOrder);
     return {
       not_due: notDueByBu,
       overdue: overdueByBu
     };
   }, [agingQuery.data?.aging_buckets_by_bu?.not_due, agingQuery.data?.aging_buckets_by_bu?.overdue]);
+  const chartBuOrder = useMemo(
+    () => resolveBuSeriesOrder(agingQuery.data?.aging_buckets_by_bu?.not_due, agingQuery.data?.aging_buckets_by_bu?.overdue),
+    [agingQuery.data?.aging_buckets_by_bu?.not_due, agingQuery.data?.aging_buckets_by_bu?.overdue]
+  );
 
   const hasNoImport =
     kpis.customersCount === 0 &&
@@ -332,6 +372,45 @@ export function DashboardPageView(_: DashboardPageViewProps) {
 
   return (
     <section className="mx-auto w-full max-w-[min(1800px,calc(100vw-64px))] space-y-6 xl:space-y-8 2xl:space-y-10 px-4 sm:px-6 lg:px-8 2xl:px-10">
+      <OperationalContextBar>
+        {buContextQuery.data ? (
+          <BusinessUnitContextSelector
+            value={businessUnitContext || (buContextQuery.data.default_context.consolidated ? "consolidated" : String(buContextQuery.data.default_context.business_unit_code ?? ""))}
+            onChange={(value) => {
+              const next = new URLSearchParams(searchParams.toString());
+              next.set("business_unit_context", value);
+              router.replace(`?${next.toString()}`);
+            }}
+            label="Visão"
+            consolidatedLabel={buContextQuery.data.consolidated_label}
+            canViewConsolidated={buContextQuery.data.can_view_consolidated}
+            options={buContextQuery.data.allowed_business_units.map((item) => ({ code: item.code, name: item.name }))}
+            compact
+          />
+        ) : null}
+        <div className="inline-flex items-center gap-2 rounded-md border border-[#dbe3ef] bg-[#f8fafc] px-2.5 py-1 text-xs">
+          <span className="font-semibold text-[#64748b]">Carteira</span>
+          <select
+            value={selectedSnapshotId}
+            onChange={(event) => setSelectedSnapshotId(event.target.value)}
+            className="h-7 rounded border border-[#dbe3ef] bg-white px-2 text-xs text-[#0f172a]"
+          >
+            <option value="current">Atual</option>
+            {(snapshotsQuery.data ?? []).filter((item) => !item.is_current).map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {baseDateLabel ? (
+          <div className="inline-flex items-center gap-2 rounded-md border border-[#dbe3ef] bg-[#f8fafc] px-2.5 py-1 text-xs">
+            <span className="font-semibold text-[#64748b]">Base</span>
+            <span className="font-medium text-[#0f172a]">{baseDateLabel}</span>
+          </div>
+        ) : null}
+      </OperationalContextBar>
+
       <header className="rounded-2xl border border-[#dde5f0] bg-gradient-to-br from-white via-[#fbfdff] to-[#f7faff] px-5 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] xl:px-7 xl:py-6">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -340,28 +419,6 @@ export function DashboardPageView(_: DashboardPageViewProps) {
             <p className="mt-3 max-w-2xl text-sm text-[#5b6b7f]">
               Monitoramento executivo da carteira, exposição financeira e risco de crédito.
             </p>
-          </div>
-
-          <div className="w-full self-center rounded-xl border border-[#e2e8f0] bg-white/95 p-4 lg:w-[360px] lg:self-center">
-            <label className="block text-xs font-semibold uppercase tracking-[0.08em] text-[#64748b]">Visão da carteira</label>
-            <select
-              value={selectedSnapshotId}
-              onChange={(event) => setSelectedSnapshotId(event.target.value)}
-              className="mt-2 h-10 w-full rounded-md border border-[#dbe3ef] bg-white px-3 text-sm text-[#0f172a]"
-            >
-              <option value="current">Atual</option>
-              {(snapshotsQuery.data ?? []).filter((item) => !item.is_current).map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-
-            <span className="mt-3 inline-flex rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
-              {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
-            </span>
-
-            {baseDateLabel ? <p className="mt-2 text-xs font-medium text-[#475569]">Base Aging vigente: {baseDateLabel}</p> : null}
           </div>
         </div>
       </header>
@@ -421,17 +478,19 @@ export function DashboardPageView(_: DashboardPageViewProps) {
           title="A Vencer (Not Due)"
           subtitle="Distribuição por faixa de vencimento"
           buckets={agingBuckets.not_due}
+          buOrder={chartBuOrder}
           sourceHint={agingBuckets.not_due.length > 0 ? "Dados da base vigente (bucket + BU)." : "Sem bucket estruturado na base"}
         />
         <StackedBucketsChart
           title="Vencido (Overdue)"
           subtitle="Distribuição por faixa de atraso"
           buckets={agingBuckets.overdue}
+          buOrder={chartBuOrder}
           sourceHint={agingBuckets.overdue.length > 0 ? "Dados da base vigente (bucket + BU)." : "Sem bucket estruturado na base"}
         />
       </div>
 
-      <PortfolioRiskSection snapshotId={selectedSnapshotId} />
+      <PortfolioRiskSection snapshotId={selectedSnapshotId} businessUnitContext={businessUnitContext || undefined} />
 
       
 

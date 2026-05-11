@@ -83,7 +83,12 @@ def _is_countable_positive(value: Any) -> bool:
     return _to_float(text) > 0
 
 
-def _build_summary(rows: list[RiskRow]) -> dict[str, Any]:
+def _build_summary(
+    rows: list[RiskRow],
+    *,
+    top_clients_min_exposure: float = 500_000,
+    top_clients_limit: int | None = None,
+) -> dict[str, Any]:
     critical_amount = 0.0
     attention_amount = 0.0
     healthy_amount = 0.0
@@ -116,11 +121,11 @@ def _build_summary(rows: list[RiskRow]) -> dict[str, Any]:
 
     top_clients_candidates: list[dict[str, Any]] = []
     for row in rows:
-        if row.critical_amount <= 0 and row.attention_amount <= 0:
+        if row.critical_amount <= 0 and row.attention_amount <= 0 and row.healthy_amount <= 0:
             continue
-        if row.exposure_amount <= 500_000:
+        if row.exposure_amount <= top_clients_min_exposure:
             continue
-        risk_level = "critical" if row.critical_amount > 0 else "attention"
+        risk_level = "critical" if row.critical_amount > 0 else "attention" if row.attention_amount > 0 else "healthy"
         top_clients_candidates.append(
             {
                 "customer_name": row.customer_name,
@@ -134,6 +139,8 @@ def _build_summary(rows: list[RiskRow]) -> dict[str, Any]:
         top_clients_candidates,
         key=lambda item: -item["amount"],
     )
+    if top_clients_limit is not None:
+        top_clients_at_risk = top_clients_at_risk[:top_clients_limit]
 
     return {
         "at_risk_amount": float(at_risk_amount),
@@ -168,7 +175,7 @@ def _parse_bod_rows(rows: list[tuple[Any, ...]]) -> list[RiskRow]:
             continue
         customer_name = as_optional_string(row[1] if len(row) > 1 else None)
         if customer_name and customer_name.strip().upper() == STOP_LABEL:
-            break
+            continue
         if not _is_valid_customer_name(customer_name):
             continue
 
@@ -193,7 +200,12 @@ def _parse_bod_rows(rows: list[tuple[Any, ...]]) -> list[RiskRow]:
     return parsed_rows
 
 
-def calculate_portfolio_risk_from_bod(file_path: str) -> dict[str, Any]:
+def calculate_portfolio_risk_from_bod(
+    file_path: str,
+    *,
+    top_clients_min_exposure: float = 500_000,
+    top_clients_limit: int | None = None,
+) -> dict[str, Any]:
     try:
         from openpyxl import load_workbook
     except ModuleNotFoundError as exc:
@@ -210,17 +222,26 @@ def calculate_portfolio_risk_from_bod(file_path: str) -> dict[str, Any]:
     sheet = wb[SHEET_NAME]
     rows = list(sheet.iter_rows(values_only=True))
     parsed_rows = _parse_bod_rows(rows)
-    return _build_summary(parsed_rows)
+    return _build_summary(
+        parsed_rows,
+        top_clients_min_exposure=top_clients_min_exposure,
+        top_clients_limit=top_clients_limit,
+    )
 
 
-def calculate_portfolio_risk_from_bod_raw_rows(raw_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def calculate_portfolio_risk_from_bod_raw_rows(
+    raw_rows: list[dict[str, Any]],
+    *,
+    top_clients_min_exposure: float = 500_000,
+    top_clients_limit: int | None = None,
+) -> dict[str, Any]:
     normalized_rows: list[RiskRow] = []
     for raw in raw_rows:
         if not isinstance(raw, dict):
             continue
         customer_name = as_optional_string(raw.get("col_2"))
         if customer_name and customer_name.strip().upper() == STOP_LABEL:
-            break
+            continue
         if not _is_valid_customer_name(customer_name):
             continue
         raw_critical = raw.get("col_12")
@@ -240,4 +261,8 @@ def calculate_portfolio_risk_from_bod_raw_rows(raw_rows: list[dict[str, Any]]) -
                 healthy_countable=_is_countable_positive(raw_healthy),
             )
         )
-    return _build_summary(normalized_rows)
+    return _build_summary(
+        normalized_rows,
+        top_clients_min_exposure=top_clients_min_exposure,
+        top_clients_limit=top_clients_limit,
+    )

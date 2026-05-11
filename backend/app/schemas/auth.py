@@ -47,6 +47,25 @@ class UserContextResponse(BaseModel):
     permissions: list[str]
 
 
+class BusinessUnitContextItem(BaseModel):
+    id: int
+    code: str
+    name: str
+
+
+class BusinessUnitContextDefault(BaseModel):
+    consolidated: bool
+    business_unit_code: str | None = None
+
+
+class BusinessUnitContextResponse(BaseModel):
+    allowed_business_units: list[BusinessUnitContextItem]
+    can_view_consolidated: bool
+    is_global_scope: bool
+    default_context: BusinessUnitContextDefault
+    consolidated_label: str
+
+
 class AuthResponse(BaseModel):
     tokens: TokenPairResponse
     user: UserContextResponse

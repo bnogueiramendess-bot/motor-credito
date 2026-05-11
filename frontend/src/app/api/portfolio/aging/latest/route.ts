@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const bu = searchParams.get("bu");
+  const businessUnitContext = searchParams.get("business_unit_context");
   const snapshotId = searchParams.get("snapshot_id");
   const query = new URLSearchParams();
 
@@ -15,6 +16,9 @@ export async function GET(request: Request) {
   }
   if (snapshotId) {
     query.set("snapshot_id", snapshotId);
+  }
+  if (businessUnitContext) {
+    query.set("business_unit_context", businessUnitContext);
   }
 
   const suffix = query.toString();

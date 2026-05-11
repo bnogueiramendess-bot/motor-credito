@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
 from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
+from app.services.ar_aging_import.normalizer import normalize_bu
+from app.services.bu_scope import bu_name_in_scope
 from app.services.portfolio_snapshots import previous_valid_import_run, resolve_snapshot_import_run
+
+# Backward-compatible alias used by tests that monkeypatch this symbol.
+_previous_valid_import_run = previous_valid_import_run
 
 
 def _as_decimal(value: Decimal | int | float | str | None) -> Decimal:
@@ -32,20 +37,36 @@ def _format_decimal_pt(value: Decimal, places: str) -> str:
     return str(quantized).replace(".", ",")
 
 
-def _compute_run_totals(db: Session, run_id: int) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    consolidated = db.execute(
+def _compute_run_totals(
+    db: Session,
+    run_id: int,
+    *,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    rows = db.execute(
         select(
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.not_due_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
+            ArAgingGroupConsolidatedRow.overdue_amount,
+            ArAgingGroupConsolidatedRow.not_due_amount,
+            ArAgingGroupConsolidatedRow.aging_amount,
+            ArAgingGroupConsolidatedRow.insured_limit_amount,
+            ArAgingGroupConsolidatedRow.raw_payload_json,
         ).where(ArAgingGroupConsolidatedRow.import_run_id == run_id)
-    ).one()
-
-    total_overdue = _as_decimal(consolidated[0])
-    total_not_due = _as_decimal(consolidated[1])
-    total_open = _as_decimal(consolidated[2])
-    insured_limit = _as_decimal(consolidated[3])
+    ).all()
+    total_overdue = Decimal("0")
+    total_not_due = Decimal("0")
+    total_open = Decimal("0")
+    insured_limit = Decimal("0")
+    for overdue, not_due, aging, insured, raw_payload in rows:
+        bu_name = normalize_bu((raw_payload or {}).get("bu_original") if isinstance(raw_payload, dict) else None).bu_normalized
+        if not bu_name and isinstance(raw_payload, dict):
+            bu_name = normalize_bu(raw_payload.get("col_2")).bu_normalized
+        if not bu_name_in_scope(allowed_bu_names or set(), bu_name, has_all_scope=has_all_scope):
+            continue
+        total_overdue += _as_decimal(overdue)
+        total_not_due += _as_decimal(not_due)
+        total_open += _as_decimal(aging)
+        insured_limit += _as_decimal(insured)
 
     if total_open == Decimal("0") and (total_overdue > Decimal("0") or total_not_due > Decimal("0")):
         total_open = total_overdue + total_not_due
@@ -82,19 +103,35 @@ def _delta_payload(value: Decimal, *, kind: str) -> dict:
     }
 
 
-def build_latest_portfolio_alerts(db: Session, *, snapshot_id: str | None = None) -> dict | None:
+def build_latest_portfolio_alerts(
+    db: Session,
+    *,
+    snapshot_id: str | None = None,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> dict | None:
     run = resolve_snapshot_import_run(db, snapshot_id)
 
     totals = run.totals_json if isinstance(run.totals_json, dict) else {}
-    total_overdue, total_not_due, total_open, insured_limit = _compute_run_totals(db, run.id)
+    total_overdue, total_not_due, total_open, insured_limit = _compute_run_totals(
+        db,
+        run.id,
+        allowed_bu_names=allowed_bu_names,
+        has_all_scope=has_all_scope,
+    )
 
-    previous_run = previous_valid_import_run(db, run)
+    previous_run = _previous_valid_import_run(db, run)
     overdue_pct_delta: Decimal | None = None
     uncovered_delta: Decimal | None = None
     probable_delta: Decimal | None = None
 
     if previous_run is not None:
-        previous_overdue, _previous_not_due, previous_open, previous_insured = _compute_run_totals(db, previous_run.id)
+        previous_overdue, _previous_not_due, previous_open, previous_insured = _compute_run_totals(
+            db,
+            previous_run.id,
+            allowed_bu_names=allowed_bu_names,
+            has_all_scope=has_all_scope,
+        )
         previous_overdue_ratio = (previous_overdue / previous_open) * Decimal("100") if previous_open > Decimal("0") else Decimal("0")
         current_overdue_ratio = (total_overdue / total_open) * Decimal("100") if total_open > Decimal("0") else Decimal("0")
         overdue_pct_delta = current_overdue_ratio - previous_overdue_ratio
@@ -103,15 +140,16 @@ def build_latest_portfolio_alerts(db: Session, *, snapshot_id: str | None = None
         current_uncovered = total_open - insured_limit
         uncovered_delta = current_uncovered - previous_uncovered
 
-        current_snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == run.id))
-        previous_snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == previous_run.id))
-        if (
-            current_snapshot
-            and previous_snapshot
-            and current_snapshot.probable_amount is not None
-            and previous_snapshot.probable_amount is not None
-        ):
-            probable_delta = _as_decimal(current_snapshot.probable_amount) - _as_decimal(previous_snapshot.probable_amount)
+        if has_all_scope:
+            current_snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == run.id))
+            previous_snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == previous_run.id))
+            if (
+                current_snapshot
+                and previous_snapshot
+                and current_snapshot.probable_amount is not None
+                and previous_snapshot.probable_amount is not None
+            ):
+                probable_delta = _as_decimal(current_snapshot.probable_amount) - _as_decimal(previous_snapshot.probable_amount)
 
     alerts: list[dict] = []
     base_date = run.base_date.isoformat()
@@ -162,7 +200,7 @@ def build_latest_portfolio_alerts(db: Session, *, snapshot_id: str | None = None
         )
 
     snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == run.id))
-    if snapshot and snapshot.probable_amount and snapshot.probable_amount > Decimal("0"):
+    if has_all_scope and snapshot and snapshot.probable_amount and snapshot.probable_amount > Decimal("0"):
         alerts.append(
             {
                 "id": "probable-risk-critical",

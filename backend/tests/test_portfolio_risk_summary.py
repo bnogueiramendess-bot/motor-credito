@@ -13,7 +13,7 @@ from app.db.session import SessionLocal
 from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
 from app.models.ar_aging_import_run import ArAgingImportRun
 from app.routes.portfolio import get_portfolio_risk_summary
-from app.services.portfolio_risk_service import calculate_portfolio_risk_from_bod
+from app.services.portfolio_risk_service import calculate_portfolio_risk_from_bod, calculate_portfolio_risk_from_bod_raw_rows
 
 
 class PortfolioRiskSummaryTestCase(unittest.TestCase):
@@ -98,6 +98,46 @@ class PortfolioRiskSummaryTestCase(unittest.TestCase):
         self.assertEqual(response.at_risk_amount, 1500.0)
         self.assertEqual(response.clients_at_risk, 2)
         self.assertEqual(response.distribution.healthy.amount, 2000.0)
+
+    def test_top_risk_list_should_apply_threshold_only_in_consolidated_mode(self) -> None:
+        raw_rows = []
+        for idx, amount in enumerate([100000, 200000, 300000, 400000, 450000, 600000], start=1):
+            raw_rows.append(
+                {
+                    "col_2": f"Cliente {idx}",
+                    "col_4": "Additive",
+                    "col_7": str(amount),
+                    "col_12": str(amount),
+                    "col_13": "0",
+                    "col_14": "0",
+                }
+            )
+
+        consolidated = calculate_portfolio_risk_from_bod_raw_rows(raw_rows)
+        scoped = calculate_portfolio_risk_from_bod_raw_rows(raw_rows, top_clients_min_exposure=0, top_clients_limit=5)
+
+        self.assertEqual(len(consolidated["top_clients_at_risk"]), 1)
+        self.assertEqual(consolidated["top_clients_at_risk"][0]["customer_name"], "Cliente 6")
+        self.assertEqual(len(scoped["top_clients_at_risk"]), 5)
+        self.assertEqual(scoped["top_clients_at_risk"][0]["customer_name"], "Cliente 6")
+
+    def test_top_risk_list_should_include_rare_status(self) -> None:
+        raw_rows = [
+            {"col_2": "Cliente Rare", "col_4": "Additive", "col_7": "800000", "col_12": "0", "col_13": "0", "col_14": "800000"}
+        ]
+        payload = calculate_portfolio_risk_from_bod_raw_rows(raw_rows)
+        self.assertEqual(len(payload["top_clients_at_risk"]), 1)
+        self.assertEqual(payload["top_clients_at_risk"][0]["risk_level"], "healthy")
+
+    def test_should_not_stop_parsing_after_stop_label_if_valid_rows_continue(self) -> None:
+        raw_rows = [
+            {"col_2": "Cliente Antes", "col_12": "1000", "col_13": "0", "col_14": "0"},
+            {"col_2": "Total Over Due in Litigation (TOP 12)", "col_12": "999", "col_13": "999", "col_14": "999"},
+            {"col_2": "Cliente Rare Depois", "col_12": "0", "col_13": "0", "col_14": "2500"},
+        ]
+        payload = calculate_portfolio_risk_from_bod_raw_rows(raw_rows, top_clients_min_exposure=0)
+        self.assertEqual(payload["distribution"]["healthy"]["amount"], 2500.0)
+        self.assertEqual(payload["distribution"]["critical"]["amount"], 1000.0)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.security import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
 from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
@@ -47,9 +48,28 @@ from app.services.portfolio_risk_service import (
     calculate_portfolio_risk_from_bod,
     calculate_portfolio_risk_from_bod_raw_rows,
 )
+from app.services.bu_scope import (
+    BU_SCOPE_FORBIDDEN_MESSAGE,
+    assert_bu_in_scope,
+    bu_name_in_scope,
+    get_user_allowed_business_units,
+    resolve_business_unit_context,
+    user_has_all_bu_scope,
+)
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio-aging"])
 logger = logging.getLogger(__name__)
+
+
+def _resolve_scope_context(
+    db: Session,
+    current: CurrentUser | None,
+    business_unit_context: str | None = None,
+) -> tuple[set[str], bool]:
+    if not isinstance(current, CurrentUser):
+        return set(), True
+    resolved = resolve_business_unit_context(db, current, business_unit_context)
+    return resolved.effective_bu_names, resolved.has_all_scope
 
 
 def _latest_valid_import_run(db: Session) -> ArAgingImportRun:
@@ -100,42 +120,52 @@ def _derive_open_amount(open_amount: Decimal | None, overdue_amount: Decimal | N
     return normalized_open
 
 
-def _group_consolidated_map(db: Session, import_run_id: int) -> dict[str, dict[str, Decimal | None]]:
+def _group_consolidated_map(
+    db: Session,
+    import_run_id: int,
+    *,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> dict[str, dict[str, Decimal | None]]:
     rows = db.execute(
         select(
             ArAgingGroupConsolidatedRow.economic_group_normalized,
-            func.sum(ArAgingGroupConsolidatedRow.overdue_amount),
-            func.sum(ArAgingGroupConsolidatedRow.not_due_amount),
-            func.sum(ArAgingGroupConsolidatedRow.aging_amount),
-            func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount),
-            func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount),
-            func.sum(ArAgingGroupConsolidatedRow.exposure_amount),
+            ArAgingGroupConsolidatedRow.overdue_amount,
+            ArAgingGroupConsolidatedRow.not_due_amount,
+            ArAgingGroupConsolidatedRow.aging_amount,
+            ArAgingGroupConsolidatedRow.insured_limit_amount,
+            ArAgingGroupConsolidatedRow.approved_credit_amount,
+            ArAgingGroupConsolidatedRow.exposure_amount,
+            ArAgingGroupConsolidatedRow.raw_payload_json,
         )
         .where(ArAgingGroupConsolidatedRow.import_run_id == import_run_id)
-        .group_by(ArAgingGroupConsolidatedRow.economic_group_normalized)
     ).all()
 
     mapped: dict[str, dict[str, Decimal | None | bool]] = {}
-    for group_key, overdue, not_due, aging, insured, approved_credit, exposure in rows:
+    for group_key, overdue, not_due, aging, insured, approved_credit, exposure, raw_payload in rows:
         if not group_key:
             continue
-        mapped[group_key] = {
-            "overdue": overdue,
-            "not_due": not_due,
-            "aging": aging,
-            "insured": insured,
-            "approved_credit": approved_credit,
-            "exposure": exposure,
+        bu_name = _row_bu_normalized_from_raw(raw_payload)
+        if not bu_name_in_scope(allowed_bu_names or set(), bu_name, has_all_scope=has_all_scope):
+            continue
+        current = mapped.get(group_key) or {
+            "overdue": Decimal("0"),
+            "not_due": Decimal("0"),
+            "aging": Decimal("0"),
+            "insured": Decimal("0"),
+            "approved_credit": Decimal("0"),
+            "exposure": Decimal("0"),
             "is_litigation": False,
         }
+        current["overdue"] = _as_decimal(current["overdue"]) + _as_decimal(overdue)  # type: ignore[arg-type]
+        current["not_due"] = _as_decimal(current["not_due"]) + _as_decimal(not_due)  # type: ignore[arg-type]
+        current["aging"] = _as_decimal(current["aging"]) + _as_decimal(aging)  # type: ignore[arg-type]
+        current["insured"] = _as_decimal(current["insured"]) + _as_decimal(insured)  # type: ignore[arg-type]
+        current["approved_credit"] = _as_decimal(current["approved_credit"]) + _as_decimal(approved_credit)  # type: ignore[arg-type]
+        current["exposure"] = _as_decimal(current["exposure"]) + _as_decimal(exposure)  # type: ignore[arg-type]
+        mapped[group_key] = current
 
-    litigation_rows = db.execute(
-        select(
-            ArAgingGroupConsolidatedRow.economic_group_normalized,
-            ArAgingGroupConsolidatedRow.raw_payload_json,
-        ).where(ArAgingGroupConsolidatedRow.import_run_id == import_run_id)
-    ).all()
-    for group_key, raw_payload in litigation_rows:
+    for group_key, *_values, raw_payload in rows:
         if not group_key:
             continue
         entry = mapped.get(group_key)
@@ -234,6 +264,11 @@ def _raw_decimal_with_fallback(raw: dict | None, key: str, fallback_col: int) ->
     return _raw_decimal(raw, f"col_{fallback_col}")
 
 
+def _row_bu_normalized_from_raw(raw_payload: dict | None) -> str | None:
+    bu_source = _raw_text(raw_payload, "bu_original") or _raw_text(raw_payload, "col_2")
+    return normalize_bu(bu_source).bu_normalized
+
+
 def _build_comparison_snapshot(snapshot_id: str, run: ArAgingImportRun) -> PortfolioComparisonSnapshot:
     normalized = snapshot_id.strip().lower()
     if normalized == "current":
@@ -262,24 +297,30 @@ def _build_metric(from_value: Decimal, to_value: Decimal) -> PortfolioComparison
     )
 
 
-def _group_base_map(db: Session, import_run_id: int) -> dict[str, dict[str, Decimal | int]]:
+def _group_base_map(
+    db: Session,
+    import_run_id: int,
+    *,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> dict[str, dict[str, Decimal | int]]:
     consolidated_rows = db.execute(
         select(
             ArAgingGroupConsolidatedRow.economic_group_normalized,
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.not_due_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.exposure_amount), 0),
+            ArAgingGroupConsolidatedRow.aging_amount,
+            ArAgingGroupConsolidatedRow.overdue_amount,
+            ArAgingGroupConsolidatedRow.not_due_amount,
+            ArAgingGroupConsolidatedRow.insured_limit_amount,
+            ArAgingGroupConsolidatedRow.exposure_amount,
+            ArAgingGroupConsolidatedRow.raw_payload_json,
         )
         .where(
             ArAgingGroupConsolidatedRow.import_run_id == import_run_id,
             ArAgingGroupConsolidatedRow.economic_group_normalized.is_not(None),
         )
-        .group_by(ArAgingGroupConsolidatedRow.economic_group_normalized)
     ).all()
 
-    data_total_rows = db.execute(
+    data_total_query = (
         select(
             ArAgingDataTotalRow.economic_group_normalized,
             func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
@@ -291,7 +332,14 @@ def _group_base_map(db: Session, import_run_id: int) -> dict[str, dict[str, Deci
             ArAgingDataTotalRow.import_run_id == import_run_id,
             ArAgingDataTotalRow.economic_group_normalized.is_not(None),
         )
-        .group_by(ArAgingDataTotalRow.economic_group_normalized)
+    )
+    if not has_all_scope and allowed_bu_names:
+        data_total_query = data_total_query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        data_total_query = data_total_query.where(False)
+
+    data_total_rows = db.execute(
+        data_total_query.group_by(ArAgingDataTotalRow.economic_group_normalized)
     ).all()
 
     data_total_map: dict[str, dict[str, Decimal | int]] = {}
@@ -306,17 +354,38 @@ def _group_base_map(db: Session, import_run_id: int) -> dict[str, dict[str, Deci
         }
 
     result: dict[str, dict[str, Decimal | int]] = {}
-    for group_key, aging_amount, overdue_amount, not_due_amount, insured_limit_amount, exposure_amount in consolidated_rows:
+    consolidated_map: dict[str, dict[str, Decimal]] = {}
+    for group_key, aging_amount, overdue_amount, not_due_amount, insured_limit_amount, exposure_amount, raw_payload in consolidated_rows:
         if not group_key:
             continue
-        total_open = _derive_open_amount(aging_amount, overdue_amount, not_due_amount)
+        bu_name = _row_bu_normalized_from_raw(raw_payload)
+        if not bu_name_in_scope(allowed_bu_names or set(), bu_name, has_all_scope=has_all_scope):
+            continue
+        entry = consolidated_map.setdefault(
+            group_key,
+            {
+                "aging": Decimal("0"),
+                "overdue": Decimal("0"),
+                "not_due": Decimal("0"),
+                "insured": Decimal("0"),
+                "exposure": Decimal("0"),
+            },
+        )
+        entry["aging"] += _as_decimal(aging_amount)
+        entry["overdue"] += _as_decimal(overdue_amount)
+        entry["not_due"] += _as_decimal(not_due_amount)
+        entry["insured"] += _as_decimal(insured_limit_amount)
+        entry["exposure"] += _as_decimal(exposure_amount)
+
+    for group_key, consolidated_entry in consolidated_map.items():
+        total_open = _derive_open_amount(consolidated_entry["aging"], consolidated_entry["overdue"], consolidated_entry["not_due"])
         data_total_metrics = data_total_map.get(group_key, {})
         result[group_key] = {
             "total_open_amount": total_open,
-            "total_overdue_amount": _as_decimal(overdue_amount),
-            "total_not_due_amount": _as_decimal(not_due_amount),
-            "insured_limit_amount": _as_decimal(insured_limit_amount),
-            "exposure_amount": _as_decimal(exposure_amount),
+            "total_overdue_amount": consolidated_entry["overdue"],
+            "total_not_due_amount": consolidated_entry["not_due"],
+            "insured_limit_amount": consolidated_entry["insured"],
+            "exposure_amount": consolidated_entry["exposure"],
             "customers_count": int(data_total_metrics.get("customers_count", 0)),
         }
 
@@ -498,50 +567,39 @@ def list_portfolio_snapshots(db: Session = Depends(get_db)) -> PortfolioSnapshot
 @router.get("/aging/latest", response_model=PortfolioAgingLatestResponse)
 def get_latest_aging_summary(
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioAgingLatestResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
-
-    counts = db.execute(
-        select(
-            func.count(ArAgingGroupConsolidatedRow.id),
-            func.count(func.distinct(ArAgingGroupConsolidatedRow.economic_group_normalized)),
-        ).where(ArAgingGroupConsolidatedRow.import_run_id == run.id)
-    ).one()
-
-    consolidated_totals = db.execute(
-        select(
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.not_due_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.exposure_amount), 0),
-        ).where(ArAgingGroupConsolidatedRow.import_run_id == run.id)
-    ).one()
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
 
     consolidated_rows = db.execute(
         select(
             ArAgingGroupConsolidatedRow.aging_amount,
             ArAgingGroupConsolidatedRow.overdue_amount,
             ArAgingGroupConsolidatedRow.not_due_amount,
+            ArAgingGroupConsolidatedRow.approved_credit_amount,
+            ArAgingGroupConsolidatedRow.exposure_amount,
             ArAgingGroupConsolidatedRow.insured_limit_amount,
             ArAgingGroupConsolidatedRow.raw_payload_json,
         ).where(ArAgingGroupConsolidatedRow.import_run_id == run.id)
     ).all()
-
-    total_open_consolidated = _as_decimal(consolidated_totals[0])
-    total_overdue_consolidated = _as_decimal(consolidated_totals[1])
-    total_not_due_consolidated = _as_decimal(consolidated_totals[2])
+    total_open_consolidated = Decimal("0")
+    total_overdue_consolidated = Decimal("0")
+    total_not_due_consolidated = Decimal("0")
+    total_approved_credit = Decimal("0")
+    total_exposure = Decimal("0")
+    total_insured_limit = Decimal("0")
     payload_totals = {
         "total_open_amount": total_open_consolidated,
         "total_overdue_amount": total_overdue_consolidated,
         "total_not_due_amount": total_not_due_consolidated,
-        "distinct_customers": counts[0],
-        "distinct_groups": counts[1],
-        "total_insured_limit_amount": _as_decimal(consolidated_totals[3]),
-        "total_internal_company_limit_amount": _as_decimal(consolidated_totals[4]),
-        "total_exposure_amount": _as_decimal(consolidated_totals[5]),
+        "distinct_customers": 0,
+        "distinct_groups": 0,
+        "total_insured_limit_amount": Decimal("0"),
+        "total_internal_company_limit_amount": Decimal("0"),
+        "total_exposure_amount": Decimal("0"),
         "import_totals_json": run.totals_json,
     }
     bu_metrics: dict[str, dict[str, Decimal]] = defaultdict(_empty_metrics)
@@ -550,15 +608,28 @@ def get_latest_aging_summary(
     buckets_not_due: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0")))
     buckets_overdue: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0")))
 
-    for open_amount_row, overdue_amount_row, not_due_amount_row, insured_limit_row, raw_payload in consolidated_rows:
-        bu_source = _raw_text(raw_payload, "bu_original") or _raw_text(raw_payload, "col_2")
-        bu_meta = normalize_bu(bu_source)
+    scoped_groups: set[str] = set()
+    for open_amount_row, overdue_amount_row, not_due_amount_row, approved_credit_row, exposure_row, insured_limit_row, raw_payload in consolidated_rows:
+        bu_meta = normalize_bu(_row_bu_normalized_from_raw(raw_payload))
         bu = bu_meta.bu_normalized
+        if not bu_name_in_scope(allowed_bu_names, bu, has_all_scope=has_all_scope):
+            continue
         open_amount_row = _as_decimal(open_amount_row)
         overdue_amount_row = _as_decimal(overdue_amount_row)
         not_due_amount_row = _as_decimal(not_due_amount_row)
+        approved_credit_row = _as_decimal(approved_credit_row)
+        exposure_row = _as_decimal(exposure_row)
         insured_limit_row = _as_decimal(insured_limit_row)
         uncovered_row = max(open_amount_row - insured_limit_row, Decimal("0"))
+        total_open_consolidated += open_amount_row
+        total_overdue_consolidated += overdue_amount_row
+        total_not_due_consolidated += not_due_amount_row
+        total_approved_credit += approved_credit_row
+        total_exposure += exposure_row
+        total_insured_limit += insured_limit_row
+        group_key = normalize_text_key(_raw_text(raw_payload, "economic_group_original") or _raw_text(raw_payload, "col_3"))
+        if group_key:
+            scoped_groups.add(group_key)
 
         bu_metrics[bu]["total_open"] += open_amount_row
         bu_metrics[bu]["overdue"] += overdue_amount_row
@@ -592,6 +663,24 @@ def get_latest_aging_summary(
             litigation_by_bu_metrics[bu]["total_open"] += open_amount_row
             litigation_by_bu_metrics[bu]["overdue"] += overdue_amount_row
             litigation_by_bu_metrics[bu]["not_due"] += not_due_amount_row
+
+    scoped_customers_count_query = select(func.count(func.distinct(ArAgingDataTotalRow.cnpj_normalized))).where(
+        ArAgingDataTotalRow.import_run_id == run.id,
+        ArAgingDataTotalRow.cnpj_normalized.is_not(None),
+    )
+    if not has_all_scope and allowed_bu_names:
+        scoped_customers_count_query = scoped_customers_count_query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        scoped_customers_count_query = scoped_customers_count_query.where(False)
+    scoped_customers_count = int(db.scalar(scoped_customers_count_query) or 0)
+    payload_totals["total_open_amount"] = total_open_consolidated
+    payload_totals["total_overdue_amount"] = total_overdue_consolidated
+    payload_totals["total_not_due_amount"] = total_not_due_consolidated
+    payload_totals["total_insured_limit_amount"] = total_insured_limit
+    payload_totals["total_internal_company_limit_amount"] = total_approved_credit
+    payload_totals["total_exposure_amount"] = total_exposure
+    payload_totals["distinct_customers"] = scoped_customers_count
+    payload_totals["distinct_groups"] = len(scoped_groups)
 
     payload_totals["bu_breakdown"] = [
         {"bu": bu, **metrics}
@@ -657,8 +746,11 @@ def get_latest_aging_summary(
 def get_portfolio_comparison(
     from_snapshot_id: str = Query(...),
     to_snapshot_id: str = Query(...),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioComparisonResponse:
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     normalized_from = from_snapshot_id.strip().lower()
     normalized_to = to_snapshot_id.strip().lower()
 
@@ -677,8 +769,8 @@ def get_portfolio_comparison(
     from_run = resolve_monthly_closing_snapshot(db, from_snapshot_id)
     to_run = resolve_snapshot_import_run(db, to_snapshot_id) if normalized_to == "current" else resolve_monthly_closing_snapshot(db, to_snapshot_id)
 
-    from_groups = _group_base_map(db, from_run.id)
-    to_groups = _group_base_map(db, to_run.id)
+    from_groups = _group_base_map(db, from_run.id, allowed_bu_names=allowed_bu_names, has_all_scope=has_all_scope)
+    to_groups = _group_base_map(db, to_run.id, allowed_bu_names=allowed_bu_names, has_all_scope=has_all_scope)
     all_group_names = sorted(set(from_groups.keys()) | set(to_groups.keys()))
 
     zero_row = {
@@ -783,9 +875,17 @@ def get_portfolio_comparison(
 @router.get("/aging/alerts/latest", response_model=PortfolioAgingAlertsLatestResponse)
 def get_latest_aging_alerts(
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioAgingAlertsLatestResponse:
-    payload = build_latest_portfolio_alerts(db, snapshot_id=snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
+    payload = build_latest_portfolio_alerts(
+        db,
+        snapshot_id=snapshot_id,
+        allowed_bu_names=allowed_bu_names,
+        has_all_scope=has_all_scope,
+    )
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -797,9 +897,17 @@ def get_latest_aging_alerts(
 @router.get("/aging/movements/latest", response_model=PortfolioAgingMovementsLatestResponse)
 def get_latest_aging_movements(
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioAgingMovementsLatestResponse:
-    payload = build_latest_portfolio_movements(db, snapshot_id=snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
+    payload = build_latest_portfolio_movements(
+        db,
+        snapshot_id=snapshot_id,
+        allowed_bu_names=allowed_bu_names,
+        has_all_scope=has_all_scope,
+    )
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -811,9 +919,50 @@ def get_latest_aging_movements(
 @router.get("/risk-summary", response_model=PortfolioRiskSummaryResponse)
 def get_portfolio_risk_summary(
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioRiskSummaryResponse:
+    if isinstance(current, CurrentUser):
+        bu_resolution = resolve_business_unit_context(db, current, business_unit_context)
+        allowed_bu_names = bu_resolution.effective_bu_names
+        has_all_scope = bu_resolution.has_all_scope
+        is_consolidated_context = bu_resolution.is_consolidated
+    else:
+        allowed_bu_names = set()
+        has_all_scope = True
+        is_consolidated_context = True
+    top_clients_min_exposure = 500_000 if is_consolidated_context else 0
+    top_clients_limit = None if is_consolidated_context else 5
     run = resolve_snapshot_import_run(db, snapshot_id)
+    snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == run.id))
+    raw_rows: list[dict] | list = []
+    if snapshot is not None and isinstance(snapshot.raw_bod_json, dict):
+        candidate_rows = snapshot.raw_bod_json.get("rows", [])
+        if isinstance(candidate_rows, list):
+            raw_rows = candidate_rows
+
+    if not has_all_scope:
+        raw_rows = [
+            row
+            for row in raw_rows
+            if isinstance(row, dict)
+            and bu_name_in_scope(
+                allowed_bu_names,
+                normalize_bu(row.get("col_4")).bu_normalized,
+                has_all_scope=False,
+            )
+        ]
+
+    if raw_rows:
+        return PortfolioRiskSummaryResponse(
+            **calculate_portfolio_risk_from_bod_raw_rows(
+                raw_rows,
+                top_clients_min_exposure=top_clients_min_exposure,
+                top_clients_limit=top_clients_limit,
+            )
+        )
+
     file_path = None
     if isinstance(run.totals_json, dict):
         candidate = run.totals_json.get("_stored_file_path")
@@ -822,32 +971,33 @@ def get_portfolio_risk_summary(
 
     if file_path:
         try:
-            return PortfolioRiskSummaryResponse(**calculate_portfolio_risk_from_bod(file_path))
+            return PortfolioRiskSummaryResponse(
+                **calculate_portfolio_risk_from_bod(
+                    file_path,
+                    top_clients_min_exposure=top_clients_min_exposure,
+                    top_clients_limit=top_clients_limit,
+                )
+            )
         except Exception:
             logger.warning("Falha ao calcular risk-summary via arquivo salvo para import_run_id=%s", run.id, exc_info=True)
 
-    snapshot = db.scalar(select(ArAgingBodSnapshot).where(ArAgingBodSnapshot.import_run_id == run.id))
-    if snapshot is None or not isinstance(snapshot.raw_bod_json, dict):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Nao foi possivel consolidar risco da carteira para a base mais recente.",
-        )
-
-    raw_rows = snapshot.raw_bod_json.get("rows", [])
-    if not isinstance(raw_rows, list):
-        raw_rows = []
-
-    return PortfolioRiskSummaryResponse(**calculate_portfolio_risk_from_bod_raw_rows(raw_rows))
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Nao foi possivel consolidar risco da carteira para a base mais recente.",
+    )
 
 
 @router.get("/customers", response_model=PortfolioCustomersResponse)
 def list_portfolio_customers(
     bu: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     cnpj: str | None = Query(default=None),
     snapshot_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioCustomersResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
 
     query = select(
         ArAgingDataTotalRow.cnpj_normalized,
@@ -863,8 +1013,14 @@ def list_portfolio_customers(
     )
 
     bu_normalized = normalize_bu(bu).bu_normalized if bu else None
+    if bu_normalized and not has_all_scope and bu_normalized not in allowed_bu_names:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=BU_SCOPE_FORBIDDEN_MESSAGE)
     if bu_normalized:
         query = query.where(ArAgingDataTotalRow.bu_normalized == bu_normalized)
+    elif not has_all_scope and allowed_bu_names:
+        query = query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        query = query.where(False)
 
     cnpj_normalized = normalize_cnpj(cnpj) if cnpj else None
     if cnpj_normalized:
@@ -873,7 +1029,12 @@ def list_portfolio_customers(
     query = query.group_by(ArAgingDataTotalRow.cnpj_normalized).order_by(ArAgingDataTotalRow.cnpj_normalized)
 
     rows = db.execute(query).all()
-    consolidated_by_group = _group_consolidated_map(db, run.id)
+    consolidated_by_group = _group_consolidated_map(
+        db,
+        run.id,
+        allowed_bu_names=allowed_bu_names,
+        has_all_scope=has_all_scope,
+    )
 
     items: list[PortfolioCustomerSummary] = []
     for cnpj_value, customer_name, bu_value, group_key, open_amount, overdue_amount, due_amount in rows:
@@ -904,9 +1065,12 @@ def list_portfolio_customers(
 def get_portfolio_customer(
     cnpj: str,
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioCustomerDetailResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     cnpj_normalized = normalize_cnpj(cnpj)
     if not cnpj_normalized:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CNPJ invalido.")
@@ -930,8 +1094,14 @@ def get_portfolio_customer(
 
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente nao encontrado na carteira Aging.")
+    assert_bu_in_scope(allowed_bu_names, row[2], has_all_scope=has_all_scope)
 
-    consolidated_by_group = _group_consolidated_map(db, run.id)
+    consolidated_by_group = _group_consolidated_map(
+        db,
+        run.id,
+        allowed_bu_names=allowed_bu_names,
+        has_all_scope=has_all_scope,
+    )
     group_key = row[3]
     group_metrics = consolidated_by_group.get(group_key or "", {})
 
@@ -965,11 +1135,14 @@ def get_portfolio_customer(
 @router.get("/groups", response_model=PortfolioGroupsResponse)
 def list_portfolio_groups(
     bu: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     q: str | None = Query(default=None),
     snapshot_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioGroupsResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
 
     query = select(
         ArAgingDataTotalRow.economic_group_normalized,
@@ -983,11 +1156,22 @@ def list_portfolio_groups(
     ).where(ArAgingDataTotalRow.import_run_id == run.id)
 
     bu_normalized = normalize_bu(bu).bu_normalized if bu else None
+    if bu_normalized and not has_all_scope and bu_normalized not in allowed_bu_names:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=BU_SCOPE_FORBIDDEN_MESSAGE)
     if bu_normalized:
         query = query.where(ArAgingDataTotalRow.bu_normalized == bu_normalized)
+    elif not has_all_scope and allowed_bu_names:
+        query = query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        query = query.where(False)
 
     rows = db.execute(query).all()
-    consolidated_by_group = _group_consolidated_map(db, run.id)
+    consolidated_by_group = _group_consolidated_map(
+        db,
+        run.id,
+        allowed_bu_names=allowed_bu_names,
+        has_all_scope=has_all_scope,
+    )
 
     grouped: dict[str, dict] = {}
     for group_key, customer_name, cnpj_value, bu_value, open_amount, overdue_amount, due_amount, raw_payload in rows:
@@ -1074,31 +1258,24 @@ def list_portfolio_groups(
 def get_portfolio_group(
     economic_group: str,
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioGroupDetailResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     group_key = normalize_text_key(economic_group)
     if group_key is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Grupo economico invalido.")
 
-    consolidated = db.execute(
-        select(
-            func.max(ArAgingGroupConsolidatedRow.economic_group_normalized),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.not_due_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.exposure_amount), 0),
-        )
-        .where(
-            ArAgingGroupConsolidatedRow.import_run_id == run.id,
-            ArAgingGroupConsolidatedRow.economic_group_normalized == group_key,
-        )
-        .group_by(ArAgingGroupConsolidatedRow.economic_group_normalized)
-    ).first()
-
-    if consolidated is None:
+    consolidated_by_group = _group_consolidated_map(
+        db,
+        run.id,
+        allowed_bu_names=allowed_bu_names,
+        has_all_scope=has_all_scope,
+    )
+    group_metrics = consolidated_by_group.get(group_key)
+    if group_metrics is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo economico nao encontrado.")
 
     customers_rows = db.execute(
@@ -1118,6 +1295,8 @@ def get_portfolio_group(
         .group_by(ArAgingDataTotalRow.cnpj_normalized)
         .order_by(ArAgingDataTotalRow.cnpj_normalized)
     ).all()
+    if customers_rows:
+        assert_bu_in_scope(allowed_bu_names, customers_rows[0][2], has_all_scope=has_all_scope)
 
     customers = [
         PortfolioCustomerSummary(
@@ -1128,9 +1307,9 @@ def get_portfolio_group(
             total_open_amount=_derive_open_amount(item[3], item[4], item[5]),
             total_overdue_amount=_as_decimal(item[4]),
             total_not_due_amount=_as_decimal(item[5]),
-            insured_limit_amount=consolidated[4],
-            approved_credit_amount=consolidated[5],
-            exposure_amount=consolidated[6],
+            insured_limit_amount=group_metrics.get("insured"),
+            approved_credit_amount=group_metrics.get("approved_credit"),
+            exposure_amount=group_metrics.get("exposure"),
         )
         for item in customers_rows
     ]
@@ -1144,13 +1323,13 @@ def get_portfolio_group(
     ).all()
 
     group = PortfolioGroupSummary(
-        economic_group=consolidated[0],
-        overdue_amount=_as_decimal(consolidated[1]),
-        not_due_amount=_as_decimal(consolidated[2]),
-        aging_amount=_as_decimal(consolidated[3]),
-        insured_limit_amount=_as_decimal(consolidated[4]),
-        approved_credit_amount=_as_decimal(consolidated[5]),
-        exposure_amount=_as_decimal(consolidated[6]),
+        economic_group=group_key,
+        overdue_amount=_as_decimal(group_metrics.get("overdue")),
+        not_due_amount=_as_decimal(group_metrics.get("not_due")),
+        aging_amount=_as_decimal(group_metrics.get("aging")),
+        insured_limit_amount=_as_decimal(group_metrics.get("insured")),
+        approved_credit_amount=_as_decimal(group_metrics.get("approved_credit")),
+        exposure_amount=_as_decimal(group_metrics.get("exposure")),
     )
 
     return PortfolioGroupDetailResponse(import_meta=_import_meta(run), group=group, customers=customers, remarks=[r for r in remarks if r])
@@ -1160,9 +1339,12 @@ def get_portfolio_group(
 def list_group_open_invoices(
     economic_group: str,
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioOpenInvoicesResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     group_key = normalize_text_key(economic_group)
     if group_key is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Grupo economico invalido.")
@@ -1180,17 +1362,25 @@ def list_group_open_invoices(
 
     if group_key.startswith("NO_GROUP::"):
         fallback_token = group_key.replace("NO_GROUP::", "", 1)
-        rows = db.execute(
-            base_select.where(
-                ArAgingDataTotalRow.economic_group_normalized.is_(None),
-                or_(
-                    ArAgingDataTotalRow.cnpj_normalized == fallback_token,
-                    func.upper(func.coalesce(ArAgingDataTotalRow.customer_name, "")) == fallback_token,
-                ),
-            )
-        ).all()
+        scoped = base_select.where(
+            ArAgingDataTotalRow.economic_group_normalized.is_(None),
+            or_(
+                ArAgingDataTotalRow.cnpj_normalized == fallback_token,
+                func.upper(func.coalesce(ArAgingDataTotalRow.customer_name, "")) == fallback_token,
+            ),
+        )
+        if not has_all_scope and allowed_bu_names:
+            scoped = scoped.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+        elif not has_all_scope and not allowed_bu_names:
+            scoped = scoped.where(False)
+        rows = db.execute(scoped).all()
     else:
-        rows = db.execute(base_select.where(ArAgingDataTotalRow.economic_group_normalized == group_key)).all()
+        scoped = base_select.where(ArAgingDataTotalRow.economic_group_normalized == group_key)
+        if not has_all_scope and allowed_bu_names:
+            scoped = scoped.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+        elif not has_all_scope and not allowed_bu_names:
+            scoped = scoped.where(False)
+        rows = db.execute(scoped).all()
 
     items: list[PortfolioOpenInvoiceItem] = []
     for customer_name, cnpj_value, bu_value, open_amount, overdue_amount, due_amount, raw_payload in rows:
@@ -1227,27 +1417,33 @@ def list_group_open_invoices(
 def list_customer_open_invoices(
     cnpj: str,
     snapshot_id: str | None = Query(default=None),
+    business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> PortfolioOpenInvoicesResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
+    allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     cnpj_normalized = normalize_cnpj(cnpj)
     if not cnpj_normalized:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CNPJ invalido.")
 
-    rows = db.execute(
-        select(
-            ArAgingDataTotalRow.customer_name,
-            ArAgingDataTotalRow.cnpj_normalized,
-            ArAgingDataTotalRow.bu_normalized,
-            ArAgingDataTotalRow.open_amount,
-            ArAgingDataTotalRow.overdue_amount,
-            ArAgingDataTotalRow.due_amount,
-            ArAgingDataTotalRow.raw_payload_json,
-        ).where(
-            ArAgingDataTotalRow.import_run_id == run.id,
-            ArAgingDataTotalRow.cnpj_normalized == cnpj_normalized,
-        )
-    ).all()
+    scoped = select(
+        ArAgingDataTotalRow.customer_name,
+        ArAgingDataTotalRow.cnpj_normalized,
+        ArAgingDataTotalRow.bu_normalized,
+        ArAgingDataTotalRow.open_amount,
+        ArAgingDataTotalRow.overdue_amount,
+        ArAgingDataTotalRow.due_amount,
+        ArAgingDataTotalRow.raw_payload_json,
+    ).where(
+        ArAgingDataTotalRow.import_run_id == run.id,
+        ArAgingDataTotalRow.cnpj_normalized == cnpj_normalized,
+    )
+    if not has_all_scope and allowed_bu_names:
+        scoped = scoped.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        scoped = scoped.where(False)
+    rows = db.execute(scoped).all()
 
     items: list[PortfolioOpenInvoiceItem] = []
     for customer_name, cnpj_value, bu_value, open_amount, overdue_amount, due_amount, raw_payload in rows:

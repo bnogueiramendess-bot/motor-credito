@@ -53,6 +53,14 @@ from app.services.score import ScoreCalculationError, calculate_and_upsert_score
 from app.services.external_cnpj import fetch_external_cnpj_data, is_valid_cnpj
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_text_key
 from app.services.credit_policy_config import MIN_EARLY_REVIEW_JUSTIFICATION_LENGTH, REANALYSIS_COOLDOWN_DAYS
+from app.services.bu_scope import (
+    assert_bu_in_scope,
+    bu_name_in_scope,
+    get_user_allowed_business_units,
+    resolve_business_unit_context,
+    resolve_analysis_business_unit,
+    user_has_all_bu_scope,
+)
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
 
@@ -147,6 +155,12 @@ def _has_any_permission(current: CurrentUser, *keys: str) -> bool:
     return any(key in current.permissions for key in keys)
 
 
+def _require_any_permission_or_403(current: CurrentUser, *keys: str) -> None:
+    if _has_any_permission(current, *keys):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para esta operacao.")
+
+
 def _resolve_workflow_stage(status_value: str) -> str:
     if status_value in {"submitted"}:
         return "commercial_submitted"
@@ -176,6 +190,11 @@ def _status_label(status_value: str) -> str:
 
 
 def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
+    allowed_bu_names = get_user_allowed_business_units(db, current)
+    has_all_scope = user_has_all_bu_scope(current)
+    analysis_bu = resolve_analysis_business_unit(db, analysis)
+    assert_bu_in_scope(allowed_bu_names, analysis_bu, has_all_scope=has_all_scope)
+
     can_validate = _has_any_permission(current, "credit_request_validate", "credit.analysis.execute")
     can_approve = _has_any_permission(current, "credit_request_approve", "credit.approval.approve")
     can_reject = _has_any_permission(current, "credit_request_reject", "credit.approval.reject")
@@ -543,6 +562,7 @@ def list_credit_analyses_queue(
     q: str | None = None,
     status: str | None = None,
     bu: str | None = None,
+    business_unit_context: str | None = None,
     analysis_type: str | None = None,
     requester: str | None = None,
     assigned_analyst: str | None = None,
@@ -559,15 +579,9 @@ def list_credit_analyses_queue(
     query = query.order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
     rows = db.execute(query).all()
 
-    scoped_bu_names = set()
-    if "scope:all_bu" not in current.permissions:
-        scoped_bu_names = set(
-            db.scalars(
-                select(BusinessUnit.name)
-                .join(UserBusinessUnitScope, UserBusinessUnitScope.business_unit_id == BusinessUnit.id)
-                .where(UserBusinessUnitScope.user_id == current.user.id)
-            ).all()
-        )
+    bu_context = resolve_business_unit_context(db, current, business_unit_context)
+    scoped_bu_names = bu_context.effective_bu_names
+    has_all_scope = bu_context.has_all_scope
 
     items: list[CreditAnalysisQueueItem] = []
     for analysis, customer in rows:
@@ -581,7 +595,7 @@ def list_credit_analyses_queue(
             ).where(ArAgingDataTotalRow.cnpj_normalized == customer.document_number)
         ).one()
         bu_name = portfolio[0]
-        if scoped_bu_names and bu_name and bu_name not in scoped_bu_names:
+        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
 
         external_entries = list(
@@ -601,7 +615,7 @@ def list_credit_analyses_queue(
             triage_data = (analysis.decision_memory_json.get("triage_submission") or {}) if isinstance(analysis.decision_memory_json.get("triage_submission"), dict) else {}
         if not bu_name and isinstance(triage_data, dict):
             bu_name = triage_data.get("business_unit")
-        if scoped_bu_names and bu_name and bu_name not in scoped_bu_names:
+        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
 
         requester_name = None
@@ -694,21 +708,16 @@ def list_credit_analyses_queue(
 
 @router.get("/queue/options", response_model=CreditAnalysisQueueOptionsResponse)
 def list_credit_analyses_queue_options(
+    business_unit_context: str | None = None,
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysisQueueOptionsResponse:
     query = select(CreditAnalysis, Customer).join(Customer, Customer.id == CreditAnalysis.customer_id)
     rows = db.execute(query).all()
 
-    scoped_bu_names = set()
-    if "scope:all_bu" not in current.permissions:
-        scoped_bu_names = set(
-            db.scalars(
-                select(BusinessUnit.name)
-                .join(UserBusinessUnitScope, UserBusinessUnitScope.business_unit_id == BusinessUnit.id)
-                .where(UserBusinessUnitScope.user_id == current.user.id)
-            ).all()
-        )
+    bu_context = resolve_business_unit_context(db, current, business_unit_context)
+    scoped_bu_names = bu_context.effective_bu_names
+    has_all_scope = bu_context.has_all_scope
 
     statuses: set[str] = set()
     bus: set[str] = set()
@@ -721,7 +730,7 @@ def list_credit_analyses_queue_options(
             select(func.max(ArAgingDataTotalRow.bu_normalized)).where(ArAgingDataTotalRow.cnpj_normalized == customer.document_number)
         ).one()
         bu_name = portfolio[0]
-        if scoped_bu_names and bu_name and bu_name not in scoped_bu_names:
+        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
         if bu_name:
             bus.add(str(bu_name))
@@ -736,7 +745,7 @@ def list_credit_analyses_queue_options(
             triage_data = (analysis.decision_memory_json.get("triage_submission") or {}) if isinstance(analysis.decision_memory_json.get("triage_submission"), dict) else {}
         if not bu_name and isinstance(triage_data, dict):
             bu_name = triage_data.get("business_unit")
-        if scoped_bu_names and bu_name and bu_name not in scoped_bu_names:
+        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
         analysis_type = "novo_cliente" if not bu_name else ("revisao_antecipada" if bool(triage_data.get("is_early_review_request")) else "cliente_carteira")
         analysis_types.add(analysis_type)
@@ -786,6 +795,7 @@ def list_credit_analyses_monitor(
     q: str | None = None,
     status_filter: str | None = None,
     bu: str | None = None,
+    business_unit_context: str | None = None,
     workflow_stage: str | None = None,
     analysis_type: str | None = None,
     requester: str | None = None,
@@ -808,15 +818,9 @@ def list_credit_analyses_monitor(
     if not any([can_view_own, can_validate, can_submit_approval, can_approve, can_reject, can_view_bu]):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para visualizar o monitor de solicitacoes.")
 
-    scoped_bu_names = set()
-    if "scope:all_bu" not in current.permissions:
-        scoped_bu_names = set(
-            db.scalars(
-                select(BusinessUnit.name)
-                .join(UserBusinessUnitScope, UserBusinessUnitScope.business_unit_id == BusinessUnit.id)
-                .where(UserBusinessUnitScope.user_id == current.user.id)
-            ).all()
-        )
+    bu_context = resolve_business_unit_context(db, current, business_unit_context)
+    scoped_bu_names = bu_context.effective_bu_names
+    has_all_scope = bu_context.has_all_scope
 
     query = select(CreditAnalysis, Customer).join(Customer, Customer.id == CreditAnalysis.customer_id).order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
     rows = db.execute(query).all()
@@ -830,7 +834,7 @@ def list_credit_analyses_monitor(
             ).where(ArAgingDataTotalRow.cnpj_normalized == customer.document_number)
         ).one()
         bu_name = portfolio[0]
-        if scoped_bu_names and bu_name and bu_name not in scoped_bu_names:
+        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
 
         external_entries = list(db.scalars(select(ExternalDataEntry).where(ExternalDataEntry.credit_analysis_id == analysis.id)).all())
@@ -865,7 +869,7 @@ def list_credit_analyses_monitor(
             triage_data = (analysis.decision_memory_json.get("triage_submission") or {}) if isinstance(analysis.decision_memory_json.get("triage_submission"), dict) else {}
         if not bu_name and isinstance(triage_data, dict):
             bu_name = triage_data.get("business_unit")
-        if scoped_bu_names and bu_name and bu_name not in scoped_bu_names:
+        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
         is_early = bool(triage_data.get("is_early_review_request"))
         is_new_customer = not bool(bu_name)
@@ -975,31 +979,42 @@ def list_credit_analyses_monitor(
 
 @router.get("/monitor/options", response_model=CreditAnalysisQueueOptionsResponse)
 def list_credit_analyses_monitor_options(
+    business_unit_context: str | None = None,
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysisQueueOptionsResponse:
-    return list_credit_analyses_queue_options(db=db, current=current)
+    return list_credit_analyses_queue_options(business_unit_context=business_unit_context, db=db, current=current)
 
 
 @router.get("/{analysis_id}", response_model=CreditAnalysisRead)
-def get_credit_analysis(analysis_id: int, db: Session = Depends(get_db)) -> CreditAnalysis:
+def get_credit_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysis:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
     return analysis
 
 
 @router.get("/{analysis_id}/events", response_model=list[DecisionEventRead])
-def list_credit_analysis_events(analysis_id: int, db: Session = Depends(get_db)) -> list[DecisionEvent]:
+def list_credit_analysis_events(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> list[DecisionEvent]:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
 
     return list(
         db.scalars(
@@ -1161,13 +1176,19 @@ def create_external_data_file_metadata(
     response_model=ScoreCalculationResponse,
     status_code=status.HTTP_200_OK,
 )
-def calculate_score(analysis_id: int, db: Session = Depends(get_db)) -> ScoreCalculationResponse:
+def calculate_score(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> ScoreCalculationResponse:
+    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
 
     try:
         score_result, source_entry, recalculated = calculate_and_upsert_score(db, analysis_id)
@@ -1239,13 +1260,19 @@ def get_score_result(
     response_model=DecisionCalculationResponse,
     status_code=status.HTTP_200_OK,
 )
-def calculate_decision(analysis_id: int, db: Session = Depends(get_db)) -> DecisionCalculationResponse:
+def calculate_decision(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> DecisionCalculationResponse:
+    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
 
     score_result = db.scalar(select(ScoreResult.id).where(ScoreResult.credit_analysis_id == analysis_id))
     if score_result is None:
@@ -1347,7 +1374,16 @@ def apply_analysis_final_decision(
     analysis_id: int,
     payload: FinalDecisionApplyRequest,
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> FinalDecisionResponse:
+    _require_any_permission_or_403(current, "credit_request_approve", "credit_request_reject", "credit.approval.approve", "credit.approval.reject", "scope:all_bu")
+    analysis_record = db.get(CreditAnalysis, analysis_id)
+    if analysis_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Credit analysis not found.",
+        )
+    _enforce_technical_access_or_403(db, current, analysis_record)
     try:
         analysis, event_type = apply_final_decision(db, analysis_id, payload)
     except FinalDecisionError as exc:

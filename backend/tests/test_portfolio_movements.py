@@ -27,7 +27,16 @@ class PortfolioMovementsTestCase(unittest.TestCase):
             db.execute(delete(ArAgingImportRun).where(ArAgingImportRun.id.in_(self.created_ids)))
             db.commit()
 
-    def _seed_run(self, *, base_date_value: date, cnpj: str, customer_name: str, overdue: Decimal, open_amount: Decimal) -> int:
+    def _seed_run(
+        self,
+        *,
+        base_date_value: date,
+        cnpj: str,
+        customer_name: str,
+        overdue: Decimal,
+        open_amount: Decimal,
+        bu_name: str = "ADITIVOS",
+    ) -> int:
         with SessionLocal() as db:
             run = ArAgingImportRun(
                 base_date=base_date_value,
@@ -48,8 +57,8 @@ class PortfolioMovementsTestCase(unittest.TestCase):
                     cnpj_raw=cnpj,
                     cnpj_normalized=cnpj,
                     customer_name=customer_name,
-                    bu_raw="ADITIVOS",
-                    bu_normalized="ADITIVOS",
+                    bu_raw=bu_name,
+                    bu_normalized=bu_name,
                     economic_group_raw="Grupo A",
                     economic_group_normalized="grupo a",
                     open_amount=open_amount,
@@ -71,7 +80,7 @@ class PortfolioMovementsTestCase(unittest.TestCase):
                     insured_limit_amount=open_amount - Decimal("10000"),
                     approved_credit_amount=Decimal("0"),
                     exposure_amount=open_amount,
-                    raw_payload_json={},
+                    raw_payload_json={"bu_original": bu_name},
                 )
             )
             db.commit()
@@ -132,6 +141,82 @@ class PortfolioMovementsTestCase(unittest.TestCase):
             payload = build_latest_portfolio_movements(db)
         self.assertIsNotNone(payload)
         self.assertEqual(len(payload["movements"]), 0)
+
+    def test_should_respect_bu_scope_for_movements(self) -> None:
+        with SessionLocal() as db:
+            previous_run = ArAgingImportRun(
+                base_date=date(2025, 4, 26),
+                status="valid",
+                original_filename="26042025.xlsx",
+                mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_size=100,
+                warnings_json=[],
+                totals_json={},
+            )
+            current_run = ArAgingImportRun(
+                base_date=date(2025, 4, 27),
+                status="valid",
+                original_filename="27042025.xlsx",
+                mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_size=100,
+                warnings_json=[],
+                totals_json={},
+            )
+            db.add_all([previous_run, current_run])
+            db.flush()
+            self.created_ids.extend([previous_run.id, current_run.id])
+
+            rows = [
+                (previous_run.id, "11111111000111", "Cliente A", "Fertilizer", Decimal("100000"), Decimal("300000")),
+                (current_run.id, "11111111000111", "Cliente A", "Fertilizer", Decimal("180000"), Decimal("360000")),
+                (previous_run.id, "22222222000122", "Cliente B", "Additive", Decimal("50000"), Decimal("200000")),
+                (current_run.id, "22222222000122", "Cliente B", "Additive", Decimal("250000"), Decimal("500000")),
+            ]
+            for idx, (run_id, cnpj, name, bu, overdue, open_amount) in enumerate(rows, start=1):
+                db.add(
+                    ArAgingDataTotalRow(
+                        import_run_id=run_id,
+                        row_number=idx,
+                        cnpj_raw=cnpj,
+                        cnpj_normalized=cnpj,
+                        customer_name=name,
+                        bu_raw=bu,
+                        bu_normalized=bu,
+                        economic_group_raw="Grupo A",
+                        economic_group_normalized="grupo a",
+                        open_amount=open_amount,
+                        due_amount=max(open_amount - overdue, Decimal("0")),
+                        overdue_amount=overdue,
+                        aging_label="90+",
+                        raw_payload_json={},
+                    )
+                )
+                db.add(
+                    ArAgingGroupConsolidatedRow(
+                        import_run_id=run_id,
+                        row_number=idx,
+                        economic_group_raw="Grupo A",
+                        economic_group_normalized="grupo a",
+                        overdue_amount=overdue,
+                        not_due_amount=max(open_amount - overdue, Decimal("0")),
+                        aging_amount=open_amount,
+                        insured_limit_amount=open_amount - Decimal("10000"),
+                        approved_credit_amount=Decimal("0"),
+                        exposure_amount=open_amount,
+                        raw_payload_json={"bu_original": bu},
+                    )
+                )
+            db.commit()
+        with SessionLocal() as db:
+            payload = build_latest_portfolio_movements(
+                db,
+                allowed_bu_names={"Fertilizer"},
+                has_all_scope=False,
+            )
+        self.assertIsNotNone(payload)
+        names = {item["entity_name"] for item in payload["movements"]}
+        self.assertIn("Cliente A", names)
+        self.assertNotIn("Cliente B", names)
 
 
 if __name__ == "__main__":

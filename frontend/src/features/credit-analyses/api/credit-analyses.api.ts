@@ -23,6 +23,7 @@ export type OperationalQueueParams = {
   date_to?: string;
   page?: number;
   page_size?: number;
+  business_unit_context?: string;
 };
 
 export async function getCreditAnalysesQueue(params: OperationalQueueParams = {}) {
@@ -36,8 +37,9 @@ export async function getCreditAnalysesQueue(params: OperationalQueueParams = {}
   return apiClient.get<CreditAnalysisOperationalQueueResponse>(`/api/credit-analyses/queue${suffix ? `?${suffix}` : ""}`);
 }
 
-export async function getCreditAnalysesQueueOptions() {
-  return apiClient.get<CreditAnalysisQueueOptionsResponse>("/api/credit-analyses/queue/options");
+export async function getCreditAnalysesQueueOptions(businessUnitContext?: string) {
+  const suffix = businessUnitContext ? `?business_unit_context=${encodeURIComponent(businessUnitContext)}` : "";
+  return apiClient.get<CreditAnalysisQueueOptionsResponse>(`/api/credit-analyses/queue/options${suffix}`);
 }
 
 export type MonitorParams = {
@@ -52,6 +54,7 @@ export type MonitorParams = {
   date_to?: string;
   page?: number;
   page_size?: number;
+  business_unit_context?: string;
 };
 
 export async function getCreditAnalysesMonitor(params: MonitorParams = {}) {
@@ -65,8 +68,9 @@ export async function getCreditAnalysesMonitor(params: MonitorParams = {}) {
   return apiClient.get<CreditAnalysisMonitorResponse>(`/api/credit-analyses/monitor${suffix ? `?${suffix}` : ""}`);
 }
 
-export async function getCreditAnalysesMonitorOptions() {
-  return apiClient.get<CreditAnalysisQueueOptionsResponse>("/api/credit-analyses/monitor/options");
+export async function getCreditAnalysesMonitorOptions(businessUnitContext?: string) {
+  const suffix = businessUnitContext ? `?business_unit_context=${encodeURIComponent(businessUnitContext)}` : "";
+  return apiClient.get<CreditAnalysisQueueOptionsResponse>(`/api/credit-analyses/monitor/options${suffix}`);
 }
 
 export async function getCreditAnalysisDetail(analysisId: number) {

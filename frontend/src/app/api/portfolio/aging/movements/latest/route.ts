@@ -7,7 +7,11 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const snapshotId = searchParams.get("snapshot_id");
-  const suffix = snapshotId ? `?snapshot_id=${encodeURIComponent(snapshotId)}` : "";
+  const businessUnitContext = searchParams.get("business_unit_context");
+  const query = new URLSearchParams();
+  if (snapshotId) query.set("snapshot_id", snapshotId);
+  if (businessUnitContext) query.set("business_unit_context", businessUnitContext);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
 
   try {
     const payload = await fetchBackendOptional<Record<string, unknown>>(`/portfolio/aging/movements/latest${suffix}`);

@@ -11,9 +11,9 @@ export function useCreditAnalysesMonitorQuery(params: MonitorParams) {
   });
 }
 
-export function useCreditAnalysesMonitorOptionsQuery() {
+export function useCreditAnalysesMonitorOptionsQuery(businessUnitContext?: string) {
   return useQuery({
-    queryKey: ["credit-analyses-monitor-options"],
-    queryFn: getCreditAnalysesMonitorOptions
+    queryKey: ["credit-analyses-monitor-options", businessUnitContext ?? "default"],
+    queryFn: () => getCreditAnalysesMonitorOptions(businessUnitContext)
   });
 }

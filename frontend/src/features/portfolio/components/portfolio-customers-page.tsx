@@ -8,6 +8,7 @@ import { usePortfolioGroupsQuery } from "@/features/portfolio/hooks/use-portfoli
 import { usePortfolioOpenInvoicesQuery } from "@/features/portfolio/hooks/use-portfolio-open-invoices-query";
 import { usePortfolioSnapshotsQuery } from "@/features/portfolio/hooks/use-portfolio-snapshots-query";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
+import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
 import { Badge } from "@/shared/components/ui/badge";
@@ -39,15 +40,7 @@ function formatMoney(value: number | string | null | undefined): string {
 }
 
 function formatMoneyShort(value: number | string | null | undefined): string {
-  const parsed = toNumber(value);
-  if (parsed === null) return "Nao informado";
-  if (Math.abs(parsed) >= 1_000_000) {
-    return `R$ ${new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(parsed / 1_000_000)} MM`;
-  }
-  if (Math.abs(parsed) >= 1_000) {
-    return `R$ ${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 }).format(parsed / 1_000)}K`;
-  }
-  return formatMoney(parsed);
+  return formatCurrencyInThousands(value);
 }
 
 function formatDate(value: string | null | undefined): string {

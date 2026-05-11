@@ -1,11 +1,16 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
+import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
+import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
 import { PortfolioComparisonGroupDeltaDto, PortfolioComparisonMetricDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioComparisonQuery } from "@/features/portfolio/hooks/use-portfolio-comparison-query";
 import { usePortfolioSnapshotsQuery } from "@/features/portfolio/hooks/use-portfolio-snapshots-query";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
+import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
+import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
 
@@ -25,16 +30,13 @@ function formatMoney(value: number | string | null | undefined): string {
 function formatMoneyCompact(value: number | string | null | undefined): string {
   const parsed = toNumber(value);
   if (parsed === null) return "N/A";
-  const abs = Math.abs(parsed);
-  if (abs >= 1_000_000) return `R$ ${(abs / 1_000_000).toFixed(1).replace(".", ",")} MM`;
-  if (abs >= 1_000) return `R$ ${(abs / 1_000).toFixed(0).replace(".", ",")} mil`;
-  return formatMoney(abs);
+  return formatCurrencyInThousands(parsed);
 }
 
 function formatMoneyCompactSigned(value: number | string | null | undefined): string {
   const parsed = toNumber(value);
   if (parsed === null) return "N/A";
-  const base = formatMoneyCompact(parsed);
+  const base = formatMoneyCompact(Math.abs(parsed));
   if (parsed > 0) return `+${base}`;
   if (parsed < 0) return `-${base}`;
   return base;
@@ -369,6 +371,10 @@ function ExecutiveInsights({
 }
 
 export function PortfolioEvolutionPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const businessUnitContext = searchParams.get("business_unit_context") ?? "";
+  const buContextQuery = useBusinessUnitContextQuery();
   const snapshotsQuery = usePortfolioSnapshotsQuery();
   const monthlyClosingSnapshots = useMemo(() => {
     const allSnapshots = snapshotsQuery.data ?? [];
@@ -388,7 +394,7 @@ export function PortfolioEvolutionPage() {
 
   const [fromSnapshotId, setFromSnapshotId] = useState<string>("");
   const [toSnapshotId, setToSnapshotId] = useState<string>("");
-  const comparisonQuery = usePortfolioComparisonQuery(fromSnapshotId || undefined, toSnapshotId || undefined);
+  const comparisonQuery = usePortfolioComparisonQuery(fromSnapshotId || undefined, toSnapshotId || undefined, businessUnitContext || undefined);
 
   useEffect(() => {
     if (monthlyClosingSnapshots.length < 1 || toSnapshotOptions.length < 1) return;
@@ -404,7 +410,24 @@ export function PortfolioEvolutionPage() {
 
   if (monthlyClosingSnapshots.length < 1 || toSnapshotOptions.length < 1) {
     return (
-      <section className="mx-auto w-full max-w-[1600px] space-y-3 px-6 py-6 lg:px-8">
+      <section className="mx-auto w-full max-w-[1600px] space-y-3 px-6 py-4 lg:px-8">
+        <OperationalContextBar>
+          {buContextQuery.data ? (
+            <BusinessUnitContextSelector
+              value={businessUnitContext || (buContextQuery.data.default_context.consolidated ? "consolidated" : String(buContextQuery.data.default_context.business_unit_code ?? ""))}
+              onChange={(value) => {
+                const next = new URLSearchParams(searchParams.toString());
+                next.set("business_unit_context", value);
+                router.replace(`?${next.toString()}`);
+              }}
+              label="Visão"
+              consolidatedLabel={buContextQuery.data.consolidated_label}
+              canViewConsolidated={buContextQuery.data.can_view_consolidated}
+              options={buContextQuery.data.allowed_business_units.map((item) => ({ code: item.code, name: item.name }))}
+              compact
+            />
+          ) : null}
+        </OperationalContextBar>
         <header className="rounded-xl border border-[#dde5f0] bg-gradient-to-br from-white via-[#fbfdff] to-[#f7faff] px-6 py-4 shadow-md shadow-slate-200/45">
           <h1 className="text-2xl font-semibold text-[#0f172a]">Evolução da Carteira</h1>
           <p className="mt-1 text-sm text-[#5b6b7f]">Análise estratégica de variação e risco entre períodos de fechamento.</p>
@@ -424,41 +447,61 @@ export function PortfolioEvolutionPage() {
   const toPeriod = formatPeriodLabel(comparisonQuery.data?.to_snapshot?.label, "PARA");
 
   return (
-    <section className="mx-auto w-full max-w-[1600px] space-y-3 px-6 py-6 lg:px-8">
+    <section className="mx-auto w-full max-w-[1600px] space-y-3 px-6 py-4 lg:px-8">
+      <OperationalContextBar>
+        {buContextQuery.data ? (
+          <BusinessUnitContextSelector
+            value={businessUnitContext || (buContextQuery.data.default_context.consolidated ? "consolidated" : String(buContextQuery.data.default_context.business_unit_code ?? ""))}
+            onChange={(value) => {
+              const next = new URLSearchParams(searchParams.toString());
+              next.set("business_unit_context", value);
+              router.replace(`?${next.toString()}`);
+            }}
+            label="Visão"
+            consolidatedLabel={buContextQuery.data.consolidated_label}
+            canViewConsolidated={buContextQuery.data.can_view_consolidated}
+            options={buContextQuery.data.allowed_business_units.map((item) => ({ code: item.code, name: item.name }))}
+            compact
+          />
+        ) : null}
+        <div className="inline-flex items-center gap-2 rounded-md border border-[#dbe3ef] bg-[#f8fafc] px-2.5 py-1">
+          <div className="inline-flex items-center gap-2">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#64748b]">DE</label>
+            <select
+              value={fromSnapshotId}
+              onChange={(event) => setFromSnapshotId(event.target.value)}
+              className="h-8 rounded-md border border-[#dbe3ef] bg-white px-2 text-xs font-medium text-[#0f172a]"
+            >
+              <option value="">Selecione...</option>
+              {monthlyClosingSnapshots.map((snapshot) => (
+                <option key={`from-${snapshot.id}`} value={snapshot.id}>
+                  {snapshot.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="hidden h-8 w-px bg-[#dbe3ef] sm:block" />
+          <div className="inline-flex items-center gap-2">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#64748b]">PARA</label>
+            <select
+              value={toSnapshotId}
+              onChange={(event) => setToSnapshotId(event.target.value)}
+              className="h-8 rounded-md border border-[#dbe3ef] bg-white px-2 text-xs font-medium text-[#0f172a]"
+            >
+              <option value="">Selecione...</option>
+              {toSnapshotOptions.map((snapshot) => (
+                <option key={`to-${snapshot.id}`} value={snapshot.id}>
+                  {snapshot.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </OperationalContextBar>
       <header className="rounded-xl border border-[#dde5f0] bg-gradient-to-br from-white via-[#fbfdff] to-[#f7faff] px-6 py-4 shadow-md shadow-slate-200/45">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h1 className="text-[30px] font-semibold tracking-[-0.015em] text-[#0f172a]">Evolução da Carteira</h1>
-            <p className="mt-1 text-sm text-[#5b6b7f]">Análise estratégica de variação e risco entre períodos de fechamento.</p>
-          </div>
-
-          <div className="w-full rounded-xl border border-[#e2e8f0] bg-white p-3.5 shadow-sm lg:w-[520px]">
-            <div className="grid gap-2.5 sm:grid-cols-[1fr_auto_1fr]">
-              <div className="flex flex-col">
-                <label className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#64748b]">DE</label>
-                <select value={fromSnapshotId} onChange={(event) => setFromSnapshotId(event.target.value)} className="h-10 rounded-md border border-[#dbe3ef] bg-white px-3 text-sm font-medium text-[#0f172a]">
-                  <option value="">Selecione...</option>
-                  {monthlyClosingSnapshots.map((snapshot) => (
-                    <option key={`from-${snapshot.id}`} value={snapshot.id}>
-                      {snapshot.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="hidden w-px bg-[#e2e8f0] sm:block" />
-              <div className="flex flex-col">
-                <label className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#64748b]">PARA</label>
-                <select value={toSnapshotId} onChange={(event) => setToSnapshotId(event.target.value)} className="h-10 rounded-md border border-[#dbe3ef] bg-white px-3 text-sm font-medium text-[#0f172a]">
-                  <option value="">Selecione...</option>
-                  {toSnapshotOptions.map((snapshot) => (
-                    <option key={`to-${snapshot.id}`} value={snapshot.id}>
-                      {snapshot.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
+        <div>
+          <h1 className="text-[30px] font-semibold tracking-[-0.015em] text-[#0f172a]">Evolução da Carteira</h1>
+          <p className="mt-1 text-sm text-[#5b6b7f]">Análise estratégica de variação e risco entre períodos de fechamento.</p>
         </div>
       </header>
 

@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
 from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
+from app.services.ar_aging_import.normalizer import normalize_bu
+from app.services.bu_scope import bu_name_in_scope
 from app.services.portfolio_snapshots import previous_valid_import_run, resolve_snapshot_import_run
+
+# Backward-compatible alias used by tests that monkeypatch this symbol.
+_previous_valid_import_run = previous_valid_import_run
 
 MIN_DELTA = Decimal("1000")
 MAX_MOVEMENTS = 10
@@ -26,8 +31,14 @@ def _format_brl(amount: Decimal) -> str:
     return "R$ " + integer.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def _customer_map(db: Session, import_run_id: int) -> dict[str, dict]:
-    rows = db.execute(
+def _customer_map(
+    db: Session,
+    import_run_id: int,
+    *,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> dict[str, dict]:
+    query = (
         select(
             ArAgingDataTotalRow.cnpj_normalized,
             func.max(ArAgingDataTotalRow.customer_name),
@@ -38,8 +49,12 @@ def _customer_map(db: Session, import_run_id: int) -> dict[str, dict]:
             ArAgingDataTotalRow.import_run_id == import_run_id,
             ArAgingDataTotalRow.cnpj_normalized.is_not(None),
         )
-        .group_by(ArAgingDataTotalRow.cnpj_normalized)
-    ).all()
+    )
+    if not has_all_scope and allowed_bu_names:
+        query = query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        query = query.where(False)
+    rows = db.execute(query.group_by(ArAgingDataTotalRow.cnpj_normalized)).all()
 
     result: dict[str, dict] = {}
     for cnpj, name, open_amount, overdue_amount in rows:
@@ -51,30 +66,48 @@ def _customer_map(db: Session, import_run_id: int) -> dict[str, dict]:
     return result
 
 
-def _group_map(db: Session, import_run_id: int) -> dict[str, dict]:
+def _group_map(
+    db: Session,
+    import_run_id: int,
+    *,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> dict[str, dict]:
     rows = db.execute(
         select(
             ArAgingGroupConsolidatedRow.economic_group_normalized,
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.aging_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingGroupConsolidatedRow.insured_limit_amount), 0),
+            ArAgingGroupConsolidatedRow.aging_amount,
+            ArAgingGroupConsolidatedRow.overdue_amount,
+            ArAgingGroupConsolidatedRow.insured_limit_amount,
+            ArAgingGroupConsolidatedRow.raw_payload_json,
         )
         .where(
             ArAgingGroupConsolidatedRow.import_run_id == import_run_id,
             ArAgingGroupConsolidatedRow.economic_group_normalized.is_not(None),
         )
-        .group_by(ArAgingGroupConsolidatedRow.economic_group_normalized)
     ).all()
     result: dict[str, dict] = {}
-    for group_name, open_amount, overdue_amount, insured_limit in rows:
-        open_value = _as_decimal(open_amount)
-        insured_value = _as_decimal(insured_limit)
-        result[group_name] = {
-            "entity_name": group_name,
-            "total_open_amount": open_value,
-            "overdue_amount": _as_decimal(overdue_amount),
-            "uncovered_exposure": open_value - insured_value,
-        }
+    for group_name, open_amount, overdue_amount, insured_limit, raw_payload in rows:
+        bu_name = normalize_bu((raw_payload or {}).get("bu_original") if isinstance(raw_payload, dict) else None).bu_normalized
+        if not bu_name and isinstance(raw_payload, dict):
+            bu_name = normalize_bu(raw_payload.get("col_2")).bu_normalized
+        if not bu_name_in_scope(allowed_bu_names or set(), bu_name, has_all_scope=has_all_scope):
+            continue
+        entry = result.setdefault(
+            group_name,
+            {
+                "entity_name": group_name,
+                "total_open_amount": Decimal("0"),
+                "overdue_amount": Decimal("0"),
+                "insured_limit": Decimal("0"),
+                "uncovered_exposure": Decimal("0"),
+            },
+        )
+        entry["total_open_amount"] += _as_decimal(open_amount)
+        entry["overdue_amount"] += _as_decimal(overdue_amount)
+        entry["insured_limit"] += _as_decimal(insured_limit)
+    for group_name, entry in result.items():
+        entry["uncovered_exposure"] = entry["total_open_amount"] - entry["insured_limit"]
     return result
 
 
@@ -113,10 +146,16 @@ def _movement_item(
     }
 
 
-def build_latest_portfolio_movements(db: Session, *, snapshot_id: str | None = None) -> dict | None:
+def build_latest_portfolio_movements(
+    db: Session,
+    *,
+    snapshot_id: str | None = None,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> dict | None:
     current_run = resolve_snapshot_import_run(db, snapshot_id)
 
-    previous_run = previous_valid_import_run(db, current_run)
+    previous_run = _previous_valid_import_run(db, current_run)
     if previous_run is None:
         return {
             "base_date": current_run.base_date,
@@ -125,10 +164,10 @@ def build_latest_portfolio_movements(db: Session, *, snapshot_id: str | None = N
             "movements": [],
         }
 
-    current_customers = _customer_map(db, current_run.id)
-    previous_customers = _customer_map(db, previous_run.id)
-    current_groups = _group_map(db, current_run.id)
-    previous_groups = _group_map(db, previous_run.id)
+    current_customers = _customer_map(db, current_run.id, allowed_bu_names=allowed_bu_names, has_all_scope=has_all_scope)
+    previous_customers = _customer_map(db, previous_run.id, allowed_bu_names=allowed_bu_names, has_all_scope=has_all_scope)
+    current_groups = _group_map(db, current_run.id, allowed_bu_names=allowed_bu_names, has_all_scope=has_all_scope)
+    previous_groups = _group_map(db, previous_run.id, allowed_bu_names=allowed_bu_names, has_all_scope=has_all_scope)
 
     movements: list[dict] = []
 
