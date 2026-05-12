@@ -1,13 +1,15 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, ChevronLeft, ChevronRight, Upload, X } from "lucide-react";
+import { ArrowRight, Building2, Check, ChevronLeft, ChevronRight, CreditCard, Info, Lock, Search, Upload, X } from "lucide-react";
 
 import { listCustomers, lookupExternalCnpj, readAgriskReport, readCofaceReport, submitAnalysisJourney, submitTriageCreditRequest, triageCreditRequest } from "@/features/analysis-journey/api/analysis-journey.api";
 import { AgriskImportStatus, AgriskReportReadResponse, AnalysisJourneySubmitRequest, CofaceReportReadResponse, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import { getCreditAnalysisDetail } from "@/features/credit-analyses/api/credit-analyses.api";
+import { getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
 import {
   formatCnpj,
   formatCurrencyInputBRL,
@@ -18,8 +20,8 @@ import {
 import { formatCurrencyBRL, resolveManualStatus, resolveUploadStatus } from "@/features/analysis-journey/utils/view-models";
 import { ErrorState } from "@/shared/components/states/error-state";
 
-const steps = ["IdentificaÃ§Ã£o do cliente", "InformaÃ§Ãµes para anÃ¡lise", "Dados da solicitaÃ§Ã£o", "RevisÃ£o e envio"];
-type ImportSource = "agrisk" | "coface" | "internal";
+const steps = ["Identificação do cliente", "Informações para análise", "Dados da solicitação", "Revisão e envio"];
+type ImportSource = "agrisk" | "coface";
 type ImportStatus = "empty" | AgriskImportStatus | "success";
 
 type ImportState = {
@@ -120,9 +122,9 @@ function buildDefaultOcrState(): OcrState {
 function statusLabel(status: ImportStatus) {
   if (status === "pending") return "Pendente";
   if (status === "processing") return "Em processamento";
-  if (status === "valid") return "VÃ¡lido";
-  if (status === "valid_with_warnings") return "VÃ¡lido com alertas";
-  if (status === "invalid") return "InvÃ¡lido";
+  if (status === "valid") return "Válido";
+  if (status === "valid_with_warnings") return "Válido com alertas";
+  if (status === "invalid") return "Inválido";
   if (status === "success") return "Processado com sucesso";
   if (status === "error") return "Erro na leitura";
   return "Sem arquivo";
@@ -131,7 +133,7 @@ function statusLabel(status: ImportStatus) {
 function isDocumentDivergenceMessage(message: string | null | undefined) {
   if (!message) return false;
   const normalized = message.toLowerCase();
-  return normalized.includes("nÃ£o corresponde") || normalized.includes("nao corresponde") || normalized.includes("outro cnpj");
+  return normalized.includes("não corresponde") || normalized.includes("nao corresponde") || normalized.includes("outro cnpj");
 }
 
 function agriskStatusBadgeLabel(state: ImportState) {
@@ -163,29 +165,28 @@ function importStatusBadgeClass(status: ImportStatus) {
   return "bg-[#EEF3F8] text-[#4F647A]";
 }
 
-function importMonitorTitle(source: ImportSource) {
-  return source === "internal" ?"Base importada" : "RelatÃ³rio importado";
+function importMonitorTitle(_: ImportSource) {
+  return "Relatório importado";
 }
 
 function importMonitorSourceName(source: ImportSource) {
   if (source === "agrisk") return "Origem: Agrisk";
   if (source === "coface") return "Origem: COFACE";
-  return "Origem: ImportaÃ§Ã£o interna";
+  return "Origem: Externa";
 }
 
 function importMonitorStatusText(source: ImportSource, status: ImportStatus) {
-  if (status === "pending") return "Aguardando inÃ­cio da leitura";
+  if (status === "pending") return "Aguardando início da leitura";
   if (status === "processing") return "Aguardando processamento";
-  if (status === "invalid") return "RelatÃ³rio invÃ¡lido para esta anÃ¡lise";
+  if (status === "invalid") return "Relatório inválido para esta análise";
   if (status === "valid_with_warnings") return "Dados importados com alertas";
   if (status === "error") return "Requer novo envio";
-  if (source === "coface") return "DRA e indicadores prontos para anÃ¡lise";
-  if (source === "internal") return "Dados internos prontos para anÃ¡lise";
-  return "Dados prontos para anÃ¡lise";
+  if (source === "coface") return "DRA e indicadores prontos para análise";
+  return "Dados prontos para análise";
 }
 
 function scoreSourceLabel(value: string | null | undefined) {
-  if (!value) return "NÃ£o informado";
+  if (!value) return "Não informado";
   if (value === "agrisk_report_primary") return "AgRisk principal";
   if (value === "boa_vista") return "Boa Vista";
   if (value === "quod") return "Quod";
@@ -193,15 +194,15 @@ function scoreSourceLabel(value: string | null | undefined) {
 }
 
 function confidenceLabel(value: string | null | undefined) {
-  if (!value) return "NÃ£o informado";
+  if (!value) return "Não informado";
   if (value === "high") return "Alta";
-  if (value === "medium") return "MÃ©dia";
+  if (value === "medium") return "Média";
   if (value === "low") return "Baixa";
   return value;
 }
 
 function formatIsoDateToBr(value: string | null | undefined) {
-  if (!value) return "NÃ£o informado";
+  if (!value) return "Não informado";
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
   if (!match) return value;
   return `${match[3]}/${match[2]}/${match[1]}`;
@@ -209,13 +210,13 @@ function formatIsoDateToBr(value: string | null | undefined) {
 
 function formatCnpjForDisplay(value: string | null | undefined) {
   const digits = sanitizeDigits(value ?? "");
-  if (digits.length !== 14) return value || "NÃ£o informado";
+  if (digits.length !== 14) return value || "Não informado";
   return formatCnpj(digits);
 }
 
 const agriskWarningLabelMap: Record<string, string> = {
-  INFORMACOES_BASICAS: "InformaÃ§Ãµes bÃ¡sicas",
-  INFORMACOES_CADASTRAIS: "InformaÃ§Ãµes cadastrais",
+  INFORMACOES_BASICAS: "Informações básicas",
+  INFORMACOES_CADASTRAIS: "Informações cadastrais",
 };
 
 function formatAgriskWarning(warning: string) {
@@ -223,22 +224,28 @@ function formatAgriskWarning(warning: string) {
   if (!warning.startsWith(prefix)) return warning;
   const rawCode = warning.slice(prefix.length).trim();
   const mapped = agriskWarningLabelMap[rawCode];
-  if (mapped) return `Bloco esperado nÃ£o encontrado: ${mapped}`;
-  return `Bloco esperado nÃ£o encontrado: ${rawCode.replaceAll("_", " ").toLowerCase()}`;
+  if (mapped) return `Bloco esperado não encontrado: ${mapped}`;
+  return `Bloco esperado não encontrado: ${rawCode.replaceAll("_", " ").toLowerCase()}`;
 }
 
 function importMonitorValueText(source: ImportSource) {
-  if (source === "agrisk") return "Score, restriÃ§Ãµes e indicadores extraÃ­dos automaticamente.";
-  if (source === "coface") return "DRA e indicadores corporativos extraÃ­dos automaticamente.";
-  return "TÃ­tulos, vencimentos e pagamentos vinculados Ã  anÃ¡lise.";
+  if (source === "agrisk") return "Score, restrições e indicadores extraídos automaticamente.";
+  if (source === "coface") return "DRA e indicadores corporativos extraídos automaticamente.";
+  return "Dados estruturados para análise.";
 }
 
-function removeActionLabel(source: ImportSource) {
-  return source === "internal" ?"Remover arquivo" : "Remover relatÃ³rio";
+function removeActionLabel(_: ImportSource) {
+  return "Remover relatório";
 }
 
-export function NewAnalysisPageView() {
+type NewAnalysisPageViewProps = {
+  mode?: "create" | "workspace";
+  analysisId?: number;
+};
+
+export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysisPageViewProps) {
   const router = useRouter();
+  const isWorkspaceMode = mode === "workspace";
   const customersQuery = useQuery({ queryKey: ["customers"], queryFn: listCustomers });
 
   const [step, setStep] = useState(1);
@@ -282,7 +289,6 @@ export function NewAnalysisPageView() {
   });
   const [manualConfigured, setManualConfigured] = useState(false);
   const [ocr, setOcr] = useState<OcrState>(buildDefaultOcrState());
-  const [internalImport, setInternalImport] = useState<ImportState>(buildDefaultImportState());
   const [agriskImport, setAgriskImport] = useState<ImportState>(buildDefaultImportState());
   const [cofaceImport, setCofaceImport] = useState<ImportState>(buildDefaultImportState());
 
@@ -307,7 +313,7 @@ export function NewAnalysisPageView() {
 
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const ocrInputRef = useRef<HTMLInputElement | null>(null);
-  const [triageModalOpen, setTriageModalOpen] = useState(true);
+  const [triageModalOpen, setTriageModalOpen] = useState(!isWorkspaceMode);
   const [triageState, setTriageState] = useState<"idle" | "loading" | "found_existing_customer" | "new_customer_external_data" | "recent_analysis_found" | "error" | "submitting" | "submitted">("idle");
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
   const [triageSuggestedLimit, setTriageSuggestedLimit] = useState("R$ 0,00");
@@ -316,6 +322,19 @@ export function NewAnalysisPageView() {
   const [canCreateRequest, setCanCreateRequest] = useState(false);
   const [isEarlyReviewRequest, setIsEarlyReviewRequest] = useState(false);
   const [earlyReviewJustification, setEarlyReviewJustification] = useState("");
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+
+  const workspaceDetailQuery = useQuery({
+    queryKey: ["workspace-analysis-detail", analysisId],
+    queryFn: () => getCreditAnalysisDetail(analysisId as number),
+    enabled: isWorkspaceMode && Number.isFinite(analysisId) && (analysisId ?? 0) > 0
+  });
+  const workspaceExternalDataQuery = useQuery({
+    queryKey: ["workspace-analysis-external-data", analysisId],
+    queryFn: () => getExternalDataDashboard(analysisId as number),
+    enabled: isWorkspaceMode && Number.isFinite(analysisId) && (analysisId ?? 0) > 0
+  });
 
   const normalizedCnpj = sanitizeDigits(customer.cnpj);
   const matchedCustomers = useMemo(() => {
@@ -340,16 +359,40 @@ export function NewAnalysisPageView() {
   const hasCofaceImported = cofaceImport.files.length > 0 && isCofaceValidatedStatus(cofaceImport.status);
   const cofaceDecisionAmount = hasCofaceImported ?cofaceImport.cofaceReadPayload?.coface?.decision_amount ?? null : null;
   const hasCofaceCoverageImported = hasCofaceImported && cofaceDecisionAmount !== null;
-  const hasInternalImported = internalImport.files.length > 0;
-  const structuredSourcesCount = [hasAgriskImported, hasCofaceImported, hasInternalImported].filter(Boolean).length;
-  const isManualBlocked = hasAgriskImported && hasCofaceImported && hasInternalImported;
+  const hasInternalDataAvailable = Boolean(triageResult?.found_in_portfolio || (isWorkspaceMode && triageSelectedBusinessUnit.trim().length > 0));
+  const hasInternalFinancialData = Boolean(triageResult?.economic_position);
+  const structuredSourcesCount = [hasAgriskImported, hasCofaceImported, hasInternalDataAvailable].filter(Boolean).length;
+  const isManualBlocked = hasAgriskImported && hasCofaceImported && hasInternalDataAvailable;
   const hasStep2Source = manualConfigured || structuredSourcesCount > 0;
   const isStep2Ready = hasStep2Source;
+  const internalOpenAmount = Number(triageResult?.economic_position?.open_amount ?? 0);
+  const internalTotalLimit = Number(triageResult?.economic_position?.total_limit ?? toNumberInput(analysis.currentLimit));
+  const internalAvailableLimit = Number(
+    triageResult?.economic_position?.available_limit ?? Math.max(0, internalTotalLimit - internalOpenAmount)
+  );
+  const internalExposure = toNumberInput(analysis.requestedLimit) + toNumberInput(analysis.currentLimit) + toNumberInput(analysis.usedLimit);
+  const internalOverdue = triageResult?.economic_position && internalOpenAmount > 0 ? internalOpenAmount : null;
+  const internalNotDue =
+    triageResult?.economic_position && internalTotalLimit > 0
+      ? Math.max(0, internalTotalLimit - internalOpenAmount)
+      : null;
+  const internalOperationalStatus = workspaceDetailQuery.data?.analysis?.analysis_status ?? null;
+  const internalBehaviorLabel = triageResult?.has_recent_analysis ? "cliente com histórico recente" : "histórico estável";
+  const hasInternalFinancialSnapshot = hasInternalFinancialData;
 
   useEffect(() => {
     if (!hasAgriskImported) return;
     setManualPanel((prev) => (prev.scoreSource === "Agrisk" ?{ ...prev, scoreSource: "Serasa" } : prev));
   }, [hasAgriskImported]);
+
+  useEffect(() => {
+    if (!triageModalOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [triageModalOpen]);
 
   useEffect(() => {
     if (hasCofaceCoverageImported && cofaceDecisionAmount !== null) {
@@ -379,7 +422,7 @@ export function NewAnalysisPageView() {
     mutationFn: (cnpj: string) => lookupExternalCnpj(cnpj),
     onSuccess: (response) => {
       if (response.status !== "ok" || !response.data) {
-        setExternalLookupMessage(response.message ?? "NÃ£o foi possÃ­vel consultar os dados externos no momento.");
+        setExternalLookupMessage(response.message ?? "Não foi possível consultar os dados externos no momento.");
         return;
       }
 
@@ -394,11 +437,11 @@ export function NewAnalysisPageView() {
         email: response.data?.email || prev.email,
         address: address || prev.address
       }));
-      setExternalLookupMessage("Dados cadastrais localizados automaticamente. VocÃª poderÃ¡ revisar e editar na prÃ³xima etapa.");
+      setExternalLookupMessage("Dados cadastrais localizados automaticamente. Você poderá revisar e editar na próxima etapa.");
     },
     onError: (error: Error) =>
       setExternalLookupMessage(
-        error.message || "A consulta externa estÃ¡ indisponÃ­vel no momento. Se necessÃ¡rio, informe os dados manualmente."
+        error.message || "A consulta externa está indisponível no momento. Se necessário, informe os dados manualmente."
       )
   });
 
@@ -413,6 +456,116 @@ export function NewAnalysisPageView() {
       setCanCreateRequest(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!isWorkspaceMode) return;
+
+    if (!Number.isFinite(analysisId) || (analysisId ?? 0) <= 0) {
+      setWorkspaceError("ID da análise inválido para abrir o workspace.");
+      return;
+    }
+    if (workspaceDetailQuery.isLoading || workspaceExternalDataQuery.isLoading) return;
+    if (workspaceDetailQuery.isError) {
+      setWorkspaceError(workspaceDetailQuery.error instanceof Error ? workspaceDetailQuery.error.message : "Falha ao carregar análise.");
+      return;
+    }
+    if (workspaceExternalDataQuery.isError) {
+      setWorkspaceError(workspaceExternalDataQuery.error instanceof Error ? workspaceExternalDataQuery.error.message : "Falha ao carregar relatórios importados.");
+      return;
+    }
+    if (!workspaceDetailQuery.data || !workspaceExternalDataQuery.data) return;
+
+    const detail = workspaceDetailQuery.data;
+    const external = workspaceExternalDataQuery.data;
+    const analysisRecord = detail.analysis;
+    const customerRecord = detail.customer;
+    const triageSubmission =
+      analysisRecord.decision_memory_json &&
+      typeof analysisRecord.decision_memory_json === "object" &&
+      analysisRecord.decision_memory_json.triage_submission &&
+      typeof analysisRecord.decision_memory_json.triage_submission === "object"
+        ? (analysisRecord.decision_memory_json.triage_submission as Record<string, unknown>)
+        : null;
+    const buName = typeof triageSubmission?.business_unit === "string" ? triageSubmission.business_unit : "";
+
+    if (!analysisRecord?.id || !analysisRecord?.customer_id || !customerRecord?.id || !customerRecord?.document_number || !customerRecord?.company_name || !buName) {
+      setWorkspaceError("Não foi possível abrir o workspace: dados obrigatórios da análise estão incompletos.");
+      return;
+    }
+
+    const toCurrency = (value: number | string | null | undefined) => formatCurrencyInputBRL(String(value ?? 0));
+    const entries = external.entries ?? [];
+    const byNewest = [...entries].sort((a, b) => (new Date(b.created_at).getTime() || 0) - (new Date(a.created_at).getTime() || 0));
+    const agriskEntry = byNewest.find((entry) => entry.source_type === "agrisk");
+    const cofaceEntry = byNewest.find((entry) => /coface/i.test(entry.notes ?? ""));
+
+    const mapImportedFiles = (entry: typeof entries[number] | undefined): UploadFileMetadataInput[] =>
+      (entry?.files ?? []).map((file) => ({
+        original_filename: file.original_filename,
+        mime_type: file.mime_type,
+        file_size: file.file_size
+      }));
+    const parseReadId = (notes: string | null | undefined, marker: string) => {
+      if (!notes) return null;
+      const match = new RegExp(`${marker}:\\s*(\\d+)`, "i").exec(notes);
+      return match ? Number(match[1]) : null;
+    };
+
+    setExistingCustomerId(customerRecord.id);
+    setTriageSelectedBusinessUnit(buName);
+    setCustomer((prev) => ({
+      ...prev,
+      companyName: customerRecord.company_name,
+      cnpj: formatCnpj(customerRecord.document_number),
+      segment: customerRecord.segment ?? "",
+      region: customerRecord.region ?? "",
+      relationshipStartDate: customerRecord.relationship_start_date ?? "",
+    }));
+    setAnalysis((prev) => ({
+      ...prev,
+      requestedLimit: toCurrency(analysisRecord.requested_limit),
+      currentLimit: toCurrency(analysisRecord.current_limit),
+      usedLimit: "R$ 0,00",
+      guaranteeLimit: "R$ 0,00",
+      assignedAnalystName: analysisRecord.assigned_analyst_name ?? prev.assignedAnalystName,
+      comment: analysisRecord.analyst_notes ?? prev.comment,
+    }));
+    setTriageSuggestedLimit(toCurrency(analysisRecord.suggested_limit));
+    setManualPanel((prev) => ({
+      ...prev,
+      scoreValue: detail.score?.final_score ?? prev.scoreValue,
+      analystNotes: analysisRecord.analyst_notes ?? prev.analystNotes
+    }));
+    setAgriskImport((prev) => ({
+      ...prev,
+      files: mapImportedFiles(agriskEntry),
+      status: agriskEntry ?"valid" : "empty",
+      importedAt: agriskEntry?.created_at ?? null,
+      agriskReadId: parseReadId(agriskEntry?.notes, "Leitura AgRisk ID"),
+    }));
+    setCofaceImport((prev) => ({
+      ...prev,
+      files: mapImportedFiles(cofaceEntry),
+      status: cofaceEntry ?"valid" : "empty",
+      importedAt: cofaceEntry?.created_at ?? null,
+      cofaceReadId: parseReadId(cofaceEntry?.notes, "Leitura COFACE ID"),
+    }));
+    setTriageModalOpen(false);
+    setStep(2);
+    setWorkspaceError(null);
+    setWorkspaceHydrated(true);
+  }, [
+    analysisId,
+    isWorkspaceMode,
+    workspaceDetailQuery.data,
+    workspaceDetailQuery.error,
+    workspaceDetailQuery.isError,
+    workspaceDetailQuery.isLoading,
+    workspaceExternalDataQuery.data,
+    workspaceExternalDataQuery.error,
+    workspaceExternalDataQuery.isError,
+    workspaceExternalDataQuery.isLoading
+  ]);
 
   const triageLookupMutation = useMutation({
     mutationFn: (cnpj: string) => triageCreditRequest({ cnpj }),
@@ -461,21 +614,20 @@ export function NewAnalysisPageView() {
       setTriageState("submitted");
       setTriageMessage(
         isEarlyReviewRequest
-          ? "SolicitaÃ§Ã£o de revisÃ£o antecipada enviada para anÃ¡lise financeira."
-          : "SolicitaÃ§Ã£o enviada para anÃ¡lise financeira."
+          ? "Solicitação de revisão antecipada enviada para análise financeira."
+          : "Solicitação enviada para análise financeira."
       );
       setTriageModalOpen(false);
       router.push(`/analises/monitor?analysis_id=${response.analysis_id}`);
     },
     onError: (error) => {
       setTriageState("error");
-      setTriageMessage(error instanceof Error ? error.message : "Falha ao enviar solicitaÃ§Ã£o.");
+      setTriageMessage(error instanceof Error ? error.message : "Falha ao enviar solicitação.");
     }
   });
 
   const manualStatus = resolveManualStatus({ ...manual, enabled: manualConfigured });
   const ocrStatus = resolveUploadStatus(ocr);
-  const internalStatus = resolveUploadStatus({ enabled: internalImport.files.length > 0, files: internalImport.files });
   const agriskStatus = resolveUploadStatus({ enabled: agriskImport.files.length > 0, files: agriskImport.files });
   const cofaceStatus = resolveUploadStatus({ enabled: cofaceImport.files.length > 0, files: cofaceImport.files });
 
@@ -501,13 +653,13 @@ export function NewAnalysisPageView() {
 
   function validateStep(stepNumber: number): string | null {
     if (stepNumber === 1) {
-      if (normalizedCnpj.length !== 14) return "Preencha um CNPJ vÃ¡lido para continuar.";
-      if (!customer.companyName.trim()) return "Preencha a razÃ£o social para continuar.";
+      if (normalizedCnpj.length !== 14) return "Preencha um CNPJ válido para continuar.";
+      if (!customer.companyName.trim()) return "Preencha a razão social para continuar.";
     }
 
     if (stepNumber === 2 && !hasStep2Source) {
       if (hasInvalidAgriskImport) {
-        return "O relatÃ³rio AgRisk enviado estÃ¡ invÃ¡lido para uso na anÃ¡lise. Substitua o arquivo para continuar.";
+        return "O relatório AgRisk enviado está inválido para uso na análise. Substitua o arquivo para continuar.";
       }
       return "Selecione ao menos uma fonte de dados para continuar.";
     }
@@ -529,7 +681,7 @@ export function NewAnalysisPageView() {
     for (let s = step; s < targetStep; s += 1) {
       const error = validateStep(s);
       if (error) {
-        setStepError(`NÃ£o Ã© possÃ­vel avanÃ§ar para a etapa ${targetStep}. ${error}`);
+        setStepError(`Não é possível avançar para a etapa ${targetStep}. ${error}`);
         return;
       }
     }
@@ -540,7 +692,7 @@ export function NewAnalysisPageView() {
   function openImportModal(source: ImportSource) {
     setImportModalSource(source);
     setPendingImportFile(
-      source === "agrisk" ? agriskImport.files[0] ?? null : source === "coface" ? cofaceImport.files[0] ?? null : internalImport.files[0] ?? null
+      source === "agrisk" ? agriskImport.files[0] ?? null : cofaceImport.files[0] ?? null
     );
     setPendingImportError(null);
     setPendingImportRawFile(null);
@@ -561,13 +713,11 @@ export function NewAnalysisPageView() {
     if (selected.file_size > 10 * 1024 * 1024) {
       setPendingImportFile(null);
       setPendingImportRawFile(null);
-      setPendingImportError("Arquivo invÃ¡lido. O tamanho mÃ¡ximo permitido Ã© 10 MB.");
+      setPendingImportError("Arquivo inválido. O tamanho máximo permitido é 10 MB.");
       if (importModalSource === "agrisk") {
         setAgriskImport((prev) => ({ ...prev, status: "error", errorMessage: "Falha na leitura do arquivo (tamanho excedido)." }));
       } else if (importModalSource === "coface") {
         setCofaceImport((prev) => ({ ...prev, status: "error", errorMessage: "Falha na leitura do arquivo (tamanho excedido)." }));
-      } else {
-        setInternalImport((prev) => ({ ...prev, status: "error", errorMessage: "Falha na leitura do arquivo (tamanho excedido)." }));
       }
       return;
     }
@@ -583,7 +733,7 @@ export function NewAnalysisPageView() {
 
     if (importModalSource === "agrisk") {
       if (!pendingImportRawFile) {
-        setPendingImportError("NÃ£o foi possÃ­vel ler o arquivo selecionado.");
+        setPendingImportError("Não foi possível ler o arquivo selecionado.");
         return;
       }
       setAgriskImport((prev) => ({
@@ -614,13 +764,13 @@ export function NewAnalysisPageView() {
           agriskWarnings: response.warnings
         }));
       } catch (error) {
-        const message = error instanceof Error ?error.message : "Falha ao processar o relatÃ³rio AgRisk.";
+        const message = error instanceof Error ?error.message : "Falha ao processar o relatório AgRisk.";
         setAgriskImport((prev) => ({ ...prev, status: "error", errorMessage: message }));
       }
       return;
     } else if (importModalSource === "coface") {
       if (!pendingImportRawFile) {
-        setPendingImportError("NÃ£o foi possÃ­vel ler o arquivo selecionado.");
+        setPendingImportError("Não foi possível ler o arquivo selecionado.");
         return;
       }
       setIsCofaceDataDrawerOpen(false);
@@ -651,15 +801,10 @@ export function NewAnalysisPageView() {
           cofaceWarnings: response.warnings
         }));
       } catch (error) {
-        const message = error instanceof Error ?error.message : "Falha ao processar o relatÃ³rio COFACE.";
+        const message = error instanceof Error ?error.message : "Falha ao processar o relatório COFACE.";
         setCofaceImport((prev) => ({ ...prev, status: "error", errorMessage: message }));
       }
       return;
-    } else {
-      setInternalImport((prev) => ({ ...prev, files: [pendingImportFile], status: "processing", importedAt, errorMessage: null }));
-      setTimeout(() => {
-        setInternalImport((prev) => (prev.files.length > 0 ?{ ...prev, status: "success" } : prev));
-      }, 900);
     }
 
     setPendingImportError(null);
@@ -669,9 +814,7 @@ export function NewAnalysisPageView() {
   }
 
   function removeImport(source: ImportSource) {
-    const shouldRemove = window.confirm(
-      source === "internal" ?"Deseja remover o arquivo importado desta fonte?" : "Deseja remover o relatÃ³rio importado desta fonte?"
-    );
+    const shouldRemove = window.confirm("Deseja remover o relatório importado desta fonte?");
     if (!shouldRemove) return;
     if (source === "agrisk") {
       setIsAgriskDataDrawerOpen(false);
@@ -683,7 +826,6 @@ export function NewAnalysisPageView() {
       setCofaceImport(buildDefaultImportState());
       return;
     }
-    setInternalImport(buildDefaultImportState());
   }
 
   function handleOcrFileChange(files: FileList | null) {
@@ -731,7 +873,7 @@ export function NewAnalysisPageView() {
     setManual((prev) => ({
       ...prev,
       comments: manualPanel.analystNotes,
-      observations: `Fonte do score: ${scoreIsFromImportedAgrisk ?"Agrisk (importado)" : manualPanel.scoreSource}; Score: ${scoreIsFromImportedAgrisk ?"informado por relatÃ³rio importado" : manualPanel.scoreValue}; DRA COFACE: ${cofaceIsFromImportedReport ?"informado por relatÃ³rio importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "nÃ£o informado"}`
+      observations: `Fonte do score: ${scoreIsFromImportedAgrisk ?"Agrisk (importado)" : manualPanel.scoreSource}; Score: ${scoreIsFromImportedAgrisk ?"informado por relatório importado" : manualPanel.scoreValue}; DRA COFACE: ${cofaceIsFromImportedReport ?"informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}`
     }));
     setIsManualDrawerOpen(false);
   }
@@ -787,11 +929,13 @@ export function NewAnalysisPageView() {
           files: ocr.files
         },
         internal_import: {
-          enabled: internalImport.files.length > 0,
+          enabled: false,
           rows_count: null,
-          template_validated: internalImport.files.length > 0,
-          notes: internalImport.notes,
-          files: internalImport.files
+          template_validated: false,
+          notes: hasInternalDataAvailable
+            ? "Dados internos da carteira vinculados automaticamente pela base corporativa de AR."
+            : "Sem dados internos de carteira disponíveis no momento.",
+          files: []
         },
         external_import: {
           enabled: hasAgriskImported || hasCofaceImported,
@@ -813,10 +957,10 @@ export function NewAnalysisPageView() {
               : "",
             hasCofaceImported ?"COFACE importado" : "",
             hasCofaceCoverageImported && cofaceDecisionAmount !== null ?`Valor de cobertura COFACE: ${currencyFormatter.format(cofaceDecisionAmount)}` : "",
-            manualConfigured && !hasCofaceImported ?`DRA COFACE manual: ${manualPanel.cofaceDra || "nÃ£o informado"}` : ""
+            manualConfigured && !hasCofaceImported ?`DRA COFACE manual: ${manualPanel.cofaceDra || "não informado"}` : ""
           ]
             .filter(Boolean)
-            .join(" Â· "),
+            .join(" · "),
           files: [...(hasAgriskImported ?agriskImport.files : []), ...cofaceImport.files]
         }
       }
@@ -828,7 +972,7 @@ export function NewAnalysisPageView() {
     const digits = sanitizeDigits(customer.cnpj);
     if (digits.length !== 14) {
       setTriageState("error");
-      setTriageMessage("Informe um CNPJ vÃ¡lido para continuar.");
+      setTriageMessage("Informe um CNPJ válido para continuar.");
       return;
     }
     triageLookupMutation.mutate(digits);
@@ -838,22 +982,22 @@ export function NewAnalysisPageView() {
     const suggested = toNumberInput(triageSuggestedLimit);
     if (suggested <= 0) {
       setTriageState("error");
-      setTriageMessage("Informe o limite sugerido para submeter a solicitaÃ§Ã£o.");
+      setTriageMessage("Informe o limite sugerido para submeter a solicitação.");
       return;
     }
     if (triageResult?.has_recent_analysis && !isEarlyReviewRequest) {
       setTriageState("error");
-      setTriageMessage("JÃ¡ existe uma anÃ¡lise recente para este cliente. Use a opÃ§Ã£o de revisÃ£o antecipada.");
+      setTriageMessage("Já existe uma análise recente para este cliente. Use a opção de revisão antecipada.");
       return;
     }
     if (isEarlyReviewRequest && !earlyReviewJustification.trim()) {
       setTriageState("error");
-      setTriageMessage("Informe a justificativa para solicitar a revisÃ£o antecipada.");
+      setTriageMessage("Informe a justificativa para solicitar a revisão antecipada.");
       return;
     }
     if (!triageResult?.found_in_portfolio && triageResult?.requires_business_unit_selection && !triageSelectedBusinessUnit) {
       setTriageState("error");
-      setTriageMessage("Selecione a Unidade de NegÃ³cio (BU) para continuar.");
+      setTriageMessage("Selecione a Unidade de Negócio (BU) para continuar.");
       return;
     }
     const digits = sanitizeDigits(customer.cnpj);
@@ -871,7 +1015,7 @@ export function NewAnalysisPageView() {
   }
 
   if (customersQuery.isError) {
-    return <ErrorState title="NÃ£o foi possÃ­vel carregar clientes" description={customersQuery.error.message} onRetry={() => customersQuery.refetch()} />;
+    return <ErrorState title="Não foi possível carregar clientes" description={customersQuery.error.message} onRetry={() => customersQuery.refetch()} />;
   }
 
   const canContinue = step === 1 ?normalizedCnpj.length === 14 && Boolean(customer.companyName) : step === 2 ?hasStep2Source : step === 3 ?toNumberInput(analysis.requestedLimit) > 0 : true;
@@ -881,70 +1025,89 @@ export function NewAnalysisPageView() {
     ? "COFACE (valor de cobertura)"
     : toNumberInput(analysis.guaranteeLimit) > 0
       ? "Informado manualmente"
-      : "NÃ£o informado";
+      : "Não informado";
   const guaranteeDisplayText = hasCofaceCoverageImported && cofaceDecisionAmount !== null
     ? currencyFormatter.format(Math.max(0, cofaceDecisionAmount))
     : toNumberInput(analysis.guaranteeLimit) > 0
       ? formatCurrencyBRL(analysis.guaranteeLimit)
-      : "NÃ£o informado";
+      : "Não informado";
 
   const consolidatedSources = [
     {
       key: "agrisk",
-      name: "ImportaÃ§Ã£o Agrisk",
+      name: "Importação Agrisk",
       isSent: hasAgriskImported,
       detail: hasAgriskImported
-        ?`${agriskImport.files[0]?.original_filename ?? "Arquivo importado"} Â· ${formatFileSize(agriskImport.files[0]?.file_size ?? 0)} Â· enviado`
-        : "RelatÃ³rio Agrisk nÃ£o importado"
+        ?`${agriskImport.files[0]?.original_filename ?? "Arquivo importado"} · ${formatFileSize(agriskImport.files[0]?.file_size ?? 0)} · enviado`
+        : "Relatório Agrisk não importado"
     },
     {
       key: "coface",
-      name: "ImportaÃ§Ã£o COFACE",
+      name: "Importação COFACE",
       isSent: hasCofaceImported,
       detail: hasCofaceImported
-        ?`${cofaceImport.files[0]?.original_filename ?? "Arquivo importado"} Â· ${formatFileSize(cofaceImport.files[0]?.file_size ?? 0)} Â· enviado`
-        : "RelatÃ³rio COFACE nÃ£o importado"
+        ?`${cofaceImport.files[0]?.original_filename ?? "Arquivo importado"} · ${formatFileSize(cofaceImport.files[0]?.file_size ?? 0)} · enviado`
+        : "Relatório COFACE não importado"
     },
     {
       key: "manual",
       name: "Preenchimento manual",
       isSent: manualStatus === "preenchido",
-      detail: manualStatus === "preenchido" ?"Dados manuais preenchidos" : "NÃ£o preenchido"
+      detail: manualStatus === "preenchido" ?"Dados manuais preenchidos" : "Não preenchido"
     },
     {
       key: "ocr",
-      name: "OCR DRE / BalanÃ§o",
+      name: "OCR DRE / Balanço",
       isSent: ocr.files.length > 0,
       detail: ocr.files.length > 0
-        ?`${ocr.files[0]?.original_filename ?? "Demonstrativo anexado"} Â· ${formatFileSize(ocr.files[0]?.file_size ?? 0)} Â· enviado`
+        ?`${ocr.files[0]?.original_filename ?? "Demonstrativo anexado"} · ${formatFileSize(ocr.files[0]?.file_size ?? 0)} · enviado`
         : "Nenhum demonstrativo anexado"
     },
     {
       key: "internal",
-      name: "ImportaÃ§Ã£o interna",
-      isSent: hasInternalImported,
-      detail: hasInternalImported
-        ?`${internalImport.files[0]?.original_filename ?? "Planilha importada"} Â· ${formatFileSize(internalImport.files[0]?.file_size ?? 0)} Â· enviada`
-        : "Planilha de tÃ­tulos nÃ£o importada"
+      name: "Dados internos da carteira",
+      isSent: hasInternalDataAvailable,
+      detail: hasInternalDataAvailable
+        ? "Dados financeiros e histórico disponíveis automaticamente"
+        : "Sem histórico interno disponível para o cliente"
     }
   ];
   const consolidatedSourcesSentCount = consolidatedSources.filter((source) => source.isSent).length;
   const customerReady = normalizedCnpj.length === 14 && Boolean(customer.companyName.trim());
   const requestedLimitReady = toNumberInput(analysis.requestedLimit) > 0;
 
+  if (isWorkspaceMode && (workspaceDetailQuery.isLoading || workspaceExternalDataQuery.isLoading || !workspaceHydrated)) {
+    if (!workspaceError) {
+      return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando workspace da análise...</div>;
+    }
+  }
+
+  if (isWorkspaceMode && workspaceError) {
+    return (
+      <ErrorState
+        title="Não foi possível abrir o workspace operacional"
+        description={workspaceError}
+      />
+    );
+  }
+
   return (
     <section className={`readability-standard ${step === 4 ?"space-y-0 rounded-[12px] bg-[#F7F9FC]" : "space-y-4"}`}>
+      <div
+        aria-hidden={triageModalOpen}
+        className={triageModalOpen ? "pointer-events-none select-none blur-[3px] opacity-55 scale-[0.985] transition duration-200 ease-out" : "transition duration-200 ease-out"}
+      >
       {step !== 4 ?(
         <div className="flex items-center justify-between rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5">
         <div>
-          <p className="text-[17px] font-semibold text-[#102033]">Nova anÃ¡lise de crÃ©dito</p>
+          <p className="text-[17px] font-semibold text-[#102033]">Nova análise de crédito</p>
           <p className="text-[13px] text-[#4F647A]">
-            Identifique o cliente, informe os dados da solicitaÃ§Ã£o e reÃºna as informaÃ§Ãµes necessÃ¡rias para anÃ¡lise de crÃ©dito.
+            Identifique o cliente, informe os dados da solicitação e reúna as informações necessárias para análise de crédito.
           </p>
-          <p className="mt-1 text-[11px] text-[#8FA3B4]">A consulta externa Ã© opcional. Se necessÃ¡rio, os dados podem ser informados manualmente.</p>
+          <p className="mt-1 text-[11px] text-[#8FA3B4]">A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente.</p>
         </div>
         <Link href="/analises" className="rounded-[8px] border border-[#D7E1EC] bg-white px-4 py-2 text-[12px] font-medium text-[#4F647A] hover:bg-[#f9fafb]">
-          <span className="mr-1"></span> Voltar para anÃ¡lises
+          <span className="mr-1"></span> Voltar para análises
         </Link>
       </div>
       ) : null}
@@ -993,7 +1156,7 @@ export function NewAnalysisPageView() {
             />
           </label>
           <p className="text-[12px] text-[#6b7280]">
-            {lookupMutation.isPending ?"Consultando dados cadastrais..." : externalLookupMessage ?? "A consulta externa Ã© opcional. Se necessÃ¡rio, os dados podem ser informados manualmente."}
+            {lookupMutation.isPending ?"Consultando dados cadastrais..." : externalLookupMessage ?? "A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente."}
           </p>
 
           {matchedCustomers.map((item) => (
@@ -1009,13 +1172,13 @@ export function NewAnalysisPageView() {
             <p className="mb-2 text-[12px] font-medium text-[#111827]">Dados do cliente</p>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="text-[11px] text-[#374151]">
-                RazÃ£o social<RequiredMark />
+                Razão social<RequiredMark />
                 <input value={customer.companyName} onChange={(event) => setCustomer((prev) => ({ ...prev, companyName: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" />
               </label>
               <label className="text-[11px] text-[#374151]">Segmento<input value={customer.segment} onChange={(event) => setCustomer((prev) => ({ ...prev, segment: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151]">RegiÃ£o<input value={customer.region} onChange={(event) => setCustomer((prev) => ({ ...prev, region: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
+              <label className="text-[11px] text-[#374151]">Região<input value={customer.region} onChange={(event) => setCustomer((prev) => ({ ...prev, region: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
               <label className="text-[11px] text-[#374151]">Data de relacionamento<input type="date" value={customer.relationshipStartDate} onChange={(event) => setCustomer((prev) => ({ ...prev, relationshipStartDate: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151]">EndereÃ§o<input value={customer.address} onChange={(event) => setCustomer((prev) => ({ ...prev, address: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
+              <label className="text-[11px] text-[#374151]">Endereço<input value={customer.address} onChange={(event) => setCustomer((prev) => ({ ...prev, address: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
               <label className="text-[11px] text-[#374151]">Telefone<input value={customer.phone} onChange={(event) => setCustomer((prev) => ({ ...prev, phone: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
               <label className="text-[11px] text-[#374151] md:col-span-2">E-mail<input value={customer.email} onChange={(event) => setCustomer((prev) => ({ ...prev, email: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
             </div>
@@ -1025,12 +1188,12 @@ export function NewAnalysisPageView() {
 
       {step >= 2 ?(
         <div className={`flex items-center gap-3 bg-white ${step === 4 ?"h-[44px] border-b border-[#D7E1EC] px-7" : "rounded-[10px] border border-[#D7E1EC] px-5 py-3"}`}>
-          <div className="mr-1 text-[11px] text-[#8FA3B4]">Cliente da solicitaÃ§Ã£o</div>
+          <div className="mr-1 text-[11px] text-[#8FA3B4]">Cliente da solicitação</div>
           <div className={`flex items-center justify-center rounded-[6px] text-[10px] font-bold ${step === 4 ?"h-[26px] w-[26px] bg-[#295B9A] text-white" : "h-7 w-7 bg-[#EEF3F8] text-[#295B9A]"}`}>
             {toInitials(customer.companyName || "Cliente")}
           </div>
-          <div className="text-[13px] font-semibold text-[#102033]">{customer.companyName || "Cliente nÃ£o informado"}</div>
-          <div className="text-[11px] text-[#4F647A]">{customer.cnpj || "CNPJ nÃ£o informado"}</div>
+          <div className="text-[13px] font-semibold text-[#102033]">{customer.companyName || "Cliente não informado"}</div>
+          <div className="text-[11px] text-[#4F647A]">{customer.cnpj || "CNPJ não informado"}</div>
           <div className={`ml-auto rounded-full bg-[#EEF3F8] px-2.5 py-1 font-medium ${step === 4 ?"text-[11px] text-[#295B9A]" : "text-[10px] text-[#4F647A]"}`}>Etapa {step} de 4</div>
         </div>
       ) : null}
@@ -1040,12 +1203,12 @@ export function NewAnalysisPageView() {
           <article className="space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-[15px] font-semibold text-[#102033]">InformaÃ§Ãµes para anÃ¡lise</p>
-                <p className="text-[12px] text-[#4F647A]">Escolha como deseja estruturar os dados da anÃ¡lise. VocÃª pode combinar mÃºltiplas fontes.</p>
+                <p className="text-[15px] font-semibold text-[#102033]">Informações para análise</p>
+                <p className="text-[12px] text-[#4F647A]">Escolha como deseja estruturar os dados da análise. Você pode combinar múltiplas fontes.</p>
               </div>
               <div className="space-y-1 text-right">
                 <p className="text-[11px] font-medium text-[#4F647A]">{structuredSourcesCount} de 3 fontes estruturadas preenchidas</p>
-                {isStep2Ready ?<p className="text-[11px] text-[#166534]">Dados suficientes para avanÃ§ar para a prÃ³xima etapa</p> : null}
+                {isStep2Ready ?<p className="text-[11px] text-[#166534]">Dados suficientes para avançar para a próxima etapa</p> : null}
               </div>
             </div>
 
@@ -1053,7 +1216,9 @@ export function NewAnalysisPageView() {
               <button
                 type="button"
                 onClick={() => openImportModal("agrisk")}
-                className={`relative flex h-full flex-col rounded-[16px] border-2 border-[#295B9A] bg-white p-6 text-left transition hover:-translate-y-0.5 ${
+                className={`relative flex h-full flex-col rounded-[16px] border-2 ${
+                  agriskImport.status !== "empty" ? "border-[#10B981]" : "border-[#295B9A]"
+                } bg-white p-6 text-left transition hover:-translate-y-0.5 ${
                   agriskImport.status !== "empty" ?"cursor-pointer hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]" : ""
                 }`}
               >
@@ -1064,15 +1229,15 @@ export function NewAnalysisPageView() {
                       <Upload className="h-5 w-5 text-[#295B9A]" />
                     </div>
                     <p className="mb-1 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
-                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">ImportaÃ§Ã£o Agrisk</p>
+                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">Importação Agrisk</p>
                     <p className="flex-1 text-[12px] leading-relaxed text-[#4F647A]">
-                      Importe o relatÃ³rio exportado da Agrisk para leitura automÃ¡tica e estruturaÃ§Ã£o dos dados de crÃ©dito.
+                      Importe o relatório exportado da Agrisk para leitura automática e estruturação dos dados de crédito.
                     </p>
                     <p className="mt-2 border-t border-[#EEF3F8] pt-2 text-[11px] leading-relaxed text-[#8FA3B4]">
-                      O sistema identifica automaticamente score, restriÃ§Ãµes e indicadores relevantes para a anÃ¡lise.
+                      O sistema identifica automaticamente score, restrições e indicadores relevantes para a análise.
                     </p>
                     <span className="mt-4 inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
-                      Importar relatÃ³rio Agrisk <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                      Importar relatório Agrisk <ChevronRight className="ml-1 h-3.5 w-3.5" />
                     </span>
                   </>
                 ) : (
@@ -1080,7 +1245,7 @@ export function NewAnalysisPageView() {
                     <div className="mb-3 flex items-start justify-between gap-2">
                       <div>
                         <p className="text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
-                        <p className="text-[15px] font-semibold text-[#102033]">ImportaÃ§Ã£o Agrisk</p>
+                        <p className="text-[15px] font-semibold text-[#102033]">Importação Agrisk</p>
                       </div>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${importStatusBadgeClass(agriskImport.status)}`}>
                         {agriskStatusBadgeLabel(agriskImport)}
@@ -1092,15 +1257,15 @@ export function NewAnalysisPageView() {
                         <p className="mt-1 text-[11px] font-semibold text-[#102033]">{importMonitorTitle("agrisk")}</p>
                         <p className="mt-1 truncate text-[11px] text-[#102033]">{agriskImport.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
                         <p className="text-[10px] text-[#64748B]">
-                          {agriskImport.files[0] ?`${formatFileSize(agriskImport.files[0].file_size)} Â· ${agriskImport.importedAt ?`Importado em ${formatImportedAt(agriskImport.importedAt)}` : "Importado"}` : agriskImport.errorMessage ?? "Falha na leitura do arquivo."}
+                          {agriskImport.files[0] ?`${formatFileSize(agriskImport.files[0].file_size)} · ${agriskImport.importedAt ?`Importado em ${formatImportedAt(agriskImport.importedAt)}` : "Importado"}` : agriskImport.errorMessage ?? "Falha na leitura do arquivo."}
                         </p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("agrisk")}</p>
                         {agriskImport.status === "valid" ?(
-                          <p className="mt-1 text-[10px] text-[#4F647A]">RelatÃ³rio validado e pronto para anÃ¡lise.</p>
+                          <p className="mt-1 text-[10px] text-[#4F647A]">Relatório validado e pronto para análise.</p>
                         ) : null}
                         {agriskImport.status === "valid_with_warnings" ?(
                           <>
-                            <p className="mt-1 text-[10px] text-[#92400E]">RelatÃ³rio validado com alertas de leitura.</p>
+                            <p className="mt-1 text-[10px] text-[#92400E]">Relatório validado com alertas de leitura.</p>
                             <p className="mt-1 text-[10px] text-[#4F647A]">Confira os detalhes em Ver dados importados.</p>
                           </>
                         ) : null}
@@ -1116,12 +1281,12 @@ export function NewAnalysisPageView() {
                         ) : null}
                         {agriskImport.status === "invalid" && isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
                           <p className="mt-1 text-[10px] text-[#B91C1C]">
-                            O CNPJ do relatÃ³rio nÃ£o corresponde ao cliente informado.
+                            O CNPJ do relatório não corresponde ao cliente informado.
                           </p>
                         ) : null}
                         {(agriskImport.status === "invalid" || agriskImport.status === "error") && !isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
                           <p className="mt-1 text-[10px] text-[#B91C1C]">
-                            Este relatÃ³rio nÃ£o serÃ¡ considerado apto para anÃ¡lise atÃ© ser substituÃ­do.
+                            Este relatório não será considerado apto para análise até ser substituído.
                           </p>
                         ) : null}
                       </div>
@@ -1150,7 +1315,7 @@ export function NewAnalysisPageView() {
                         ) : null}
                         {(agriskImport.status === "invalid" || agriskImport.status === "error") ?(
                           <span className="inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
-                            Substituir relatÃ³rio <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                            Substituir relatório <ChevronRight className="ml-1 h-3.5 w-3.5" />
                           </span>
                         ) : null}
                       </div>
@@ -1164,7 +1329,7 @@ export function NewAnalysisPageView() {
                 onClick={() => openImportModal("coface")}
                 className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left transition hover:border-[#295B9A] ${
                   cofaceImport.status !== "empty"
-                    ?"cursor-pointer border-[#295B9A] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]"
+                    ?"cursor-pointer border-[#10B981] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]"
                     : "border-[#D7E1EC]"
                 }`}
               >
@@ -1174,15 +1339,15 @@ export function NewAnalysisPageView() {
                       <Upload className="h-5 w-5 text-[#295B9A]" />
                     </div>
                     <p className="mb-1 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
-                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">ImportaÃ§Ã£o COFACE</p>
+                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">Importação COFACE</p>
                     <p className="flex-1 text-[12px] leading-relaxed text-[#4F647A]">
-                      Importe o relatÃ³rio exportado da COFACE para leitura automÃ¡tica dos indicadores de risco e DRA.
+                      Importe o relatório exportado da COFACE para leitura automática dos indicadores de risco e DRA.
                     </p>
                     <p className="mt-2 border-t border-[#EEF3F8] pt-2 text-[11px] leading-relaxed text-[#8FA3B4]">
-                      O sistema identifica automaticamente DRA e outros indicadores relevantes para anÃ¡lise corporativa.
+                      O sistema identifica automaticamente DRA e outros indicadores relevantes para análise corporativa.
                     </p>
                     <span className="mt-4 inline-flex items-center justify-center rounded-[9px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-2 text-[12px] font-medium text-[#102033]">
-                      Importar relatÃ³rio COFACE <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                      Importar relatório COFACE <ChevronRight className="ml-1 h-3.5 w-3.5" />
                     </span>
                   </>
                 ) : (
@@ -1190,7 +1355,7 @@ export function NewAnalysisPageView() {
                     <div className="mb-3 flex items-start justify-between gap-2">
                       <div>
                         <p className="text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
-                        <p className="text-[15px] font-semibold text-[#102033]">ImportaÃ§Ã£o COFACE</p>
+                        <p className="text-[15px] font-semibold text-[#102033]">Importação COFACE</p>
                       </div>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${importStatusBadgeClass(cofaceImport.status)}`}>
                         {statusLabel(cofaceImport.status)}
@@ -1202,7 +1367,7 @@ export function NewAnalysisPageView() {
                         <p className="mt-1 text-[11px] font-semibold text-[#102033]">{importMonitorTitle("coface")}</p>
                         <p className="mt-1 truncate text-[11px] text-[#102033]">{cofaceImport.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
                         <p className="text-[10px] text-[#64748B]">
-                          {cofaceImport.files[0] ?`${formatFileSize(cofaceImport.files[0].file_size)} Â· ${cofaceImport.importedAt ?`Importado em ${formatImportedAt(cofaceImport.importedAt)}` : "Importado"}` : cofaceImport.errorMessage ?? "Falha na leitura do arquivo."}
+                          {cofaceImport.files[0] ?`${formatFileSize(cofaceImport.files[0].file_size)} · ${cofaceImport.importedAt ?`Importado em ${formatImportedAt(cofaceImport.importedAt)}` : "Importado"}` : cofaceImport.errorMessage ?? "Falha na leitura do arquivo."}
                         </p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("coface")}</p>
                         <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorStatusText("coface", cofaceImport.status)}</p>
@@ -1232,7 +1397,7 @@ export function NewAnalysisPageView() {
                         ) : null}
                         {(cofaceImport.status === "invalid" || cofaceImport.status === "error") ?(
                           <span className="inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
-                            Substituir relatÃ³rio <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                            Substituir relatório <ChevronRight className="ml-1 h-3.5 w-3.5" />
                           </span>
                         ) : null}
                       </div>
@@ -1241,73 +1406,57 @@ export function NewAnalysisPageView() {
                 )}
               </button>
 
-              <button
-                type="button"
-                onClick={() => openImportModal("internal")}
-                className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left transition hover:border-[#295B9A] ${
-                  internalImport.status !== "empty"
-                    ?"cursor-pointer border-[#295B9A] hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]"
-                    : "border-[#D7E1EC]"
-                }`}
-              >
-                {internalImport.status === "empty" ?(
-                  <>
-                    <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
-                      <Upload className="h-5 w-5 text-[#4F647A]" />
-                    </div>
+              <article className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left ${
+                hasInternalFinancialSnapshot ? "border-[#10B981]" : "border-[#D7E1EC]"
+              }`}>
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
+                    <Building2 className="h-5 w-5 text-[#4F647A]" />
+                  </div>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                    hasInternalFinancialSnapshot ? "bg-[#EAF7EE] text-[#166534]" : "bg-[#EEF3F8] text-[#4F647A]"
+                  }`}>
+                    {hasInternalFinancialSnapshot ? "disponível" : "sem histórico interno"}
+                  </span>
+                </div>
+                {hasInternalFinancialSnapshot ? (
+                  <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
                     <p className="mb-1 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Base interna</p>
-                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">ImportaÃ§Ã£o interna</p>
-                    <p className="flex-1 text-[12px] leading-relaxed text-[#4F647A]">
-                      Importe planilhas com tÃ­tulos, vencimentos e pagamentos para complementar a anÃ¡lise de crÃ©dito.
-                    </p>
-                    <p className="mt-2 border-t border-[#EEF3F8] pt-2 text-[11px] leading-relaxed text-[#8FA3B4]">
-                      O sistema estrutura automaticamente os dados internos para acelerar a leitura da operaÃ§Ã£o.
-                    </p>
-                    <span className="mt-4 inline-flex items-center justify-center rounded-[9px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-2 text-[12px] font-medium text-[#102033]">
-                      Importar planilha interna
-                    </span>
-                  </>
+                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">Dados internos da carteira</p>
+                    <p className="text-[10px] font-medium uppercase tracking-[0.5px] text-[#8FA3B4]">Resumo financeiro interno</p>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Valor em Aberto</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{formatCurrencyBRL(String(internalOpenAmount))}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Limite Total</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{formatCurrencyBRL(String(internalTotalLimit))}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Limite Disponível</p>
+                        <p className="text-[11px] font-semibold text-[#1A6644]">{formatCurrencyBRL(String(internalAvailableLimit))}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {internalOverdue !== null ? <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">overdue: {formatCurrencyBRL(String(internalOverdue))}</span> : null}
+                      {internalNotDue !== null ? <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">not due: {formatCurrencyBRL(String(internalNotDue))}</span> : null}
+                      {internalOperationalStatus ? <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">status: {internalOperationalStatus}</span> : null}
+                      <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">exposição: {formatCurrencyBRL(String(internalExposure))}</span>
+                      <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">comportamento: {internalBehaviorLabel}</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-[#64748B]">Última atualização: base principal de AR.</p>
+                  </div>
                 ) : (
-                  <>
-                    <div className="mb-3 flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Base interna</p>
-                        <p className="text-[15px] font-semibold text-[#102033]">ImportaÃ§Ã£o interna</p>
-                      </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${importStatusBadgeClass(internalImport.status)}`}>
-                        {statusLabel(internalImport.status)}
-                      </span>
-                    </div>
-                    <div className="mb-3 flex flex-1 flex-col justify-between rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
-                      <div>
-                        <p className="text-[10px] font-medium uppercase tracking-[0.5px] text-[#8FA3B4]">{importMonitorSourceName("internal")}</p>
-                        <p className="mt-1 text-[11px] font-semibold text-[#102033]">{importMonitorTitle("internal")}</p>
-                        <p className="mt-1 truncate text-[11px] text-[#102033]">{internalImport.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
-                        <p className="text-[10px] text-[#64748B]">
-                          {internalImport.files[0] ?`${formatFileSize(internalImport.files[0].file_size)} Â· ${internalImport.importedAt ?`Importado em ${formatImportedAt(internalImport.importedAt)}` : "Importado"}` : internalImport.errorMessage ?? "Falha na leitura do arquivo."}
-                        </p>
-                        <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("internal")}</p>
-                        <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorStatusText("internal", internalImport.status)}</p>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-medium">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            removeImport("internal");
-                          }}
-                          className="rounded-[8px] border border-[#F5D0D0] px-3 py-1.5 text-[#B91C1C] transition hover:bg-[#FEF2F2]"
-                        >
-                          {removeActionLabel("internal")}
-                        </button>
-                        <span className="inline-flex items-center justify-center rounded-[9px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-2 text-[12px] font-medium text-[#102033]">
-                          Substituir arquivo
-                        </span>
-                      </div>
-                    </div>
-                  </>
+                  <div className="mt-3 rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
+                    <p className="mb-1 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Carteira corporativa</p>
+                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">Cliente novo</p>
+                    <p className="text-[12px] leading-relaxed text-[#4F647A]">
+                      Este cliente ainda não possui movimentações ou exposição registradas na carteira corporativa.
+                    </p>
+                  </div>
                 )}
-              </button>
+              </article>
 
               <button
                 type="button"
@@ -1316,24 +1465,67 @@ export function NewAnalysisPageView() {
                 }}
                 disabled={isManualBlocked}
                 className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left transition ${
-                  isManualBlocked ?"cursor-not-allowed border-[#D7E1EC] opacity-75" : "hover:border-[#295B9A]"
+                  isManualBlocked
+                    ? "cursor-not-allowed border-[#D7E1EC] opacity-75"
+                    : manualConfigured
+                      ? "border-[#10B981] hover:border-[#10B981]"
+                      : "hover:border-[#295B9A]"
                 }`}
               >
-                <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
-                  <span className="text-xl text-[#4F647A]">+</span>
-                </div>
+                {!manualConfigured ?(
+                  <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
+                    <span className="text-xl text-[#4F647A]">+</span>
+                  </div>
+                ) : null}
                 <p className="mb-1 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Entrada manual</p>
                 <p className="mb-2 text-[15px] font-semibold text-[#102033]">Complemento manual</p>
-                <p className="flex-1 text-[12px] leading-relaxed text-[#4F647A]">
-                  Informe apenas dados internos comerciais e operacionais para complementar a anÃ¡lise.
-                </p>
+                {manualConfigured ? (
+                  <div className="flex-1 rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
+                    <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.5px] text-[#8FA3B4]">Resumo informado</p>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Fonte do score</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{manualPanel.scoreSource || "Não informado"}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Score</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{manualPanel.scoreValue ?? "Não informado"}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">DRA COFACE</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{manualPanel.cofaceDra ?? "Não informado"}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Valor em aberto</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{manualPanel.outstandingValue || "Não informado"}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Faturamento 12m</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{manualPanel.internalRevenue12m || "Não informado"}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#8FA3B4]">PMR (contratual/efetivo)</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">
+                          {(manualPanel.pmrContractual || "-") + " / " + (manualPanel.pmrEffective || "-")}
+                        </p>
+                      </div>
+                    </div>
+                    {manualPanel.analystNotes ? (
+                      <p className="mt-2 line-clamp-2 text-[10px] text-[#4F647A]">Observações: {manualPanel.analystNotes}</p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="flex-1 text-[12px] leading-relaxed text-[#4F647A]">
+                    Informe apenas dados internos comerciais e operacionais para complementar a análise.
+                  </p>
+                )}
                 {isManualBlocked ?(
                   <p className="mt-2 border-t border-[#EEF3F8] pt-2 text-[11px] leading-relaxed text-[#8FA3B4]">
-                    Complemento manual indisponÃ­vel. Agrisk, COFACE e importaÃ§Ã£o interna jÃ¡ foram carregados nesta anÃ¡lise.
+                    Complemento manual indisponível. Agrisk, COFACE e dados internos da carteira já estão disponíveis nesta análise.
                   </p>
                 ) : null}
                 <span className="mt-4 inline-flex items-center justify-center rounded-[9px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-2 text-[12px] font-medium text-[#102033]">
-                  {isManualBlocked ?"Complemento manual indisponÃ­vel" : "Preencher manualmente"}
+                  {isManualBlocked ?"Complemento manual indisponível" : manualConfigured ? "Editar informações" : "Preencher manualmente"}
                 </span>
               </button>
             </div>
@@ -1348,7 +1540,7 @@ export function NewAnalysisPageView() {
                     <p className="text-[13px] font-medium text-[#4F647A]">
                       Complementar com demonstrativos financeiros <span className="text-[10px] font-normal text-[#8FA3B4]">(opcional)</span>
                     </p>
-                    <p className="text-[11px] text-[#8FA3B4]">Envio de DRE ou balanÃ§o para leitura assistida.</p>
+                    <p className="text-[11px] text-[#8FA3B4]">Envio de DRE ou balanço para leitura assistida.</p>
                     {ocr.status === "error" && ocr.errorMessage ?<p className="mt-1 text-[11px] text-[#B91C1C]">{ocr.errorMessage}</p> : null}
                   </div>
                 </div>
@@ -1377,7 +1569,7 @@ export function NewAnalysisPageView() {
                 <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
                   <p className="truncate text-[11px] font-semibold text-[#102033]">{ocr.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
                   <p className="text-[10px] text-[#64748B]">
-                    {ocr.files[0] ?`${formatFileSize(ocr.files[0].file_size)} Â· ${ocr.importedAt ?`Importado em ${formatImportedAt(ocr.importedAt)}` : "Importado"}` : "Sem arquivo vinculado"}
+                    {ocr.files[0] ?`${formatFileSize(ocr.files[0].file_size)} · ${ocr.importedAt ?`Importado em ${formatImportedAt(ocr.importedAt)}` : "Importado"}` : "Sem arquivo vinculado"}
                   </p>
                   <p className="mt-1 text-[10px] text-[#4F647A]">Demonstrativos prontos para leitura assistida</p>
                 </div>
@@ -1410,17 +1602,13 @@ export function NewAnalysisPageView() {
                   <div>
                     <p className="text-[16px] font-semibold text-[#102033]">
                       {importModalSource === "agrisk"
-                        ?"Importar relatÃ³rio Agrisk"
-                        : importModalSource === "coface"
-                          ?"Importar relatÃ³rio COFACE"
-                          : "Importar base interna"}
+                        ?"Importar relatório Agrisk"
+                        : "Importar relatório COFACE"}
                     </p>
                     <p className="text-[12px] text-[#4F647A]">
                       {importModalSource === "agrisk"
-                        ?"Selecione ou arraste o arquivo exportado da Agrisk para processamento automÃ¡tico."
-                        : importModalSource === "coface"
-                          ?"Selecione ou arraste o arquivo exportado da COFACE para leitura automÃ¡tica do DRA e indicadores de risco."
-                          : "Selecione a planilha com tÃ­tulos, vencimentos e pagamentos para complementar a anÃ¡lise."}
+                        ?"Selecione ou arraste o arquivo exportado da Agrisk para processamento automático."
+                        : "Selecione ou arraste o arquivo exportado da COFACE para leitura automática do DRA e indicadores de risco."}
                     </p>
                   </div>
                   <button type="button" onClick={() => setIsImportModalOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
@@ -1436,7 +1624,7 @@ export function NewAnalysisPageView() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[12px] font-medium text-[#102033]">{pendingImportFile.original_filename}</p>
-                        <p className="text-[11px] text-[#8FA3B4]">{formatFileSize(pendingImportFile.file_size)} Â· Arquivo selecionado</p>
+                        <p className="text-[11px] text-[#8FA3B4]">{formatFileSize(pendingImportFile.file_size)} · Arquivo selecionado</p>
                       </div>
                       <button
                         type="button"
@@ -1453,8 +1641,8 @@ export function NewAnalysisPageView() {
                     <div className="mt-3 flex items-center gap-2 rounded-[8px] border border-[#CFE0F4] bg-white px-3 py-2 text-[11px] text-[#295B9A]">
                       <Check className="h-3.5 w-3.5" />
                       {importModalSource === "agrisk"
-                        ?"Pronto para importaÃ§Ã£o. A validaÃ§Ã£o do CNPJ serÃ¡ realizada apÃ³s clicar em Importar."
-                        : "Pronto para importaÃ§Ã£o."}
+                        ?"Pronto para importação. A validação do CNPJ será realizada após clicar em Importar."
+                        : "Pronto para importação."}
                     </div>
                   </div>
                 ) : (
@@ -1473,7 +1661,7 @@ export function NewAnalysisPageView() {
                 )}
 
                 <div className="mb-4 flex flex-wrap gap-2">
-                  {["PDF Â· XLSX", "MÃ¡x. 10 MB", "1 arquivo por anÃ¡lise"].map((hint) => (
+                  {["PDF · XLSX", "Máx. 10 MB", "1 arquivo por análise"].map((hint) => (
                     <span key={hint} className="rounded-[6px] bg-[#EEF3F8] px-2.5 py-1 text-[11px] text-[#4F647A]">
                       {hint}
                     </span>
@@ -1510,8 +1698,8 @@ export function NewAnalysisPageView() {
               <div className="flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
                 <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
                   <div>
-                    <p className="text-[15px] font-semibold text-[#102033]">Dados importados do relatÃ³rio AgRisk</p>
-                    <p className="text-[12px] text-[#4F647A]">Somente os dados estruturados utilizados pelo motor de crÃ©dito.</p>
+                    <p className="text-[15px] font-semibold text-[#102033]">Dados importados do relatório AgRisk</p>
+                    <p className="text-[12px] text-[#4F647A]">Somente os dados estruturados utilizados pelo motor de crédito.</p>
                   </div>
                   <button type="button" onClick={() => setIsAgriskDataDrawerOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
                     <X className="h-4 w-4" />
@@ -1520,23 +1708,23 @@ export function NewAnalysisPageView() {
 
                 <div className="flex-1 overflow-y-auto px-6 py-5">
                   <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">IdentificaÃ§Ã£o</p>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Identificação</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">RazÃ£o social:</span> {agriskImport.agriskReadPayload?.company?.name || "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">Documento:</span> {agriskImport.agriskReadPayload?.company?.document || "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">Abertura:</span> {agriskImport.agriskReadPayload?.company?.opened_at || "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">Idade:</span> {agriskImport.agriskReadPayload?.company?.age_years ?? "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Razão social:</span> {agriskImport.agriskReadPayload?.company?.name || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Documento:</span> {agriskImport.agriskReadPayload?.company?.document || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Abertura:</span> {agriskImport.agriskReadPayload?.company?.opened_at || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Idade:</span> {agriskImport.agriskReadPayload?.company?.age_years ?? "Não informado"}</p>
                     </div>
                   </div>
 
                   <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">CrÃ©dito</p>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Crédito</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">Score principal:</span> {agriskImport.agriskReadPayload?.credit?.score ?? "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Score principal:</span> {agriskImport.agriskReadPayload?.credit?.score ?? "Não informado"}</p>
                       <p><span className="font-medium text-[#102033]">Fonte do score principal:</span> {scoreSourceLabel(agriskImport.agriskReadPayload?.credit?.score_source)}</p>
-                      <p><span className="font-medium text-[#102033]">Rating:</span> {agriskImport.agriskReadPayload?.credit?.rating || "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">Probabilidade de inadimplÃªncia:</span> {agriskImport.agriskReadPayload?.credit?.default_probability != null ?`${(agriskImport.agriskReadPayload.credit.default_probability * 100).toFixed(1).replace(".", ",")}%` : "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">ClassificaÃ§Ã£o:</span> {agriskImport.agriskReadPayload?.credit?.default_probability_label || "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Rating:</span> {agriskImport.agriskReadPayload?.credit?.rating || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Probabilidade de inadimplência:</span> {agriskImport.agriskReadPayload?.credit?.default_probability != null ?`${(agriskImport.agriskReadPayload.credit.default_probability * 100).toFixed(1).replace(".", ",")}%` : "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Classificação:</span> {agriskImport.agriskReadPayload?.credit?.default_probability_label || "Não informado"}</p>
                     </div>
                   </div>
 
@@ -1544,8 +1732,8 @@ export function NewAnalysisPageView() {
                     <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Restritivos</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
                       <p><span className="font-medium text-[#102033]">Quantidade:</span> {agriskImport.agriskReadPayload?.restrictions?.negative_events_count ?? 0}</p>
-                      <p><span className="font-medium text-[#102033]">Valor total:</span> {agriskImport.agriskReadPayload?.restrictions?.negative_events_total_amount != null ?`R$ ${agriskImport.agriskReadPayload.restrictions.negative_events_total_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">Ãšltimo apontamento:</span> {agriskImport.agriskReadPayload?.restrictions?.last_negative_event_at || "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Valor total:</span> {agriskImport.agriskReadPayload?.restrictions?.negative_events_total_amount != null ?`R$ ${agriskImport.agriskReadPayload.restrictions.negative_events_total_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Último apontamento:</span> {agriskImport.agriskReadPayload?.restrictions?.last_negative_event_at || "Não informado"}</p>
                     </div>
                   </div>
 
@@ -1554,7 +1742,7 @@ export function NewAnalysisPageView() {
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
                       <p><span className="font-medium text-[#102033]">Protestos:</span> {agriskImport.agriskReadPayload?.protests?.count ?? 0}</p>
                       <p><span className="font-medium text-[#102033]">Valor total de protestos:</span> {agriskImport.agriskReadPayload?.protests?.total_amount != null ?`R$ ${agriskImport.agriskReadPayload.protests.total_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "R$ 0,00"}</p>
-                      <p><span className="font-medium text-[#102033]">CCF com registros:</span> {agriskImport.agriskReadPayload?.checks_without_funds?.has_records ?"Sim" : "NÃ£o"}</p>
+                      <p><span className="font-medium text-[#102033]">CCF com registros:</span> {agriskImport.agriskReadPayload?.checks_without_funds?.has_records ?"Sim" : "Não"}</p>
                     </div>
                   </div>
 
@@ -1564,12 +1752,12 @@ export function NewAnalysisPageView() {
                   </div>
 
                   <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">SocietÃ¡rio</p>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Societário</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
                       {(agriskImport.agriskReadPayload?.ownership?.shareholding ?? []).length > 0 ?(
                         (agriskImport.agriskReadPayload?.ownership?.shareholding ?? []).map((item) => <p key={item}>{item}</p>)
                       ) : (
-                        <p>Sem participaÃ§Ãµes societÃ¡rias estruturadas.</p>
+                        <p>Sem participações societárias estruturadas.</p>
                       )}
                     </div>
                   </div>
@@ -1577,12 +1765,12 @@ export function NewAnalysisPageView() {
                   <div>
                     <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Qualidade da leitura</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">ConfianÃ§a:</span> {confidenceLabel(cofaceImport.cofaceReadPayload?.read_quality?.confidence)}</p>
+                      <p><span className="font-medium text-[#102033]">Confiança:</span> {confidenceLabel(cofaceImport.cofaceReadPayload?.read_quality?.confidence)}</p>
                       {(agriskImport.agriskWarnings ?? []).length > 0 ?(
                         <div className="mt-2 rounded-[10px] border border-[#F3D7A1] bg-[#FFF7E8] p-3">
                           <p className="text-[12px] font-semibold text-[#92400E]">Alertas de leitura</p>
                           <p className="mt-1 text-[11px] text-[#7C5A1D]">
-                            Alguns blocos esperados nÃ£o foram encontrados, mas a leitura principal foi concluÃ­da.
+                            Alguns blocos esperados não foram encontrados, mas a leitura principal foi concluída.
                           </p>
                           <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-[#7C5A1D]">
                             {(agriskImport.agriskWarnings ?? []).map((warning) => (
@@ -1605,8 +1793,8 @@ export function NewAnalysisPageView() {
               <div className="flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
                 <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
                   <div>
-                    <p className="text-[15px] font-semibold text-[#102033]">Dados importados do relatÃ³rio COFACE</p>
-                    <p className="text-[12px] text-[#4F647A]">Somente os dados estruturados utilizados pelo motor de crÃ©dito.</p>
+                    <p className="text-[15px] font-semibold text-[#102033]">Dados importados do relatório COFACE</p>
+                    <p className="text-[12px] text-[#4F647A]">Somente os dados estruturados utilizados pelo motor de crédito.</p>
                   </div>
                   <button type="button" onClick={() => setIsCofaceDataDrawerOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
                     <X className="h-4 w-4" />
@@ -1615,29 +1803,29 @@ export function NewAnalysisPageView() {
 
                 <div className="flex-1 overflow-y-auto px-6 py-5">
                   <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">IdentificaÃ§Ã£o</p>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Identificação</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">Empresa:</span> {cofaceImport.cofaceReadPayload?.company?.name || "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Empresa:</span> {cofaceImport.cofaceReadPayload?.company?.name || "Não informado"}</p>
                       <p><span className="font-medium text-[#102033]">CNPJ:</span> {formatCnpjForDisplay(cofaceImport.cofaceReadPayload?.company?.document)}</p>
-                      <p><span className="font-medium text-[#102033]">EasyNumber:</span> {cofaceImport.cofaceReadPayload?.coface?.easy_number || "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">EndereÃ§o:</span> {cofaceImport.cofaceReadPayload?.company?.address || "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">EasyNumber:</span> {cofaceImport.cofaceReadPayload?.coface?.easy_number || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Endereço:</span> {cofaceImport.cofaceReadPayload?.company?.address || "Não informado"}</p>
                     </div>
                   </div>
 
                   <div className="mb-6">
                     <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Indicadores COFACE</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">CRA:</span> {cofaceImport.cofaceReadPayload?.coface?.cra || "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">DRA:</span> {cofaceImport.cofaceReadPayload?.coface?.dra ?? "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">NotaÃ§Ã£o:</span> {cofaceImport.cofaceReadPayload?.coface?.notation || "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">CRA:</span> {cofaceImport.cofaceReadPayload?.coface?.cra || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">DRA:</span> {cofaceImport.cofaceReadPayload?.coface?.dra ?? "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Notação:</span> {cofaceImport.cofaceReadPayload?.coface?.notation || "Não informado"}</p>
                     </div>
                   </div>
 
                   <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">DecisÃ£o de crÃ©dito</p>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Decisão de crédito</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">Estado:</span> {cofaceImport.cofaceReadPayload?.coface?.decision_status || "NÃ£o informado"}</p>
-                      <p><span className="font-medium text-[#102033]">Valor Segurado:</span> {cofaceImport.cofaceReadPayload?.coface?.decision_amount != null ?`R$ ${cofaceImport.cofaceReadPayload.coface.decision_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "NÃ£o informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Estado:</span> {cofaceImport.cofaceReadPayload?.coface?.decision_status || "Não informado"}</p>
+                      <p><span className="font-medium text-[#102033]">Valor Segurado:</span> {cofaceImport.cofaceReadPayload?.coface?.decision_amount != null ?`R$ ${cofaceImport.cofaceReadPayload.coface.decision_amount.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Não informado"}</p>
                       <p><span className="font-medium text-[#102033]">Data efetiva:</span> {formatIsoDateToBr(cofaceImport.cofaceReadPayload?.coface?.decision_effective_date)}</p>
                     </div>
                   </div>
@@ -1645,7 +1833,7 @@ export function NewAnalysisPageView() {
                   <div>
                     <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Qualidade da leitura</p>
                     <div className="space-y-1 text-[12px] text-[#4F647A]">
-                      <p><span className="font-medium text-[#102033]">ConfianÃ§a:</span> {confidenceLabel(cofaceImport.cofaceReadPayload?.read_quality?.confidence)}</p>
+                      <p><span className="font-medium text-[#102033]">Confiança:</span> {confidenceLabel(cofaceImport.cofaceReadPayload?.read_quality?.confidence)}</p>
                       {(cofaceImport.cofaceWarnings ?? []).length > 0 ?(
                         <div className="mt-2 rounded-[10px] border border-[#F3D7A1] bg-[#FFF7E8] p-3">
                           <p className="text-[12px] font-semibold text-[#92400E]">Alertas de leitura</p>
@@ -1671,7 +1859,7 @@ export function NewAnalysisPageView() {
                 <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
                   <div>
                     <p className="text-[15px] font-semibold text-[#102033]">Preenchimento manual</p>
-                    <p className="text-[12px] text-[#4F647A]">Informe os dados estruturados para anÃ¡lise de crÃ©dito</p>
+                    <p className="text-[12px] text-[#4F647A]">Informe os dados estruturados para análise de crédito</p>
                   </div>
                   <button type="button" onClick={() => setIsManualDrawerOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
                     <X className="h-4 w-4" />
@@ -1680,7 +1868,7 @@ export function NewAnalysisPageView() {
 
                 <div className="flex-1 overflow-y-auto px-6 py-5">
                   <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Scores e referÃªncias externas</p>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Scores e referências externas</p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="text-[11px] font-medium text-[#4F647A]">
                         Fonte do score
@@ -1690,7 +1878,7 @@ export function NewAnalysisPageView() {
                           className="mt-1 h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
                         >
                           <option value="Agrisk" disabled={hasAgriskImported}>
-                            {hasAgriskImported ?"Agrisk  indisponÃ­vel (jÃ¡ importado)" : "Agrisk"}
+                            {hasAgriskImported ?"Agrisk  indisponível (já importado)" : "Agrisk"}
                           </option>
                           <option value="Serasa">Serasa</option>
                           <option value="SCR/Bacen">SCR/Bacen</option>
@@ -1735,18 +1923,18 @@ export function NewAnalysisPageView() {
                           <span className="min-w-[38px] text-right text-[16px] font-semibold text-[#295B9A]">{manualPanel.cofaceDra.toFixed(1)}</span>
                         </div>
                       </div>
-                      {hasCofaceImported ?<span className="mt-1 block text-[10px] text-[#8FA3B4]">DRA COFACE jÃ¡ informado por relatÃ³rio importado.</span> : null}
+                      {hasCofaceImported ?<span className="mt-1 block text-[10px] text-[#8FA3B4]">DRA COFACE já informado por relatório importado.</span> : null}
                     </div>
                   </div>
 
                   <div className="mb-6">
                     <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Dados comerciais internos</p>
                     <p className="mb-3 text-[11px] text-[#8FA3B4]">
-                      Faturamento interno Ãºltimos 12 meses = total vendido ao cliente nos Ãºltimos 12 meses. Valor em aberto = total atualmente em aberto com o cliente.
+                      Faturamento interno últimos 12 meses = total vendido ao cliente nos últimos 12 meses. Valor em aberto = total atualmente em aberto com o cliente.
                     </p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="text-[11px] font-medium text-[#4F647A]">
-                        <span className="mb-1 block min-h-[2.5rem]">Faturamento interno Ãºltimos 12 meses (R$)</span>
+                        <span className="mb-1 block min-h-[2.5rem]">Faturamento interno últimos 12 meses (R$)</span>
                         <input value={manualPanel.internalRevenue12m} onChange={(event) => setManualPanel((prev) => ({ ...prev, internalRevenue12m: formatCurrencyInputBRL(event.target.value) }))} className="h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" />
                       </label>
                       <label className="text-[11px] font-medium text-[#4F647A]">
@@ -1765,9 +1953,9 @@ export function NewAnalysisPageView() {
                   </div>
 
                   <div>
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">ObservaÃ§Ãµes</p>
+                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Observações</p>
                     <label className="text-[11px] font-medium text-[#4F647A]">
-                      ConsideraÃ§Ãµes do analista <span className="ml-1 font-normal text-[#8FA3B4]">(opcional)</span>
+                      Considerações do analista <span className="ml-1 font-normal text-[#8FA3B4]">(opcional)</span>
                       <textarea value={manualPanel.analystNotes} onChange={(event) => setManualPanel((prev) => ({ ...prev, analystNotes: event.target.value }))} rows={4} className="mt-1 w-full rounded-[8px] border border-[#D7E1EC] px-3 py-2 text-[12px]" />
                     </label>
                   </div>
@@ -1787,7 +1975,8 @@ export function NewAnalysisPageView() {
         </>
       ) : null}
 
-      {step === 3 ?(
+      
+{step === 3 ?(
         <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
           <p className="text-[13px] font-medium text-[#111827]">Dados da solicitaÃ§Ã£o</p>
           <p className="text-[12px] text-[#6b7280]">Informe os dados principais da solicitaÃ§Ã£o de crÃ©dito antes de avanÃ§ar.</p>
@@ -1840,14 +2029,14 @@ export function NewAnalysisPageView() {
       {step === 4 ?(
         <div className="bg-[#F7F9FC] px-7 py-6">
           <div className="mb-5">
-            <p className="text-[16px] font-semibold text-[#102033]">RevisÃ£o e envio para anÃ¡lise</p>
+            <p className="text-[16px] font-semibold text-[#102033]">Revisão e envio para análise</p>
             <p className="mt-1 text-[12px] leading-relaxed text-[#4F647A]">
-              Confira os dados do cliente, os limites vigentes, o valor solicitado e as fontes de informaÃ§Ã£o antes de acionar o motor de crÃ©dito.
+              Confira os dados do cliente, os limites vigentes, o valor solicitado e as fontes de informação antes de acionar o motor de crédito.
             </p>
           </div>
 
           <div className="mb-5 flex items-center rounded-[12px] border border-[#D7E1EC] bg-white px-6 py-4">
-            {["IdentificaÃ§Ã£o", "InformaÃ§Ãµes para anÃ¡lise", "Dados da solicitaÃ§Ã£o", "RevisÃ£o e envio"].map((label, index) => {
+            {["Identificação", "Informações para análise", "Dados da solicitação", "Revisão e envio"].map((label, index) => {
               const isDone = index < 3;
               const isActive = index === 3;
               return (
@@ -1870,22 +2059,22 @@ export function NewAnalysisPageView() {
                   <span className="rounded-[5px] border border-[#B5D4F4] bg-[#EEF3F8] px-2 py-0.5 text-[10px] font-medium text-[#295B9A]">Cadastro verificado</span>
                 </div>
                 <div className="grid grid-cols-1 gap-3 text-[12px] sm:grid-cols-2">
-                  <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">RazÃ£o social</p><p className="text-[13px] font-medium text-[#102033]">{customer.companyName || "NÃ£o informado"}</p></div>
-                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">CNPJ</p><p className="text-[13px] font-medium text-[#102033]">{customer.cnpj || "NÃ£o informado"}</p></div>
-                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Telefone</p><p className="text-[13px] font-medium text-[#102033]">{customer.phone || "NÃ£o informado"}</p></div>
-                  <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">EndereÃ§o</p><p className="text-[13px] text-[#4F647A]">{customer.address || "NÃ£o informado"}</p></div>
-                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">E-mail</p><p className="text-[13px] text-[#4F647A]">{customer.email || "NÃ£o informado"}</p></div>
-                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Analista responsÃ¡vel</p><p className="text-[13px] font-medium text-[#102033]">{analysis.assignedAnalystName || "NÃ£o informado"}</p></div>
+                  <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">Razão social</p><p className="text-[13px] font-medium text-[#102033]">{customer.companyName || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">CNPJ</p><p className="text-[13px] font-medium text-[#102033]">{customer.cnpj || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Telefone</p><p className="text-[13px] font-medium text-[#102033]">{customer.phone || "Não informado"}</p></div>
+                  <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">Endereço</p><p className="text-[13px] text-[#4F647A]">{customer.address || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">E-mail</p><p className="text-[13px] text-[#4F647A]">{customer.email || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Analista responsável</p><p className="text-[13px] font-medium text-[#102033]">{analysis.assignedAnalystName || "Não informado"}</p></div>
                 </div>
               </article>
 
               <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
-                <p className="mb-4 text-[12px] font-semibold text-[#102033]">PosiÃ§Ã£o de limites e solicitaÃ§Ã£o</p>
+                <p className="mb-4 text-[12px] font-semibold text-[#102033]">Posição de limites e solicitação</p>
                 <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
                   <div className="rounded-[10px] border border-[#0D1B2A] bg-[#0D1B2A] px-4 py-3">
                     <p className="text-[10px] uppercase text-[rgba(255,255,255,0.45)]">Valor solicitado</p>
                     <p className="mt-1 text-[16px] font-semibold text-[#75D4EE]">{formatCurrencyBRL(analysis.requestedLimit)}</p>
-                    <p className="mt-1 text-[10px] text-[rgba(255,255,255,0.35)]">Aguarda aprovaÃ§Ã£o</p>
+                    <p className="mt-1 text-[10px] text-[rgba(255,255,255,0.35)]">Aguarda aprovação</p>
                   </div>
                   <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-3"><p className="text-[10px] uppercase text-[#8FA3B4]">Limite atual</p><p className="mt-1 text-[16px] font-semibold text-[#102033]">{formatCurrencyBRL(analysis.currentLimit)}</p></div>
                   <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-3"><p className="text-[10px] uppercase text-[#8FA3B4]">Limite utilizado</p><p className="mt-1 text-[16px] font-semibold text-[#102033]">{formatCurrencyBRL(analysis.usedLimit)}</p></div>
@@ -1896,14 +2085,14 @@ export function NewAnalysisPageView() {
                     <div><p className="text-[10px] uppercase text-[#8FA3B4]">Limite com garantia</p><p className="mt-1 text-[14px] font-semibold text-[#1A7A3A]">{guaranteeDisplayText}</p></div>
                     <div><p className="text-[10px] uppercase text-[#8FA3B4]">Origem da garantia</p><p className="mt-1 text-[13px] font-medium text-[#102033]">{guaranteeOriginText}</p></div>
                     <div><p className="text-[10px] uppercase text-[#8FA3B4]">Limite total</p><p className="mt-1 text-[14px] font-semibold text-[#295B9A]">{totalLimitDisplay}</p></div>
-                    <div><p className="text-[10px] uppercase text-[#8FA3B4]">ExposiÃ§Ã£o atual</p><p className={`mt-1 text-[14px] font-semibold ${hasPositiveExposure ?"text-[#92580A]" : "text-[#102033]"}`}>{exposureDisplay}</p></div>
+                    <div><p className="text-[10px] uppercase text-[#8FA3B4]">Exposição atual</p><p className={`mt-1 text-[14px] font-semibold ${hasPositiveExposure ?"text-[#92580A]" : "text-[#102033]"}`}>{exposureDisplay}</p></div>
                   </div>
                 </div>
               </article>
 
               <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
                 <div className="mb-4 flex items-center justify-between">
-                  <p className="text-[12px] font-semibold text-[#102033]">Fontes de informaÃ§Ã£o consolidadas</p>
+                  <p className="text-[12px] font-semibold text-[#102033]">Fontes de informação consolidadas</p>
                   <p className="text-[11px] text-[#8FA3B4]">{consolidatedSourcesSentCount} de {consolidatedSources.length} enviadas</p>
                 </div>
                 <div className="space-y-2">
@@ -1911,7 +2100,7 @@ export function NewAnalysisPageView() {
                     <div key={source.key} className={`flex items-center gap-3 rounded-[10px] border px-3 py-2.5 ${source.isSent ?"border-[#A7DDB8] bg-[#F0FBF5]" : "border-[#D7E1EC] bg-[#F7F9FC] opacity-75"}`}>
                       <span className={`h-2 w-2 rounded-full ${source.isSent ?"bg-[#1EBD6A]" : "bg-[#C4CDD6]"}`} />
                       <div className="min-w-0 flex-1"><p className={`text-[12px] font-medium ${source.isSent ?"text-[#102033]" : "text-[#8FA3B4]"}`}>{source.name}</p><p className={`truncate text-[11px] ${source.isSent ?"text-[#4F647A]" : "text-[#C4CDD6]"}`}>{source.detail}</p></div>
-                      <span className={`rounded-[5px] border px-2 py-0.5 text-[10px] font-medium ${source.isSent ?"border-[#A7DDB8] bg-[#E6F4ED] text-[#1A7A3A]" : "border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]"}`}>{source.isSent ?"Enviado" : "NÃ£o selecionado"}</span>
+                      <span className={`rounded-[5px] border px-2 py-0.5 text-[10px] font-medium ${source.isSent ?"border-[#A7DDB8] bg-[#E6F4ED] text-[#1A7A3A]" : "border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]"}`}>{source.isSent ?"Enviado" : "Não selecionado"}</span>
                     </div>
                   ))}
                 </div>
@@ -1920,29 +2109,29 @@ export function NewAnalysisPageView() {
 
             <aside className="space-y-4">
               <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
-                <p className="mb-3 text-[12px] font-semibold text-[#102033]">Analista responsÃ¡vel</p>
-                <div className="mb-3 flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#295B9A] text-[12px] font-semibold text-white">{toInitials(analysis.assignedAnalystName || "Backoffice")}</div><div><p className="text-[13px] font-medium text-[#102033]">{analysis.assignedAnalystName || "Backoffice"}</p><p className="text-[11px] text-[#8FA3B4]">Cadastro e consolidaÃ§Ã£o</p></div></div>
-                <p className="mb-1 text-[10px] uppercase tracking-[0.5px] text-[#8FA3B4]">ComentÃ¡rio</p>
-                <div className="min-h-[64px] rounded-[8px] border border-[#D7E1EC] bg-[#F7F9FC] px-3 py-2 text-[12px] italic text-[#8FA3B4]">{analysis.comment.trim() || "Sem comentÃ¡rio registrado para esta anÃ¡lise."}</div>
+                <p className="mb-3 text-[12px] font-semibold text-[#102033]">Analista responsável</p>
+                <div className="mb-3 flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#295B9A] text-[12px] font-semibold text-white">{toInitials(analysis.assignedAnalystName || "Backoffice")}</div><div><p className="text-[13px] font-medium text-[#102033]">{analysis.assignedAnalystName || "Backoffice"}</p><p className="text-[11px] text-[#8FA3B4]">Cadastro e consolidação</p></div></div>
+                <p className="mb-1 text-[10px] uppercase tracking-[0.5px] text-[#8FA3B4]">Comentário</p>
+                <div className="min-h-[64px] rounded-[8px] border border-[#D7E1EC] bg-[#F7F9FC] px-3 py-2 text-[12px] italic text-[#8FA3B4]">{analysis.comment.trim() || "Sem comentário registrado para esta análise."}</div>
               </article>
 
               <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
-                <p className="mb-3 text-[12px] font-semibold text-[#102033]">PrÃ©-validaÃ§Ã£o</p>
+                <p className="mb-3 text-[12px] font-semibold text-[#102033]">Pré-validação</p>
                 <div className="space-y-2.5 text-[12px]">
-                  <p className={customerReady ?"text-[#102033]" : "text-[#92580A]"}>{customerReady ?"âœ“ " : "! "}Cliente identificado e vinculado</p>
-                  <p className={requestedLimitReady ?"text-[#102033]" : "text-[#92580A]"}>{requestedLimitReady ?"âœ“ " : "! "}Valor solicitado informado</p>
-                  <p className={consolidatedSourcesSentCount > 0 ?"text-[#102033]" : "text-[#92580A]"}>{consolidatedSourcesSentCount > 0 ?"âœ“ " : "! "}Ao menos 1 fonte enviada</p>
-                  <p className={manualStatus === "preenchido" ?"text-[#102033]" : "text-[#92580A]"}>{manualStatus === "preenchido" ?"âœ“ Dados manuais preenchidos" : "! Dados manuais nÃ£o preenchidos"}</p>
-                  <p className="text-[#4F647A]">{ocr.files.length > 0 ?"âœ“ OCR demonstrativos - opcional" : "- OCR demonstrativos - opcional"}</p>
+                  <p className={customerReady ?"text-[#102033]" : "text-[#92580A]"}>{customerReady ?"✓ " : "! "}Cliente identificado e vinculado</p>
+                  <p className={requestedLimitReady ?"text-[#102033]" : "text-[#92580A]"}>{requestedLimitReady ?"✓ " : "! "}Valor solicitado informado</p>
+                  <p className={consolidatedSourcesSentCount > 0 ?"text-[#102033]" : "text-[#92580A]"}>{consolidatedSourcesSentCount > 0 ?"✓ " : "! "}Ao menos 1 fonte enviada</p>
+                  <p className={manualStatus === "preenchido" ?"text-[#102033]" : "text-[#92580A]"}>{manualStatus === "preenchido" ?"✓ Dados manuais preenchidos" : "! Dados manuais não preenchidos"}</p>
+                  <p className="text-[#4F647A]">{ocr.files.length > 0 ?"✓ OCR demonstrativos - opcional" : "- OCR demonstrativos - opcional"}</p>
                 </div>
               </article>
 
               <article className={`rounded-[14px] border p-5 ${submitBlockingError ?"border-[#F5D06A] bg-[#FEF9EC]" : "border-[#B5D4F4] bg-[#EEF3F8]"}`}>
-                <p className={`text-[12px] font-semibold ${submitBlockingError ?"text-[#92580A]" : "text-[#0C447C]"}`}>{submitBlockingError ?"PendÃªncias para acionar o motor" : "Pronto para acionar o motor"}</p>
+                <p className={`text-[12px] font-semibold ${submitBlockingError ?"text-[#92580A]" : "text-[#0C447C]"}`}>{submitBlockingError ?"Pendências para acionar o motor" : "Pronto para acionar o motor"}</p>
                 <p className={`mt-1 text-[11px] leading-relaxed ${submitBlockingError ?"text-[#92580A]" : "text-[#185FA5]"}`}>
                   {submitBlockingError
                     ?`Revise este ponto antes de enviar: ${submitBlockingError}`
-                    : 'As informaÃ§Ãµes mÃ­nimas foram consolidadas. Clique em "Enviar para anÃ¡lise" para acionar o motor de crÃ©dito.'}
+                    : 'As informações mínimas foram consolidadas. Clique em "Enviar para análise" para acionar o motor de crédito.'}
                 </p>
               </article>
             </aside>
@@ -1956,8 +2145,8 @@ export function NewAnalysisPageView() {
           <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
             <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full border border-[#8FA3B4]">i</span>
             {hasInvalidAgriskImport
-              ?"RelatÃ³rio AgRisk invÃ¡lido: esse insumo nÃ£o serÃ¡ usado atÃ© o envio de um arquivo vÃ¡lido."
-              : "Selecione ao menos uma fonte de dados para AvanÃ§ar"}
+              ?"Relatório AgRisk inválido: esse insumo não será usado até o envio de um arquivo válido."
+              : "Selecione ao menos uma fonte de dados para Avançar"}
           </div>
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setStep((prev) => Math.max(1, prev - 1))} className="inline-flex items-center rounded-[8px] border border-[#D7E1EC] bg-white px-4 py-2 text-[12px] font-medium text-[#4F647A]">
@@ -1969,7 +2158,7 @@ export function NewAnalysisPageView() {
               disabled={!hasStep2Source}
               className="inline-flex items-center rounded-[8px] bg-[#0D1B2A] px-5 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
             >
-              AvanÃ§ar Â· Dados da solicitaÃ§Ã£o <ChevronRight className="ml-1 h-3.5 w-3.5" />
+              Avançar · Dados da solicitação <ChevronRight className="ml-1 h-3.5 w-3.5" />
             </button>
           </div>
         </div>
@@ -1977,7 +2166,7 @@ export function NewAnalysisPageView() {
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#D7E1EC] bg-white px-7 py-4">
           <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
             <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[#8FA3B4] text-[9px]">i</span>
-            Ao enviar, o motor de crÃ©dito serÃ¡ acionado automaticamente com as informaÃ§Ãµes consolidadas.
+            Ao enviar, o motor de crédito será acionado automaticamente com as informações consolidadas.
           </div>
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setStep(3)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-5 py-2 text-[12px] font-medium text-[#4F647A]">
@@ -1990,7 +2179,7 @@ export function NewAnalysisPageView() {
               disabled={!canSubmitJourney}
               className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
             >
-              {submitMutation.isPending ?"Enviando..." : "Enviar para anÃ¡lise"}
+              {submitMutation.isPending ?"Enviando..." : "Enviar para análise"}
             </button>
           </div>
         </div>
@@ -2001,109 +2190,190 @@ export function NewAnalysisPageView() {
           </button>
           {step < 4 ?(
             <button type="button" onClick={() => navigateToStep(Math.min(4, step + 1))} disabled={!canContinue} className="rounded-[6px] bg-[#1a2b5e] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
-              AvanÃ§ar
+              Avançar
             </button>
           ) : (
             <button type="button" onClick={submit} disabled={submitMutation.isPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
-              {submitMutation.isPending ?"Enviando..." : "Enviar para anÃ¡lise"}
+              {submitMutation.isPending ?"Enviando..." : "Enviar para análise"}
             </button>
           )}
         </div>
       )}
+      </div>
       {triageModalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0D1B2A]/55 p-4">
-          <div className="w-full max-w-[840px] rounded-[20px] border border-[#D7E1EC] bg-white p-7 shadow-[0_22px_60px_rgba(2,6,23,0.28)]">
-            <div className="mb-5">
-              <p className="text-[22px] font-semibold text-[#102033]">Nova solicitaÃ§Ã£o de crÃ©dito</p>
-              <p className="text-[13px] text-[#4F647A]">Informe o CNPJ para localizar o cliente na carteira ou iniciar uma nova solicitaÃ§Ã£o.</p>
-            </div>
-            {!canCreateRequest ? <div className="mb-4 rounded-[8px] border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 text-[12px] text-[#B91C1C]">VocÃª nÃ£o possui permissÃ£o para criar solicitaÃ§Ãµes de crÃ©dito.</div> : null}
-            <div className="mb-4 grid gap-3 md:grid-cols-[1fr_auto]">
-              <input value={customer.cnpj} onChange={(event) => setCustomer((prev) => ({ ...prev, cnpj: formatCnpj(event.target.value) }))} onBlur={handleTriageLookup} className="h-11 rounded-[10px] border border-[#D7E1EC] px-3 text-[14px]" placeholder="CNPJ" />
-              <button type="button" disabled={!canCreateRequest || triageLookupMutation.isPending} onClick={handleTriageLookup} className="rounded-[10px] bg-[#1E3A8A] px-5 text-[12px] font-medium text-white disabled:opacity-50">{triageLookupMutation.isPending ? "Consultando..." : "Consultar CNPJ"}</button>
-            </div>
-            {triageMessage ? <p className={`mb-4 text-[12px] ${triageState === "error" ? "text-[#B91C1C]" : "text-[#4F647A]"}`}>{triageMessage}</p> : null}
-            {triageResult ? (
-              <div className="mb-4 space-y-3">
-                <div className="rounded-[12px] border border-[#D7E1EC] bg-[#F8FAFC] p-4 text-[12px] text-[#102033]">
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${triageResult.found_in_portfolio ? "bg-[#E6F4ED] text-[#166534]" : "bg-[#FFF7E8] text-[#92400E]"}`}>
-                      {triageResult.found_in_portfolio ? "Cliente da carteira" : "Novo cliente"}
-                    </span>
-                    {!triageResult.found_in_portfolio ? <span className="text-[10px] text-[#92400E]">NÃ£o localizado na carteira</span> : null}
-                  </div>
-                  <p><strong>RazÃ£o Social:</strong> {triageResult.customer_data.company_name ?? "-"}</p>
-                  <p><strong>CNPJ:</strong> {formatCnpj(triageResult.customer_data.cnpj)}</p>
-                  <p><strong>Grupo EconÃ´mico:</strong> {triageResult.customer_data.economic_group ?? "-"}</p>
-                  <p><strong>Unidade de NegÃ³cio / BU:</strong> {triageResult.customer_data.business_unit ?? "-"}</p>
-                  <p><strong>Cidade/UF:</strong> {[triageResult.customer_data.city, triageResult.customer_data.uf].filter(Boolean).join("/") || "-"}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-md [animation:overlayFadeIn_.18s_ease-out]">
+          <div className="flex max-h-[90vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-[20px] border border-[#D7E1EC] bg-white shadow-[0_22px_60px_rgba(2,6,23,0.28)] [animation:modalIn_.2s_ease-out]">
+            <div className="flex items-start justify-between border-b border-[#D7E1EC] px-8 pb-6 pt-7">
+              <div className="flex items-center gap-3.5">
+                <div className="flex h-[42px] w-[42px] items-center justify-center rounded-[12px] bg-[#1B3A6B]">
+                  <CreditCard className="h-5 w-5 text-white" />
                 </div>
-                {triageResult.found_in_portfolio ? (
-                  <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-4 text-[12px] text-[#102033]">
-                    <p><strong>Valor em Aberto:</strong> {formatCurrencyBRL(String(triageResult.economic_position?.open_amount ?? 0))}</p>
-                    <p><strong>Limite Total:</strong> {formatCurrencyBRL(String(triageResult.economic_position?.total_limit ?? 0))}</p>
-                    <p><strong>Limite DisponÃ­vel:</strong> {formatCurrencyBRL(String(triageResult.economic_position?.available_limit ?? 0))}</p>
-                    <p><strong>Ãšltimo limite aprovado:</strong> {triageResult.last_analysis?.approved_limit != null ? formatCurrencyBRL(String(triageResult.last_analysis.approved_limit)) : "-"}</p>
-                    <p><strong>Data da Ãºltima anÃ¡lise:</strong> {triageResult.last_analysis?.date ? new Date(triageResult.last_analysis.date).toLocaleDateString("pt-BR") : "-"}</p>
-                    <p><strong>Status da Ãºltima anÃ¡lise:</strong> {triageResult.last_analysis?.status ?? "-"}</p>
-                  </div>
-                ) : null}
-                {triageResult.has_recent_analysis ? (
-                  <div className="rounded-[12px] border border-[#F3D7A1] bg-[#FFF7E8] p-4 text-[12px] text-[#7C5A1D]">
-                    <p className="font-semibold text-[#92400E]">AnÃ¡lise recente encontrada</p>
-                    <p>Ãšltima anÃ¡lise realizada em: {triageResult.last_analysis?.date ? new Date(triageResult.last_analysis.date).toLocaleDateString("pt-BR") : "-"}</p>
-                    <p>Status: {triageResult.last_analysis?.status ?? "-"}</p>
-                    <p>Limite aprovado: {triageResult.last_analysis?.approved_limit != null ? formatCurrencyBRL(String(triageResult.last_analysis.approved_limit)) : "-"}</p>
-                    <p>Analista responsÃ¡vel: {triageResult.last_analysis?.analyst_name ?? "-"}</p>
-                    <p>Nova solicitaÃ§Ã£o padrÃ£o disponÃ­vel em: {triageResult.reanalysis_available_at ? new Date(triageResult.reanalysis_available_at).toLocaleDateString("pt-BR") : "-"}</p>
-                  </div>
-                ) : null}
+                <div>
+                  <p className="mb-0.5 text-[17px] font-medium text-[#102033]">Nova solicitação de crédito</p>
+                  <p className="text-[13px] text-[#4F647A]">Informe o CNPJ para localizar ou cadastrar um cliente</p>
+                </div>
               </div>
-            ) : null}
-            {(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found") ? (
-              <div className="mb-4">
-                {!triageResult?.found_in_portfolio && triageResult?.requires_business_unit_selection ? (
-                  <label className="mb-3 block text-[12px] text-[#374151]">Unidade de NegÃƒÂ³cio / BU<RequiredMark />
-                    <select
-                      value={triageSelectedBusinessUnit}
-                      onChange={(event) => setTriageSelectedBusinessUnit(event.target.value)}
-                      className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
-                    >
-                      <option value="">Selecione a BU</option>
-                      {(triageResult?.available_business_units ?? []).map((option) => (
-                        <option key={option.id} value={option.name}>{option.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                {triageResult?.has_recent_analysis ? (
-                  <div className="mb-3 rounded-[10px] border border-[#D7E1EC] bg-[#F8FAFC] p-3">
-                    <p className="text-[12px] font-medium text-[#102033]">Solicitar revisÃ£o antecipada</p>
-                    <p className="mb-2 text-[11px] text-[#4F647A]">Use esta opÃ§Ã£o apenas quando houver fato novo ou necessidade comercial relevante para antecipar a revisÃ£o do limite.</p>
-                    <button type="button" onClick={() => setIsEarlyReviewRequest(true)} className="rounded-[8px] border border-[#1E3A8A] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1E3A8A]">
-                      Solicitar revisÃ£o antecipada
-                    </button>
-                    {isEarlyReviewRequest ? (
-                      <label className="mt-3 block text-[12px] text-[#374151]">Justificativa da revisÃ£o antecipada<RequiredMark />
-                        <textarea value={earlyReviewJustification} onChange={(event) => setEarlyReviewJustification(event.target.value)} rows={3} className="mt-1 w-full rounded-[8px] border border-[#D7E1EC] px-3 py-2 text-[12px]" />
-                      </label>
-                    ) : null}
-                  </div>
-                ) : null}
-                <label className="text-[12px] text-[#374151]">Limite sugerido<RequiredMark />
-                  <input value={triageSuggestedLimit} onChange={(event) => setTriageSuggestedLimit(formatCurrencyInputBRL(event.target.value))} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" />
-                </label>
+              <Link href="/analises" className="flex h-8 w-8 items-center justify-center rounded-[8px] border border-[#D7E1EC] text-[#4F647A] hover:bg-[#F7F9FC]">
+                <X className="h-4 w-4" />
+              </Link>
+            </div>
+
+            <div className="flex flex-col gap-5 overflow-y-auto px-8 py-6">
+              {!canCreateRequest ? <div className="rounded-[8px] border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 text-[12px] text-[#B91C1C]">Você não possui permissão para criar solicitações de crédito.</div> : null}
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[12px] font-medium uppercase tracking-[0.05em] text-[#4F647A]">CNPJ</span>
+                <div className="flex gap-2.5">
+                  <input value={customer.cnpj} onChange={(event) => setCustomer((prev) => ({ ...prev, cnpj: formatCnpj(event.target.value) }))} onBlur={handleTriageLookup} className="h-11 flex-1 rounded-[10px] border border-[#D7E1EC] px-3.5 font-mono text-[15px] tracking-[0.03em] text-[#102033] focus:border-[#1B3A6B] focus:outline-none" placeholder="00.000.000/0000-00" />
+                  <button type="button" disabled={!canCreateRequest || triageLookupMutation.isPending} onClick={handleTriageLookup} className="inline-flex h-11 items-center gap-2 rounded-[10px] bg-[#1B3A6B] px-5 text-[14px] font-medium text-white transition hover:bg-[#152E56] disabled:opacity-50">
+                    <Search className="h-4 w-4" />
+                    {triageLookupMutation.isPending ? "Consultando..." : "Consultar"}
+                  </button>
+                </div>
               </div>
-            ) : null}
-            <div className="flex justify-end gap-2">
-              <Link href="/analises" className="rounded-[8px] border border-[#D7E1EC] bg-white px-4 py-2 text-[12px] font-medium text-[#4F647A]">Cancelar</Link>
-              <button type="button" disabled={!canCreateRequest || !(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found")} onClick={handleTriageSubmit} className="rounded-[8px] bg-[#1EBD6A] px-5 py-2 text-[12px] font-medium text-white disabled:opacity-50">
-                {triageSubmitMutation.isPending ? "Enviando..." : "Submeter para anÃ¡lise"}
-              </button>
+
+              {triageMessage ? (
+                <div className={`flex items-center gap-2 rounded-[10px] border px-3.5 py-2.5 text-[13px] ${triageState === "error" ? "border-[#F5B5B5] bg-[#FEF2F2] text-[#B91C1C]" : "border-[#34A873] bg-[#F0FAF5] text-[#1A6644]"}`}>
+                  <span className={`h-[7px] w-[7px] rounded-full ${triageState === "error" ? "bg-[#B91C1C]" : "bg-[#34A873]"}`} />
+                  <span>{triageMessage}</span>
+                </div>
+              ) : null}
+
+              {triageResult ? (
+                <div className="overflow-hidden rounded-[12px] border border-[#D7E1EC]">
+                  <div className="grid grid-cols-1 md:grid-cols-2">
+                    <div className="flex flex-col gap-2 border-b border-[#D7E1EC] p-4 md:border-b-0 md:border-r">
+                      <span className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${triageResult.found_in_portfolio ? "bg-[#EAF3DE] text-[#3B6D11]" : "bg-[#FFF7E8] text-[#92400E]"}`}>
+                        <Building2 className="h-3 w-3" />
+                        {triageResult.found_in_portfolio ? "Cliente da carteira" : "Novo cliente"}
+                      </span>
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Razão social</p>
+                        <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.company_name ?? "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">CNPJ</p>
+                        <p className="font-mono text-[13px] font-medium text-[#102033]">{formatCnpj(triageResult.customer_data.cnpj)}</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2 p-4">
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Grupo econômico</p>
+                        <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.economic_group ?? "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Unidade de negócio / BU</p>
+                        <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.business_unit ?? "-"}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {triageResult?.found_in_portfolio ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div className="rounded-[12px] bg-[#F7F9FC] px-4 py-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Valor em aberto</p>
+                    <p className="text-[16px] font-medium text-[#7A4D10]">{formatCurrencyBRL(String(triageResult.economic_position?.open_amount ?? 0))}</p>
+                    <p className="text-[11px] text-[#8FA3B4]">de {formatCurrencyBRL(String(triageResult.economic_position?.total_limit ?? 0))} total</p>
+                  </div>
+                  <div className="rounded-[12px] bg-[#F7F9FC] px-4 py-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Limite total</p>
+                    <p className="text-[16px] font-medium text-[#102033]">{formatCurrencyBRL(String(triageResult.economic_position?.total_limit ?? 0))}</p>
+                    <p className="text-[11px] text-[#8FA3B4]">aprovado</p>
+                  </div>
+                  <div className="rounded-[12px] bg-[#F7F9FC] px-4 py-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Disponível</p>
+                    <p className="text-[16px] font-medium text-[#1A6644]">{formatCurrencyBRL(String(triageResult.economic_position?.available_limit ?? 0))}</p>
+                    <p className="text-[11px] text-[#8FA3B4]">
+                      {(() => {
+                        const total = Number(triageResult.economic_position?.total_limit ?? 0);
+                        const available = Number(triageResult.economic_position?.available_limit ?? 0);
+                        if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(available)) return "limite livre";
+                        return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format((available / total) * 100)}% livre`;
+                      })()}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
+              {(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found") ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {!triageResult?.found_in_portfolio && triageResult?.requires_business_unit_selection ? (
+                    <label className="block text-[12px] text-[#374151]">Unidade de Negócio / BU<RequiredMark />
+                      <select value={triageSelectedBusinessUnit} onChange={(event) => setTriageSelectedBusinessUnit(event.target.value)} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]">
+                        <option value="">Selecione a BU</option>
+                        {(triageResult?.available_business_units ?? []).map((option) => (
+                          <option key={option.id} value={option.name}>{option.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  {triageResult?.has_recent_analysis ? (
+                    <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F8FAFC] p-3">
+                      <p className="text-[12px] font-medium text-[#102033]">Solicitar revisão antecipada</p>
+                      <p className="mb-2 text-[11px] text-[#4F647A]">Use esta opção apenas quando houver fato novo ou necessidade comercial relevante para antecipar a revisão do limite.</p>
+                      <button type="button" onClick={() => setIsEarlyReviewRequest(true)} className="rounded-[8px] border border-[#1E3A8A] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1E3A8A]">
+                        Solicitar revisão antecipada
+                      </button>
+                      {isEarlyReviewRequest ? (
+                        <label className="mt-3 block text-[12px] text-[#374151]">Justificativa da revisão antecipada<RequiredMark />
+                          <textarea value={earlyReviewJustification} onChange={(event) => setEarlyReviewJustification(event.target.value)} rows={3} className="mt-1 w-full rounded-[8px] border border-[#D7E1EC] px-3 py-2 text-[12px]" />
+                        </label>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="flex items-center gap-1.5 md:col-span-2">
+                    <span className="text-[12px] font-medium uppercase tracking-[0.05em] text-[#4F647A]">Limite sugerido</span>
+                    <span className="text-[11px] font-medium text-[#C84B2F]">obrigatório</span>
+                  </div>
+                  <div className="relative md:col-span-2">
+                    <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[14px] font-medium text-[#4F647A]">R$</span>
+                    <input value={triageSuggestedLimit} onChange={(event) => setTriageSuggestedLimit(formatCurrencyInputBRL(event.target.value))} className="h-12 w-full rounded-[10px] border border-[#D7E1EC] pl-11 pr-3 font-mono text-[18px] text-[#102033]" placeholder="0,00" />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex items-center gap-1.5 border-t border-[#D7E1EC] bg-[#F7F9FC] px-8 py-2.5 text-[12px] text-[#8FA3B4]">
+              <Info className="h-3.5 w-3.5" />
+              Última análise: {triageResult?.last_analysis?.date ? new Date(triageResult.last_analysis.date).toLocaleDateString("pt-BR") : "sem registro"} · Status: {triageResult?.last_analysis?.status ?? "—"}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-[#D7E1EC] px-8 pb-6 pt-5">
+              <span className="inline-flex items-center gap-1.5 text-[12px] text-[#8FA3B4]">
+                <Lock className="h-3.5 w-3.5" />
+                Dados protegidos e auditados
+              </span>
+              <div className="flex gap-2.5">
+                <Link href="/analises" className="inline-flex h-[42px] items-center rounded-[10px] border border-[#D7E1EC] px-5 text-[14px] font-medium text-[#4F647A] hover:bg-[#F7F9FC]">Cancelar</Link>
+                <button type="button" disabled={!canCreateRequest || !(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found")} onClick={handleTriageSubmit} className="inline-flex h-[42px] items-center gap-2 rounded-[10px] bg-[#27AE6E] px-5 text-[14px] font-medium text-white transition hover:bg-[#219A5F] disabled:opacity-50">
+                  {triageSubmitMutation.isPending ? "Enviando..." : "Submeter para análise"}
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       ) : null}
+      <style jsx>{`
+        @keyframes overlayFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes modalIn {
+          from {
+            opacity: 0;
+            transform: scale(0.985);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+      `}</style>
     </section>
   );
 }

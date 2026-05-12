@@ -28,6 +28,7 @@ from app.routes.credit_analyses import (
     get_score_result,
     list_credit_analysis_events,
     list_credit_analyses_monitor,
+    start_credit_analysis,
 )
 from app.models.enums import FinalDecision, AnalysisStatus
 from app.schemas.final_decision import FinalDecisionApplyRequest
@@ -177,6 +178,17 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         with SessionLocal() as db:
             response = list_credit_analyses_monitor(db=db, current=analyst)
         self.assertGreaterEqual(response.total, 1)
+        self.assertIn("start_analysis", response.items[0].available_actions)
+
+    def test_start_analysis_changes_status_to_in_progress(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial@indorama.com")
+        with SessionLocal() as db:
+            updated = start_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+            self.assertEqual(updated.analysis_status, AnalysisStatus.IN_PROGRESS)
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=analyst)
         self.assertIn("continue_analysis", response.items[0].available_actions)
 
     def test_approver_sees_pending_approval(self) -> None:

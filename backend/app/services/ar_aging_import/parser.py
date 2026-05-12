@@ -458,9 +458,11 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
             "document_number": _pick_optional(row, dt_header, "document_number") or _cell(row, 9),
             "due_date": _pick_optional(row, dt_header, "due_date") or _cell(row, 5),
             "bu": bu,
-            "group": _pick_with_fallback(row, dt_header, "group", 15),
-            # Data Total: coluna D = Valor (fonte oficial de valor em aberto)
-            "open_amount": _pick_with_fallback(row, dt_header, "open_amount", 3),
+            # Data Total: coluna P = Grupo Economico (fonte oficial para vinculacao com Clientes Consolidados coluna C).
+            "group": _cell(row, 15) if _cell(row, 15) is not None and str(_cell(row, 15)).strip() != "" else _pick_with_fallback(row, dt_header, "group", 15),
+            # Data Total: coluna D = Valor (fonte oficial de valor em aberto).
+            # Mantemos fallback apenas para planilhas legadas com coluna D vazia.
+            "open_amount": _cell(row, 3) if _cell(row, 3) is not None and str(_cell(row, 3)).strip() != "" else _pick_with_fallback(row, dt_header, "open_amount", 3),
             "due_amount": _pick_with_fallback(row, dt_header, "due_amount", 11),
             "overdue_amount": _pick_with_fallback(row, dt_header, "overdue_amount", 12),
             "aging": _pick_with_fallback(row, dt_header, "aging", 13),
@@ -494,7 +496,8 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
         payload = {
             "row_number": idx,
             "bu": row[1] if len(row) > 1 else None,
-            "group": _pick_with_fallback(row, cc_header, "group", 2),
+            # Clientes Consolidados: coluna C = Grupo Economico (chave de comparacao com Data Total coluna P).
+            "group": _cell(row, 2) if _cell(row, 2) is not None and str(_cell(row, 2)).strip() != "" else _pick_with_fallback(row, cc_header, "group", 2),
             "total_ar": row[7] if len(row) > 7 else _pick_with_fallback(row, cc_header, "aging", 7),
             "overdue_bucket_1_30": row[8] if len(row) > 8 else None,
             "overdue_bucket_31_60": row[9] if len(row) > 9 else None,
@@ -515,7 +518,8 @@ def parse_aging_workbook(file_bytes: bytes, filename: str) -> ParsedAgingWorkboo
             "aging": row[7] if len(row) > 7 else _pick_with_fallback(row, cc_header, "aging", 7),
             # Clientes Consolidados: coluna AB (indice 27) = Limite Segurado (fonte obrigatoria)
             "insured_limit": _cell(row, 27),
-            "approved_credit": _pick_with_fallback(row, cc_header, "approved_credit", 5),
+            # Clientes Consolidados: coluna F = Limite Total Aprovado (fonte oficial).
+            "approved_credit": _cell(row, 5) if _cell(row, 5) is not None and str(_cell(row, 5)).strip() != "" else _pick_with_fallback(row, cc_header, "approved_credit", 5),
             # Clientes Consolidados: coluna AH = Exposicao (fonte prioritaria)
             "exposure": row[33] if len(row) > 33 else _pick_with_fallback(row, cc_header, "exposure", 33),
             "raw": _row_to_raw_payload(row),

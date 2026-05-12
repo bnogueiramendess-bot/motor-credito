@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useMutation } from "@tanstack/react-query";
 import { CalendarDays, CheckCircle2, ChevronDown, ChevronsLeft, ChevronsRight, Clock3, Filter, FlaskConical, Hourglass, Search, Undo2, UserRoundCheck } from "lucide-react";
 
+import { startCreditAnalysis } from "@/features/credit-analyses/api/credit-analyses.api";
 import { useCreditAnalysesMonitorOptionsQuery, useCreditAnalysesMonitorQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-monitor-query";
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
 import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
@@ -34,7 +36,8 @@ function getAgingTone(days: number): string {
 }
 
 function mapActionLabel(actions: string[]): string {
-  if (actions.includes("continue_analysis")) return "Continuar análise";
+  if (actions.includes("start_analysis")) return "Iniciar Análise";
+  if (actions.includes("continue_analysis")) return "Continuar Análise";
   if (actions.includes("submit_approval")) return "Submeter para aprovação";
   if (actions.includes("review_decision")) return "Revisar decisão";
   if (actions.includes("view_dossier")) return "Ver dossiê";
@@ -94,6 +97,15 @@ export function MonitorPageView() {
     assigned_analyst: "",
     date_from: "",
     date_to: ""
+  });
+  const [startingAnalysisId, setStartingAnalysisId] = useState<number | null>(null);
+
+  const startAnalysisMutation = useMutation({
+    mutationFn: startCreditAnalysis,
+    onSuccess: (_, analysisId) => {
+      router.push(`/analises/${analysisId}/workspace`);
+    },
+    onSettled: () => setStartingAnalysisId(null),
   });
 
   const params = useMemo(
@@ -229,14 +241,31 @@ export function MonitorPageView() {
                 <div className={`whitespace-nowrap text-[12px] font-semibold ${getAgingTone(item.aging_days)}`}>{item.aging_days} dia(s)</div>
                 <div className="truncate whitespace-nowrap text-[12px] font-medium text-[#0F172A]">{mapNextStep(item.workflow_stage)}</div>
                 <div className="flex justify-start xl:justify-end">
-                  {item.available_actions.includes("view_tracking") && !item.available_actions.some((action) => ["continue_analysis", "submit_approval", "review_decision", "view_dossier", "view_result"].includes(action)) ? (
+                  {item.available_actions.includes("view_tracking") && !item.available_actions.some((action) => ["start_analysis", "continue_analysis", "submit_approval", "review_decision", "view_dossier", "view_result"].includes(action)) ? (
                     <button type="button" disabled title="O dossiê será disponibilizado após a conclusão da análise." className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-medium text-[#94A3B8]">
                       Acompanhar status <ChevronDown className="ml-2 h-4 w-4" />
                     </button>
                   ) : (
-                    <Link href={`/analises/${item.analysis_id}`} className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#1D4ED8] hover:bg-[#F8FAFC]">
-                      {mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />
-                    </Link>
+                    item.available_actions.includes("start_analysis") ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStartingAnalysisId(item.analysis_id);
+                          startAnalysisMutation.mutate(item.analysis_id);
+                        }}
+                        disabled={startAnalysisMutation.isPending && startingAnalysisId === item.analysis_id}
+                        className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#1D4ED8] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {startAnalysisMutation.isPending && startingAnalysisId === item.analysis_id ? "Iniciando..." : mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />
+                      </button>
+                    ) : (
+                      <Link
+                        href={item.available_actions.includes("continue_analysis") ? `/analises/${item.analysis_id}/workspace` : `/analises/${item.analysis_id}`}
+                        className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#1D4ED8] hover:bg-[#F8FAFC]"
+                      >
+                        {mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />
+                      </Link>
+                    )
                   )}
                 </div>
               </article>

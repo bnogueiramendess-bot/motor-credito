@@ -19,7 +19,20 @@ type FileBlockState = {
 };
 
 export function formatCurrencyBRL(value: string) {
-  const parsed = Number(value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", "."));
+  const sanitized = value.replace(/[^\d,.-]/g, "");
+  let normalized = sanitized;
+  if (sanitized.includes(",") && sanitized.includes(".")) {
+    if (sanitized.lastIndexOf(",") > sanitized.lastIndexOf(".")) {
+      normalized = sanitized.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = sanitized.replace(/,/g, "");
+    }
+  } else if (sanitized.includes(",")) {
+    normalized = sanitized.replace(/\./g, "").replace(",", ".");
+  } else {
+    normalized = sanitized;
+  }
+  const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) return "R$ 0,00";
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(parsed);
 }

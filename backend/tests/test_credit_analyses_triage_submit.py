@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, select
 from app.core.security import CurrentUser, require_permissions
 from app.db.session import SessionLocal
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
+from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
 from app.models.ar_aging_import_run import ArAgingImportRun
 from app.models.audit_log import AuditLog
 from app.models.business_unit import BusinessUnit
@@ -32,6 +33,7 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.created_ids: dict[str, list[int]] = {
             "rows": [],
+            "consolidated_rows": [],
             "runs": [],
             "audits": [],
             "events": [],
@@ -53,6 +55,8 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
         with SessionLocal() as db:
             if self.created_ids["rows"]:
                 db.execute(delete(ArAgingDataTotalRow).where(ArAgingDataTotalRow.id.in_(self.created_ids["rows"])))
+            if self.created_ids["consolidated_rows"]:
+                db.execute(delete(ArAgingGroupConsolidatedRow).where(ArAgingGroupConsolidatedRow.id.in_(self.created_ids["consolidated_rows"])))
             if self.created_ids["runs"]:
                 db.execute(delete(ArAgingImportRun).where(ArAgingImportRun.id.in_(self.created_ids["runs"])))
             if self.created_ids["audits"]:
@@ -218,6 +222,23 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             db.add(row)
             db.flush()
             self.created_ids["rows"].append(row.id)
+
+            consolidated = ArAgingGroupConsolidatedRow(
+                import_run_id=run.id,
+                row_number=1,
+                economic_group_raw="GRUPO TESTE",
+                economic_group_normalized="GRUPO TESTE",
+                overdue_amount=Decimal("10000.00"),
+                not_due_amount=Decimal("20000.00"),
+                aging_amount=Decimal("30000.00"),
+                insured_limit_amount=Decimal("100000.00"),
+                approved_credit_amount=Decimal("90000.00"),
+                exposure_amount=Decimal("35000.00"),
+                raw_payload_json={},
+            )
+            db.add(consolidated)
+            db.flush()
+            self.created_ids["consolidated_rows"].append(consolidated.id)
             db.commit()
 
     def _register_created_domain_rows(self, analysis_id: int, customer_id: int) -> None:
@@ -274,6 +295,8 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
         self.assertEqual(response.customer_data.business_unit, "Fertilizer")
         assert response.economic_position is not None
         self.assertEqual(str(response.economic_position.open_amount), "30000.00")
+        self.assertEqual(str(response.economic_position.total_limit), "90000.00")
+        self.assertEqual(str(response.economic_position.available_limit), "60000.00")
 
     @patch("app.routes.credit_analyses.fetch_external_cnpj_data")
     def test_triage_existing_customer_outside_scope(self, mock_external) -> None:

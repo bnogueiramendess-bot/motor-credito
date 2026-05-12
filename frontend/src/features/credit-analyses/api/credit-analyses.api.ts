@@ -76,3 +76,7 @@ export async function getCreditAnalysesMonitorOptions(businessUnitContext?: stri
 export async function getCreditAnalysisDetail(analysisId: number) {
   return apiClient.get<CreditAnalysisDetailApiResponse>(`/api/credit-analyses/${analysisId}/detail`);
 }
+
+export async function startCreditAnalysis(analysisId: number) {
+  return apiClient.post(`/api/credit-analyses/${analysisId}/start`, {});
+}

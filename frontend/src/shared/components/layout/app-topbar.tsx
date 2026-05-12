@@ -64,6 +64,19 @@ function getPermissionsFromCookie() {
   }
 }
 
+function getRoleFromCookie() {
+  if (typeof document === "undefined") return "";
+  const cookie = document.cookie.split("; ").find((item) => item.startsWith("gcc_user_role="));
+  if (!cookie) return "";
+  const value = cookie.split("=")[1];
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+}
+
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
@@ -148,11 +161,13 @@ export function AppTopbar() {
   const pathname = usePathname();
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [currentUserRole, setCurrentUserRole] = useState("");
   const [currentUserName, setCurrentUserName] = useState("Usuário");
   const [currentLoginName, setCurrentLoginName] = useState("Usuário");
 
   useEffect(() => {
     setPermissions(getPermissionsFromCookie());
+    setCurrentUserRole(getRoleFromCookie());
     setCurrentUserName(toFirstAndSecondName(getCurrentUserDisplayName()));
     setCurrentLoginName(getCurrentUserLoginName());
   }, []);
@@ -161,6 +176,7 @@ export function AppTopbar() {
   const canManageBusinessUnits = permissions.includes("bu:manage");
   const canManageUsers = permissions.includes("users:manage");
   const canViewProfiles = permissions.includes("profiles:view");
+  const canResetBase = currentUserRole === "administrador_master";
 
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
@@ -366,14 +382,16 @@ export function AppTopbar() {
                   >
                     {isLoggingOut ? "Saindo..." : "Logoff"}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleResetOperationalData()}
-                    disabled={isResettingBase}
-                    className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isResettingBase ? "Resetando base..." : "Reset da Base"}
-                  </button>
+                  {canResetBase ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleResetOperationalData()}
+                      disabled={isResettingBase}
+                      className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isResettingBase ? "Resetando base..." : "Reset da Base"}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>

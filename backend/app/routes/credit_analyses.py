@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.core.security import CurrentUser, get_current_user, require_permissions
 from app.db.session import get_db
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
+from app.models.ar_aging_group_consolidated_row import ArAgingGroupConsolidatedRow
+from app.models.ar_aging_import_run import ArAgingImportRun
 from app.models.audit_log import AuditLog
 from app.models.business_unit import BusinessUnit
 from app.models.credit_analysis import CreditAnalysis
@@ -101,7 +103,8 @@ def _build_customer_from_portfolio_row(cnpj: str, row: tuple) -> dict:
     customer_name, bu_name, group_name, open_amount, approved_credit, exposure = row
     open_value = open_amount or Decimal("0")
     total_limit = approved_credit or Decimal("0")
-    available = total_limit - (exposure or Decimal("0"))
+    # Regra da triagem: Limite Disponivel = Limite Total - Valor em Aberto.
+    available = total_limit - open_value
     return {
         "cnpj": cnpj,
         "company_name": customer_name,
@@ -109,8 +112,60 @@ def _build_customer_from_portfolio_row(cnpj: str, row: tuple) -> dict:
         "economic_group": group_name,
         "open_amount": open_value,
         "total_limit": total_limit,
-        "available_limit": available if available > Decimal("0") else Decimal("0"),
+        "available_limit": available,
     }
+
+
+def _latest_valid_import_run_id(db: Session) -> int | None:
+    return db.scalar(
+        select(ArAgingImportRun.id)
+        .where(ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]))
+        .order_by(ArAgingImportRun.id.desc())
+        .limit(1)
+    )
+
+
+def _build_portfolio_row_for_cnpj(db: Session, *, normalized_cnpj: str) -> tuple:
+    latest_run_id = _latest_valid_import_run_id(db)
+    if latest_run_id is None:
+        return (None, None, None, Decimal("0"), Decimal("0"), Decimal("0"))
+
+    data_total_agg = db.execute(
+        select(
+            func.max(ArAgingDataTotalRow.customer_name),
+            func.max(ArAgingDataTotalRow.bu_normalized),
+            func.max(ArAgingDataTotalRow.economic_group_normalized),
+            func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
+        ).where(
+            ArAgingDataTotalRow.import_run_id == latest_run_id,
+            ArAgingDataTotalRow.cnpj_normalized == normalized_cnpj,
+        )
+    ).one()
+
+    group_keys_subquery = (
+        select(ArAgingDataTotalRow.economic_group_normalized)
+        .where(
+            ArAgingDataTotalRow.import_run_id == latest_run_id,
+            ArAgingDataTotalRow.cnpj_normalized == normalized_cnpj,
+            ArAgingDataTotalRow.economic_group_normalized.is_not(None),
+        )
+        .distinct()
+    )
+    approved_credit_total = db.scalar(
+        select(func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0)).where(
+            ArAgingGroupConsolidatedRow.import_run_id == latest_run_id,
+            ArAgingGroupConsolidatedRow.economic_group_normalized.in_(group_keys_subquery),
+        )
+    )
+
+    return (
+        data_total_agg[0],
+        data_total_agg[1],
+        data_total_agg[2],
+        data_total_agg[3] or Decimal("0"),
+        approved_credit_total or Decimal("0"),
+        Decimal("0"),
+    )
 
 
 def _ext_get(data: object, key: str) -> object:
@@ -227,16 +282,7 @@ def triage_credit_analysis(
 ) -> CreditAnalysisTriageResponse:
     normalized_cnpj = _normalize_cnpj_or_400(payload.cnpj)
 
-    portfolio_row = db.execute(
-        select(
-            func.max(ArAgingDataTotalRow.customer_name),
-            func.max(ArAgingDataTotalRow.bu_normalized),
-            func.max(ArAgingDataTotalRow.economic_group_normalized),
-            func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.raw_payload_json["approved_credit_amount"].astext.cast(Numeric(18, 2))), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.raw_payload_json["exposure_amount"].astext.cast(Numeric(18, 2))), 0),
-        ).where(ArAgingDataTotalRow.cnpj_normalized == normalized_cnpj)
-    ).one()
+    portfolio_row = _build_portfolio_row_for_cnpj(db, normalized_cnpj=normalized_cnpj)
 
     resolved_bu_name = _resolve_scoped_bu_name(db, current, portfolio_row[1])
     found_in_portfolio = bool(portfolio_row[0] and resolved_bu_name)
@@ -315,7 +361,7 @@ def triage_credit_analysis(
         requires_early_review_justification=has_recent_analysis,
         requires_business_unit_selection=len(scoped_bus) > 1,
         available_business_units=bu_options,
-        message="Cliente nao localizado na carteira atual. Os dados cadastrais foram preenchidos a partir da consulta externa.",
+        message="Cliente não localizado na carteira atual. Os dados cadastrais foram preenchidos com base na consulta externa.",
     )
 
 
@@ -834,6 +880,12 @@ def list_credit_analyses_monitor(
             ).where(ArAgingDataTotalRow.cnpj_normalized == customer.document_number)
         ).one()
         bu_name = portfolio[0]
+
+        triage_data = {}
+        if isinstance(analysis.decision_memory_json, dict):
+            triage_data = (analysis.decision_memory_json.get("triage_submission") or {}) if isinstance(analysis.decision_memory_json.get("triage_submission"), dict) else {}
+        if not bu_name and isinstance(triage_data, dict):
+            bu_name = triage_data.get("business_unit")
         if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
 
@@ -864,13 +916,6 @@ def list_credit_analyses_monitor(
             if status_value in {"approved", "rejected", "completed"}:
                 continue
 
-        triage_data = {}
-        if isinstance(analysis.decision_memory_json, dict):
-            triage_data = (analysis.decision_memory_json.get("triage_submission") or {}) if isinstance(analysis.decision_memory_json.get("triage_submission"), dict) else {}
-        if not bu_name and isinstance(triage_data, dict):
-            bu_name = triage_data.get("business_unit")
-        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
-            continue
         is_early = bool(triage_data.get("is_early_review_request"))
         is_new_customer = not bool(bu_name)
         has_recent = bool(triage_data.get("has_recent_analysis"))
@@ -882,7 +927,9 @@ def list_credit_analyses_monitor(
             else:
                 available_actions.append("view_tracking")
         else:
-            if can_validate and status_value in {"submitted", "under_financial_review", "pending_external_reports", "ready_for_credit_engine"}:
+            if can_validate and status_value == "submitted":
+                available_actions.append("start_analysis")
+            if can_validate and status_value in {"under_financial_review", "pending_external_reports", "ready_for_credit_engine"}:
                 available_actions.append("continue_analysis")
             if can_validate and can_submit_approval and status_value in {"dossier_generated", "under_financial_review"}:
                 available_actions.append("submit_approval")
@@ -999,6 +1046,57 @@ def get_credit_analysis(
             detail="Credit analysis not found.",
         )
     _enforce_technical_access_or_403(db, current, analysis)
+    return analysis
+
+
+@router.post("/{analysis_id}/start", response_model=CreditAnalysisRead, status_code=status.HTTP_200_OK)
+def start_credit_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysis:
+    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Credit analysis not found.",
+        )
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    if analysis.analysis_status == AnalysisStatus.CREATED:
+        analysis.analysis_status = AnalysisStatus.IN_PROGRESS
+        db.add(
+            DecisionEvent(
+                credit_analysis_id=analysis.id,
+                event_type="analysis_started",
+                actor_type=ActorType.USER,
+                actor_name=current.user.full_name or current.user.email,
+                description="Analise iniciada pelo analista financeiro.",
+                event_payload_json={
+                    "started_by_user_id": current.user.id,
+                    "started_by_email": current.user.email,
+                    "previous_status": AnalysisStatus.CREATED.value,
+                    "new_status": AnalysisStatus.IN_PROGRESS.value,
+                },
+            )
+        )
+        db.add(
+            AuditLog(
+                actor_user_id=current.user.id,
+                action="credit_analysis_start",
+                resource="credit_analysis",
+                resource_id=str(analysis.id),
+                metadata_json={
+                    "previous_status": AnalysisStatus.CREATED.value,
+                    "new_status": AnalysisStatus.IN_PROGRESS.value,
+                },
+                notes="Inicio formal da analise pelo time financeiro.",
+            )
+        )
+        db.commit()
+        db.refresh(analysis)
+
     return analysis
 
 
