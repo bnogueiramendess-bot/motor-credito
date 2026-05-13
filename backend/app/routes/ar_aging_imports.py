@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.security import CurrentUser, require_permissions
 from app.db.session import get_db
 from app.models.ar_aging_import_run import ArAgingImportRun
 from app.schemas.ar_aging_import import ArAgingImportCreate, ArAgingImportHistoryResponse, ArAgingImportResponse
@@ -38,7 +39,11 @@ def _to_response(entry: ArAgingImportRun) -> ArAgingImportResponse:
 
 
 @router.post("", response_model=ArAgingImportResponse, status_code=status.HTTP_201_CREATED)
-def create_import(payload: ArAgingImportCreate, db: Session = Depends(get_db)) -> ArAgingImportResponse:
+def create_import(
+    payload: ArAgingImportCreate,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["clients.aging.import"])),
+) -> ArAgingImportResponse:
     entry = create_ar_aging_import_run(db, payload)
     return _to_response(entry)
 

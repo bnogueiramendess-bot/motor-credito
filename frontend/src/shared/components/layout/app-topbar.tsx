@@ -175,6 +175,7 @@ export function AppTopbar() {
   const canManageBusinessUnits = permissions.includes("bu:manage");
   const canManageUsers = permissions.includes("users:manage");
   const canViewProfiles = permissions.includes("profiles:view");
+  const canImportAging = permissions.includes("clients.aging.import");
   const canResetBase = currentUserRole === "administrador_master";
 
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
@@ -193,10 +194,11 @@ export function AppTopbar() {
   }
 
   useEffect(() => {
+    if (!canImportAging) return;
     const openDrawer = () => setIsImportDrawerOpen(true);
     window.addEventListener(OPEN_AGING_IMPORT_DRAWER_EVENT, openDrawer);
     return () => window.removeEventListener(OPEN_AGING_IMPORT_DRAWER_EVENT, openDrawer);
-  }, []);
+  }, [canImportAging]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -378,14 +380,16 @@ export function AppTopbar() {
               ) : null}
             </div>
 
-            <button
-              type="button"
-              onClick={() => setIsImportDrawerOpen(true)}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#E2E8F0]/40 bg-white/5 px-3.5 text-sm font-medium text-[#E2E8F0] transition hover:bg-white/10"
-            >
-              <FileUp className="h-4 w-4" />
-              Importação
-            </button>
+            {canImportAging ? (
+              <button
+                type="button"
+                onClick={() => setIsImportDrawerOpen(true)}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#E2E8F0]/40 bg-white/5 px-3.5 text-sm font-medium text-[#E2E8F0] transition hover:bg-white/10"
+              >
+                <FileUp className="h-4 w-4" />
+                Importação
+              </button>
+            ) : null}
 
             <div className="hidden items-center gap-2 rounded-xl border border-[#E2E8F0]/25 bg-white/5 px-2.5 py-1.5 xl:flex">
               <div className="text-right text-xs text-[#CBD5E1]">

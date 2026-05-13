@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.security import CurrentUser, require_permissions
 from app.db.session import get_db
 from app.models.credit_policy import CreditPolicy
 from app.models.credit_policy_rule import CreditPolicyRule
@@ -117,7 +118,10 @@ def _build_policy_response(
 
 
 @router.get("/active", response_model=CreditPolicyRead)
-def get_active_policy(db: Session = Depends(get_db)) -> CreditPolicyRead:
+def get_active_policy(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> CreditPolicyRead:
     policy = ensure_active_policy(db)
     db.commit()
     db.refresh(policy)
@@ -125,7 +129,10 @@ def get_active_policy(db: Session = Depends(get_db)) -> CreditPolicyRead:
 
 
 @router.get("/draft", response_model=CreditPolicyRead)
-def get_draft_policy(db: Session = Depends(get_db)) -> CreditPolicyRead:
+def get_draft_policy(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> CreditPolicyRead:
     policy = get_or_create_draft_policy(db)
     db.commit()
     db.refresh(policy)
@@ -136,6 +143,7 @@ def get_draft_policy(db: Session = Depends(get_db)) -> CreditPolicyRead:
 def create_policy_draft_rule(
     payload: CreditPolicyDraftRuleCreate,
     db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
 ) -> CreditPolicyRule:
     try:
         rule = create_draft_rule(
@@ -168,6 +176,7 @@ def update_policy_draft_rule(
     rule_id: int,
     payload: CreditPolicyDraftRuleUpdate,
     db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
 ) -> CreditPolicyRule:
     fields_set = payload.model_fields_set
     try:
@@ -201,7 +210,11 @@ def update_policy_draft_rule(
 
 
 @router.delete("/draft/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_policy_draft_rule(rule_id: int, db: Session = Depends(get_db)) -> None:
+def delete_policy_draft_rule(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> None:
     try:
         delete_draft_rule(db, rule_id)
         db.commit()
@@ -214,7 +227,10 @@ def delete_policy_draft_rule(rule_id: int, db: Session = Depends(get_db)) -> Non
 
 
 @router.post("/draft/publish", response_model=CreditPolicyRead)
-def publish_policy_draft(db: Session = Depends(get_db)) -> CreditPolicyRead:
+def publish_policy_draft(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> CreditPolicyRead:
     try:
         active = publish_draft_policy(db)
         db.commit()
@@ -230,7 +246,10 @@ def publish_policy_draft(db: Session = Depends(get_db)) -> CreditPolicyRead:
 
 
 @router.post("/draft/reset", response_model=CreditPolicyRead)
-def reset_policy_draft(db: Session = Depends(get_db)) -> CreditPolicyRead:
+def reset_policy_draft(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> CreditPolicyRead:
     try:
         draft = reset_draft_policy(db)
         db.commit()

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.security import CurrentUser, require_permissions
 from app.db.session import get_db
 from app.models.credit_report_read import CreditReportRead
 from app.schemas.credit_report_read import (
@@ -58,19 +59,31 @@ def _to_coface_response(entry: CreditReportRead) -> CofaceReportReadResponse:
 
 
 @router.post("/agrisk", response_model=AgriskReportReadResponse, status_code=status.HTTP_201_CREATED)
-def create_agrisk_read(payload: AgriskReportReadCreate, db: Session = Depends(get_db)) -> AgriskReportReadResponse:
+def create_agrisk_read(
+    payload: AgriskReportReadCreate,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.dossier.edit"])),
+) -> AgriskReportReadResponse:
     entry = create_agrisk_report_read(db, payload)
     return _to_response(entry)
 
 
 @router.post("/coface", response_model=CofaceReportReadResponse, status_code=status.HTTP_201_CREATED)
-def create_coface_read(payload: CofaceReportReadCreate, db: Session = Depends(get_db)) -> CofaceReportReadResponse:
+def create_coface_read(
+    payload: CofaceReportReadCreate,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.dossier.edit"])),
+) -> CofaceReportReadResponse:
     entry = create_coface_report_read(db, payload)
     return _to_coface_response(entry)
 
 
 @router.get("/coface/{read_id}", response_model=CofaceReportReadResponse)
-def get_coface_read(read_id: int, db: Session = Depends(get_db)) -> CofaceReportReadResponse:
+def get_coface_read(
+    read_id: int,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.dossier.edit"])),
+) -> CofaceReportReadResponse:
     entry = db.get(CreditReportRead, read_id)
     if entry is None or entry.source_type != "coface":
         raise HTTPException(
@@ -81,7 +94,11 @@ def get_coface_read(read_id: int, db: Session = Depends(get_db)) -> CofaceReport
 
 
 @router.get("/agrisk/{read_id}", response_model=AgriskReportReadResponse)
-def get_agrisk_read(read_id: int, db: Session = Depends(get_db)) -> AgriskReportReadResponse:
+def get_agrisk_read(
+    read_id: int,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.dossier.edit"])),
+) -> AgriskReportReadResponse:
     entry = db.get(CreditReportRead, read_id)
     if entry is None or entry.source_type != "agrisk":
         raise HTTPException(

@@ -6,7 +6,7 @@ import uuid
 import unittest
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from app.core.security import CurrentUser
 from app.db.session import SessionLocal
@@ -17,6 +17,7 @@ from app.models.business_unit import BusinessUnit
 from app.models.company import Company
 from app.models.credit_analysis import CreditAnalysis
 from app.models.customer import Customer
+from app.models.decision_event import DecisionEvent
 from app.models.permission import Permission
 from app.models.role import Role
 from app.models.role_permission import RolePermission
@@ -39,15 +40,28 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.created: dict[str, list[int]] = {k: [] for k in ["rows", "runs", "audits", "analyses", "customers", "scopes", "users", "role_permissions", "roles", "permissions", "bus", "companies"]}
         self.company_id: int | None = None
+        self._run_suffix = uuid.uuid4().hex[:8]
+        self._email_map: dict[str, str] = {}
 
     def tearDown(self) -> None:
         with SessionLocal() as db:
+            if self.created["analyses"]:
+                db.execute(delete(DecisionEvent).where(DecisionEvent.credit_analysis_id.in_(self.created["analyses"])))
             if self.created["rows"]:
                 db.execute(delete(ArAgingDataTotalRow).where(ArAgingDataTotalRow.id.in_(self.created["rows"])))
             if self.created["runs"]:
                 db.execute(delete(ArAgingImportRun).where(ArAgingImportRun.id.in_(self.created["runs"])))
             if self.created["audits"]:
                 db.execute(delete(AuditLog).where(AuditLog.id.in_(self.created["audits"])))
+            if self.created["analyses"] or self.created["users"]:
+                db.execute(
+                    delete(AuditLog).where(
+                        or_(
+                            AuditLog.resource_id.in_([str(item) for item in self.created["analyses"]]) if self.created["analyses"] else False,
+                            AuditLog.actor_user_id.in_(self.created["users"]) if self.created["users"] else False,
+                        )
+                    )
+                )
             if self.created["analyses"]:
                 db.execute(delete(CreditAnalysis).where(CreditAnalysis.id.in_(self.created["analyses"])))
             if self.created["customers"]:
@@ -70,7 +84,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
 
     def _setup_base(self) -> tuple[int, int]:
         with SessionLocal() as db:
-            company = Company(name="Empresa Monitor", legal_name="Empresa Monitor LTDA", trade_name="Empresa Monitor", cnpj=None, allowed_domain="indorama.com", allowed_domains_json=["indorama.com"], corporate_email_required=False, is_active=True)
+            company_name = f"Empresa Monitor {self._run_suffix}"
+            company = Company(name=company_name, legal_name=f"{company_name} LTDA", trade_name=company_name, cnpj=None, allowed_domain="indorama.com", allowed_domains_json=["indorama.com"], corporate_email_required=False, is_active=True)
             db.add(company)
             db.flush()
             self.created["companies"].append(company.id)
@@ -88,7 +103,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
 
     def _setup_base_two_bus(self) -> tuple[int, int, int]:
         with SessionLocal() as db:
-            company = Company(name="Empresa Multi BU", legal_name="Empresa Multi BU LTDA", trade_name="Empresa Multi BU", cnpj=None, allowed_domain="indorama.com", allowed_domains_json=["indorama.com"], corporate_email_required=False, is_active=True)
+            company_name = f"Empresa Multi BU {self._run_suffix}"
+            company = Company(name=company_name, legal_name=f"{company_name} LTDA", trade_name=company_name, cnpj=None, allowed_domain="indorama.com", allowed_domains_json=["indorama.com"], corporate_email_required=False, is_active=True)
             db.add(company)
             db.flush()
             self.created["companies"].append(company.id)
@@ -107,6 +123,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
 
     def _create_user(self, email: str, permissions: list[str], bu_id: int) -> CurrentUser:
         assert self.company_id is not None
+        resolved_email = self._resolve_email(email)
         with SessionLocal() as db:
             role = Role(company_id=self.company_id, code=f"PERF-{len(self.created['roles'])+1:04d}", name=f"perfil_{len(self.created['roles'])+1}", description="perfil", is_active=True, is_system=False)
             db.add(role)
@@ -124,7 +141,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
                 db.flush()
                 self.created["role_permissions"].append(rp.id)
             unique_suffix = uuid.uuid4().hex[:8].upper()
-            user = User(company_id=self.company_id, role_id=role.id, user_code=f"USR-{len(self.created['users'])+1:04d}", username=email.split("@")[0], full_name=email, email=email, phone=None, password_hash=hash_password("Senha@123"), is_active=True, must_change_password=False)
+            user = User(company_id=self.company_id, role_id=role.id, user_code=f"USR-{len(self.created['users'])+1:04d}", username=resolved_email.split("@")[0], full_name=resolved_email, email=resolved_email, phone=None, password_hash=hash_password("Senha@123"), is_active=True, must_change_password=False)
             user.user_code = f"USR-{unique_suffix}"
             db.add(user)
             db.flush()
@@ -138,9 +155,23 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             db.expunge(user)
             return CurrentUser(user=user, permissions=set(permissions), bu_ids={bu_id})
 
+    def _resolve_email(self, logical_email: str) -> str:
+        if logical_email in self._email_map:
+            return self._email_map[logical_email]
+        local, _, domain = logical_email.partition("@")
+        resolved = f"{local}+{self._run_suffix}@{domain}" if domain else f"{logical_email}+{self._run_suffix}@indorama.com"
+        self._email_map[logical_email] = resolved
+        return resolved
+
+    def _next_document_number(self) -> str:
+        seed = int(self._run_suffix, 16) % 90000000
+        index = len(self.created["customers"]) + 1
+        return f"99{seed:08d}{index:04d}"
+
     def _create_analysis(self, run_id: int, requester_email: str, status: str = "created", bu_name: str = "Fertilizer") -> int:
+        resolved_requester_email = self._resolve_email(requester_email)
         with SessionLocal() as db:
-            customer = Customer(company_name=f"Cliente {requester_email}", document_number=f"12345678000{len(self.created['customers'])+100:03d}", segment="ind", region="sudeste", relationship_start_date=None)
+            customer = Customer(company_name=f"Cliente {resolved_requester_email}", document_number=self._next_document_number(), segment="ind", region="sudeste", relationship_start_date=None)
             db.add(customer)
             db.flush()
             self.created["customers"].append(customer.id)
@@ -148,11 +179,12 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             db.add(row)
             db.flush()
             self.created["rows"].append(row.id)
-            analysis = CreditAnalysis(customer_id=customer.id, protocol_number=f"PROTO-{customer.id}", requested_limit=Decimal("10000"), current_limit=Decimal("0"), exposure_amount=Decimal("0"), annual_revenue_estimated=Decimal("0"), suggested_limit=Decimal("10000"), analysis_status=status, decision_memory_json={"triage_submission": {"source": "cliente_existente_carteira"}})
+            decision_memory = {} if status == "created" else {"triage_submission": {"source": "cliente_existente_carteira"}}
+            analysis = CreditAnalysis(customer_id=customer.id, protocol_number=f"PROTO-{customer.id}", requested_limit=Decimal("10000"), current_limit=Decimal("0"), exposure_amount=Decimal("0"), annual_revenue_estimated=Decimal("0"), suggested_limit=Decimal("10000"), analysis_status=status, decision_memory_json=decision_memory)
             db.add(analysis)
             db.flush()
             self.created["analyses"].append(analysis.id)
-            audit = AuditLog(actor_user_id=None, action="credit_request_triage_submit", resource="credit_analysis", resource_id=str(analysis.id), metadata_json={"requested_by": requester_email}, notes="created")
+            audit = AuditLog(actor_user_id=None, action="credit_request_triage_submit", resource="credit_analysis", resource_id=str(analysis.id), metadata_json={"requested_by": resolved_requester_email}, notes="created")
             db.add(audit)
             db.flush()
             self.created["audits"].append(audit.id)

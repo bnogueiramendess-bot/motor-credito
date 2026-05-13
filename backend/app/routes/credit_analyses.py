@@ -66,6 +66,16 @@ from app.services.bu_scope import (
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
 
+LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
+    "credit.request.create": ("credit.request.create",),
+    "credit.requests.view": ("credit.requests.view", "credit_request_view_own"),
+    "credit.analysis.execute": ("credit.analysis.execute", "credit_request_validate"),
+    "credit.request.submit": ("credit.request.submit", "credit_request_submit_approval"),
+    "credit.approval.approve": ("credit.approval.approve", "credit_request_approve"),
+    "credit.approval.reject": ("credit.approval.reject", "credit_request_reject"),
+    "scope:all_bu": ("scope:all_bu", "credit_request_view_bu"),
+}
+
 
 def _normalize_cnpj_or_400(raw_cnpj: str) -> str:
     normalized = normalize_cnpj(raw_cnpj)
@@ -207,7 +217,11 @@ def _resolve_operational_status(analysis: CreditAnalysis, external_entries: list
 
 
 def _has_any_permission(current: CurrentUser, *keys: str) -> bool:
-    return any(key in current.permissions for key in keys)
+    expanded: set[str] = set()
+    for key in keys:
+        expanded.add(key)
+        expanded.update(LEGACY_PERMISSION_COMPATIBILITY.get(key, ()))
+    return any(key in current.permissions for key in expanded)
 
 
 def _require_any_permission_or_403(current: CurrentUser, *keys: str) -> None:

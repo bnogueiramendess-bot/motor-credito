@@ -12,6 +12,7 @@ from app.services.security import hash_password
 
 ROLE_MATRIX: dict[str, list[str]] = {
     "administrador_master": [
+        "clients.aging.import",
         "company:manage",
         "bu:manage",
         "users:manage",

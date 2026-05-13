@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.security import CurrentUser, get_current_user
+from app.core.security import CurrentUser, require_permissions
 from app.db.session import get_db
 from app.models.ar_aging_data_total_row import ArAgingDataTotalRow
 from app.models.ar_aging_bod_snapshot import ArAgingBodSnapshot
@@ -518,7 +518,10 @@ def _build_bod_snapshot_payload(db: Session, import_run_id: int) -> dict | None:
 
 
 @router.get("/snapshots", response_model=PortfolioSnapshotsResponse)
-def list_portfolio_snapshots(db: Session = Depends(get_db)) -> PortfolioSnapshotsResponse:
+def list_portfolio_snapshots(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
+) -> PortfolioSnapshotsResponse:
     current = _latest_valid_import_run(db)
     closings = db.scalars(
         select(ArAgingImportRun)
@@ -569,7 +572,7 @@ def get_latest_aging_summary(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioAgingLatestResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
@@ -748,7 +751,7 @@ def get_portfolio_comparison(
     to_snapshot_id: str = Query(...),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.evolution.view"])),
 ) -> PortfolioComparisonResponse:
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     normalized_from = from_snapshot_id.strip().lower()
@@ -877,7 +880,7 @@ def get_latest_aging_alerts(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioAgingAlertsLatestResponse:
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     payload = build_latest_portfolio_alerts(
@@ -899,7 +902,7 @@ def get_latest_aging_movements(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioAgingMovementsLatestResponse:
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
     payload = build_latest_portfolio_movements(
@@ -921,7 +924,7 @@ def get_portfolio_risk_summary(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioRiskSummaryResponse:
     if isinstance(current, CurrentUser):
         bu_resolution = resolve_business_unit_context(db, current, business_unit_context)
@@ -994,7 +997,7 @@ def list_portfolio_customers(
     cnpj: str | None = Query(default=None),
     snapshot_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioCustomersResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
@@ -1067,7 +1070,7 @@ def get_portfolio_customer(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioCustomerDetailResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
@@ -1139,7 +1142,7 @@ def list_portfolio_groups(
     q: str | None = Query(default=None),
     snapshot_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioGroupsResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
@@ -1260,7 +1263,7 @@ def get_portfolio_group(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioGroupDetailResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
@@ -1341,7 +1344,7 @@ def list_group_open_invoices(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioOpenInvoicesResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
@@ -1419,7 +1422,7 @@ def list_customer_open_invoices(
     snapshot_id: str | None = Query(default=None),
     business_unit_context: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(require_permissions(["clients.portfolio.view"])),
 ) -> PortfolioOpenInvoicesResponse:
     run = resolve_snapshot_import_run(db, snapshot_id)
     allowed_bu_names, has_all_scope = _resolve_scope_context(db, current, business_unit_context)
@@ -1474,3 +1477,4 @@ def list_customer_open_invoices(
 
     items.sort(key=lambda item: item.open_amount, reverse=True)
     return PortfolioOpenInvoicesResponse(import_meta=_import_meta(run), total_items=len(items), items=items)
+
