@@ -43,37 +43,17 @@ from app.services.bootstrap_admin import (
     DEFAULT_MASTER_PASSWORD,
     ROLE_MATRIX,
 )
+from app.services.operational_reset import (
+    build_execution_plan,
+    execute_table_cleanup,
+    list_reset_domains,
+    validate_registry_coverage,
+)
 from app.services.security import generate_raw_token, hash_password, hash_token
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 REQUIRED_CONFIRMATION = "RESET_OPERATIONAL_DATA"
-
-TABLES_TO_CLEAN = [
-    "external_data_files",
-    "decision_events",
-    "score_results",
-    "external_data_entries",
-    "credit_analyses",
-    "customers",
-    "credit_report_reads",
-    "ar_aging_bod_customer_rows",
-    "ar_aging_bod_snapshots",
-    "ar_aging_remark_rows",
-    "ar_aging_group_consolidated_rows",
-    "ar_aging_data_total_rows",
-    "ar_aging_import_runs",
-    "refresh_tokens",
-    "audit_logs",
-    "user_business_unit_scopes",
-    "user_invitations",
-    "business_units",
-    "users",
-    "role_permissions",
-    "permissions",
-    "roles",
-    "companies",
-]
 
 SYSTEM_PROFILE_NAMES = {"administrador_master"}
 
@@ -108,6 +88,7 @@ PROFILE_PERMISSION_CATALOG: dict[str, str] = {
 
 class ResetOperationalDataRequest(BaseModel):
     confirm: str
+    domains: list[str] | None = None
 
 
 def _is_production_env() -> bool:
@@ -786,58 +767,75 @@ def reset_operational_data(
 
     _guard_sensitive_environment(db)
 
-    summary: list[dict[str, int | str | bool]] = []
-    total_deleted = 0
+    current_role_name = db.scalar(select(Role.name).where(Role.id == _.user.role_id))
+    if current_role_name != "administrador_master":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operacao permitida apenas para Master/Admin.")
 
     try:
-        for table_name in TABLES_TO_CLEAN:
-            exists = db.execute(
-                text("SELECT to_regclass(:qualified_name) IS NOT NULL"),
-                {"qualified_name": f"public.{table_name}"},
-            ).scalar_one()
-            if not exists:
-                summary.append({"table": table_name, "deleted": 0, "sequence_reset": False})
-                continue
+        plan = build_execution_plan(payload.domains)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-            deleted_rows = int(db.execute(text(f"DELETE FROM {table_name}")).rowcount or 0)
-            total_deleted += deleted_rows
+    try:
+        total_deleted, summary = execute_table_cleanup(db, plan.table_order)
 
-            sequence_name = db.execute(
-                text("SELECT pg_get_serial_sequence(:table_name, 'id')"),
-                {"table_name": table_name},
-            ).scalar_one_or_none()
-
-            sequence_reset = False
-            if sequence_name:
-                db.execute(text(f"ALTER SEQUENCE {sequence_name} RESTART WITH 1"))
-                sequence_reset = True
-
-            summary.append({"table": table_name, "deleted": deleted_rows, "sequence_reset": sequence_reset})
-
-        company, master_role = _seed_default_governance(db)
-        db.add(
-            User(
-                company_id=company.id,
-                role_id=master_role.id,
-                user_code="USR-0001",
-                username=DEFAULT_MASTER_EMAIL.split("@")[0],
-                full_name=DEFAULT_MASTER_NAME,
-                email=DEFAULT_MASTER_EMAIL,
-                phone=None,
-                password_hash=hash_password(DEFAULT_MASTER_PASSWORD),
-                is_active=True,
-                must_change_password=False,
+        master_admin = {
+            "status": "preserved",
+            "email": DEFAULT_MASTER_EMAIL,
+            "profile": "administrador_master",
+            "is_active": True,
+            "full_access": True,
+        }
+        if plan.should_reseed_master:
+            company, master_role = _seed_default_governance(db)
+            db.add(
+                User(
+                    company_id=company.id,
+                    role_id=master_role.id,
+                    user_code="USR-0001",
+                    username=DEFAULT_MASTER_EMAIL.split("@")[0],
+                    full_name=DEFAULT_MASTER_NAME,
+                    email=DEFAULT_MASTER_EMAIL,
+                    phone=None,
+                    password_hash=hash_password(DEFAULT_MASTER_PASSWORD),
+                    is_active=True,
+                    must_change_password=False,
+                )
             )
-        )
-        db.flush()
+            db.flush()
+            master_admin["status"] = "recreated"
+
         db.commit()
     except Exception:
         db.rollback()
         raise
 
+    coverage = validate_registry_coverage()
+    domain_catalog = list_reset_domains()
+    domain_summary = [
+        {
+            "key": key,
+            "label": domain_catalog[key]["label"],
+            "description": domain_catalog[key]["description"],
+            "tables": domain_catalog[key]["tables"],
+        }
+        for key in plan.domains
+    ]
+
     return {
         "status": "ok",
+        "reset_scope": "total_operational" if plan.is_total_reset else "partial_operational",
+        "domains": plan.domains,
+        "domain_summary": domain_summary,
         "total_deleted": total_deleted,
         "tables": summary,
-        "default_master_user": {"email": DEFAULT_MASTER_EMAIL, "password": DEFAULT_MASTER_PASSWORD},
+        "master_admin": master_admin,
+        "coverage": {
+            "missing_in_registry": coverage["missing_in_registry"],
+            "unknown_in_registry": coverage["unknown_in_registry"],
+        },
+        "default_master_user": {
+            "email": DEFAULT_MASTER_EMAIL,
+            "password_reset_required": False,
+        },
     }

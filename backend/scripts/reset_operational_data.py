@@ -45,6 +45,9 @@ TABLES_TO_CLEAN = [
     "ar_aging_group_consolidated_rows",
     "ar_aging_data_total_rows",
     "ar_aging_import_runs",
+    # Politica de credito (configuracao funcional)
+    "credit_policy_rules",
+    "credit_policies",
 ]
 
 

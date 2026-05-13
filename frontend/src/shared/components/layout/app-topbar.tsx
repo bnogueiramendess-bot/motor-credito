@@ -5,10 +5,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Building2, ChevronDown, FileUp, Settings, Users } from "lucide-react";
 
-import { resetOperationalData } from "@/features/admin/api/admin.api";
+import { OperationalResetDialog } from "@/features/admin/components/operational-reset-dialog";
 import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
 import { OPEN_AGING_IMPORT_DRAWER_EVENT } from "@/shared/lib/events";
-import { ApiError } from "@/shared/lib/http/http-client";
 import { getCurrentUserDisplayName, getCurrentUserLoginName } from "@/shared/lib/auth/current-user";
 import { cn } from "@/shared/lib/utils";
 
@@ -180,8 +179,8 @@ export function AppTopbar() {
 
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
+  const [isOperationalResetDialogOpen, setIsOperationalResetDialogOpen] = useState(false);
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
-  const [isResettingBase, setIsResettingBase] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const [isUsersMenuOpen, setIsUsersMenuOpen] = useState(false);
@@ -215,23 +214,7 @@ export function AppTopbar() {
 
   async function handleResetOperationalData() {
     setIsSettingsMenuOpen(false);
-    const confirmation = window.prompt('Esta ação limpará todos os dados operacionais. Digite "Confirmo" para continuar:');
-    if (confirmation !== "Confirmo") return;
-
-    setIsResettingBase(true);
-    try {
-      const response = await resetOperationalData("RESET_OPERATIONAL_DATA");
-      const defaultUserInfo = response.default_master_user
-        ? `\nUsuario master padrao: ${response.default_master_user.email}\nSenha padrao: ${response.default_master_user.password}`
-        : "";
-      window.alert(`Reset concluído com sucesso. Registros removidos: ${response.total_deleted}.${defaultUserInfo}`);
-      window.location.reload();
-    } catch (error) {
-      const message = error instanceof ApiError ? error.message : "Falha ao executar reset operacional.";
-      window.alert(message);
-    } finally {
-      setIsResettingBase(false);
-    }
+    setIsOperationalResetDialogOpen(true);
   }
 
   async function handleLogout() {
@@ -386,10 +369,9 @@ export function AppTopbar() {
                     <button
                       type="button"
                       onClick={() => void handleResetOperationalData()}
-                      disabled={isResettingBase}
-                      className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50"
                     >
-                      {isResettingBase ? "Resetando base..." : "Reset da Base"}
+                      Reset da Base
                     </button>
                   ) : null}
                 </div>
@@ -454,6 +436,13 @@ export function AppTopbar() {
         </div>
       </div>
       <AgingImportDrawer open={isImportDrawerOpen} onOpenChange={setIsImportDrawerOpen} />
+      {canResetBase ? (
+        <OperationalResetDialog
+          open={isOperationalResetDialogOpen}
+          onOpenChange={setIsOperationalResetDialogOpen}
+          onSuccess={() => window.location.reload()}
+        />
+      ) : null}
     </header>
   );
 }
