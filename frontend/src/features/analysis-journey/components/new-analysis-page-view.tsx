@@ -1977,53 +1977,94 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
       
 {step === 3 ?(
-        <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-          <p className="text-[13px] font-medium text-[#111827]">Dados da solicitaÃ§Ã£o</p>
-          <p className="text-[12px] text-[#6b7280]">Informe os dados principais da solicitaÃ§Ã£o de crÃ©dito antes de avanÃ§ar.</p>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <label className="text-[11px] text-[#374151]">Limite solicitado<RequiredMark /><input value={analysis.requestedLimit} onChange={(event) => setAnalysis((prev) => ({ ...prev, requestedLimit: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-            <label className="text-[11px] text-[#374151]">Limite atual<input value={analysis.currentLimit} onChange={(event) => setAnalysis((prev) => ({ ...prev, currentLimit: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-            <label className="text-[11px] text-[#374151]">Limite utilizado<input value={analysis.usedLimit} onChange={(event) => setAnalysis((prev) => ({ ...prev, usedLimit: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-            <label className="text-[11px] text-[#374151]">
-              Limite com garantia
-              <input
-                value={analysis.guaranteeLimit}
-                onChange={(event) => setAnalysis((prev) => ({ ...prev, guaranteeLimit: formatCurrencyInputBRL(event.target.value) }))}
-                disabled={hasCofaceCoverageImported}
-                className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px] disabled:cursor-not-allowed disabled:bg-[#f9fafb] disabled:text-[#6b7280]"
-              />
-              <span className="mt-1 block text-[10px] text-[#6b7280]">
-                {hasCofaceCoverageImported
-                  ?"Valor preenchido automaticamente a partir do relatÃ³rio COFACE (Valor de cobertura)."
-                  : "Valor garantido por seguro ou garantia real."}
-              </span>
-              {hasCofaceCoverageImported ?(
-                <span className="mt-1 inline-flex rounded-full border border-[#CFE0F4] bg-[#EEF3F8] px-2 py-0.5 text-[10px] font-medium text-[#295B9A]">
-                  Origem: COFACE
-                </span>
-              ) : null}
-            </label>
-            <label className="text-[11px] text-[#374151]">Limite total<input value={totalLimitDisplay} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" /></label>
-            <label className="text-[11px] text-[#374151]">
-              ExposiÃ§Ã£o
-              <input
-                value={exposureDisplay}
-                readOnly
-                className={`mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px] ${
-                  hasPositiveExposure
-                    ?"border-[#E7DDC3] bg-[#FFFCF3] text-[#6B5B2A]"
-                    : "bg-[#f9fafb] text-[#6b7280]"
-                }`}
-              />
-            </label>
-            <label className="text-[11px] text-[#374151]">Analista responsÃ¡vel
-              <input value={analysis.assignedAnalystName} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-            </label>
-            <label className="text-[11px] text-[#374151] md:col-span-2 xl:col-span-3">ComentÃ¡rio
-              <textarea value={analysis.comment} onChange={(event) => setAnalysis((prev) => ({ ...prev, comment: event.target.value }))} className="mt-1 min-h-16 w-full rounded-[6px] border px-3 py-2 text-[12px]" />
-            </label>
-          </div>
-        </article>
+        <div className="space-y-3">
+          <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
+            <p className="text-[13px] font-medium text-[#111827]">Solicita??o atual</p>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <label className="text-[11px] text-[#374151]">Limite solicitado<RequiredMark /><input value={analysis.requestedLimit} onChange={(event) => setAnalysis((prev) => ({ ...prev, requestedLimit: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
+              <label className="text-[11px] text-[#374151]">Analista respons?vel
+                <input value={analysis.assignedAnalystName} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+              </label>
+              <label className="text-[11px] text-[#374151] md:col-span-2 xl:col-span-3">Coment?rio / justificativa
+                <textarea value={analysis.comment} onChange={(event) => setAnalysis((prev) => ({ ...prev, comment: event.target.value }))} className="mt-1 min-h-16 w-full rounded-[6px] border px-3 py-2 text-[12px]" />
+              </label>
+            </div>
+          </article>
+
+          {hasInternalFinancialSnapshot ?(
+            <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
+              <p className="text-[13px] font-medium text-[#111827]">Contexto atual do cliente</p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <label className="text-[11px] text-[#374151]">Limite atual
+                  <input value={formatCurrencyBRL(String(internalTotalLimit))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                </label>
+                <label className="text-[11px] text-[#374151]">Limite utilizado
+                  <input value={formatCurrencyBRL(String(internalOpenAmount))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                </label>
+                <label className="text-[11px] text-[#374151]">Limite dispon?vel
+                  <input value={formatCurrencyBRL(String(internalAvailableLimit))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                </label>
+                <label className="text-[11px] text-[#374151]">Exposi??o
+                  <input value={formatCurrencyBRL(String(internalExposure))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                </label>
+                {internalOverdue !== null ?(
+                  <label className="text-[11px] text-[#374151]">Overdue
+                    <input value={formatCurrencyBRL(String(internalOverdue))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+                {internalNotDue !== null ?(
+                  <label className="text-[11px] text-[#374151]">Not due
+                    <input value={formatCurrencyBRL(String(internalNotDue))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+                {internalOperationalStatus ?(
+                  <label className="text-[11px] text-[#374151]">Status operacional
+                    <input value={internalOperationalStatus} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+                <label className="text-[11px] text-[#374151]">Comportamento interno
+                  <input value={internalBehaviorLabel} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                </label>
+                <label className="text-[11px] text-[#374151]">Varia??o solicitada
+                  <input value={formatCurrencyBRL(String(toNumberInput(analysis.requestedLimit) - internalTotalLimit))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                </label>
+              </div>
+            </article>
+          ) : null}
+
+          {(hasCofaceImported || hasCofaceCoverageImported) ?(
+            <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
+              <p className="text-[13px] font-medium text-[#111827]">Cobertura / garantia</p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {hasCofaceCoverageImported ?(
+                  <label className="text-[11px] text-[#374151]">Limite com garantia
+                    <input value={guaranteeDisplayText} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+                {hasCofaceCoverageImported ?(
+                  <label className="text-[11px] text-[#374151]">Valor de cobertura COFACE
+                    <input value={guaranteeDisplayText} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+                {cofaceImport.cofaceReadPayload?.coface?.dra != null ?(
+                  <label className="text-[11px] text-[#374151]">DRA COFACE
+                    <input value={String(cofaceImport.cofaceReadPayload.coface.dra)} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+                {cofaceImport.cofaceReadPayload?.coface?.notation ?(
+                  <label className="text-[11px] text-[#374151]">Rating / decis?o
+                    <input value={cofaceImport.cofaceReadPayload.coface.notation} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+                {cofaceImport.cofaceReadPayload?.coface?.decision_effective_date ?(
+                  <label className="text-[11px] text-[#374151]">Validade
+                    <input value={formatIsoDateToBr(cofaceImport.cofaceReadPayload.coface.decision_effective_date)} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
+                  </label>
+                ) : null}
+              </div>
+            </article>
+          ) : null}
+        </div>
       ) : null}
 
       {step === 4 ?(
