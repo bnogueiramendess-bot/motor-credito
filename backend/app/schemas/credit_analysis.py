@@ -47,6 +47,17 @@ class CreditAnalysisRead(BaseModel):
     decision_memory_json: dict | None
     decision_calculated_at: datetime | None
     assigned_analyst_name: str | None
+    current_owner_user_id: int | None = None
+    current_owner_role: str | None = None
+    last_owner_user_id: int | None = None
+    last_owner_role: str | None = None
+    assigned_at: datetime | None = None
+    claimed_at: datetime | None = None
+    analysis_started_at: datetime | None = None
+    current_stage_started_at: datetime | None = None
+    submitted_for_approval_at: datetime | None = None
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
     created_at: datetime
     completed_at: datetime | None
 
@@ -170,6 +181,8 @@ class CreditAnalysisMonitorItem(BaseModel):
     business_unit: str | None = None
     requester_name: str | None = None
     assigned_analyst_name: str | None = None
+    current_owner_user_id: int | None = None
+    current_owner_role: str | None = None
     approver_name: str | None = None
     current_status: str
     status_label: str
@@ -183,6 +196,7 @@ class CreditAnalysisMonitorItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     aging_days: int
+    stage_aging_days: int = 0
     next_responsible_role: str
     available_actions: list[str]
 

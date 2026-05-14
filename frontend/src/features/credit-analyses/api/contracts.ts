@@ -238,6 +238,8 @@ export type CreditAnalysisMonitorItemDto = {
   business_unit: string | null;
   requester_name: string | null;
   assigned_analyst_name: string | null;
+  current_owner_user_id: number | null;
+  current_owner_role: string | null;
   approver_name: string | null;
   current_status: string;
   status_label: string;
@@ -251,6 +253,7 @@ export type CreditAnalysisMonitorItemDto = {
   created_at: string;
   updated_at: string;
   aging_days: number;
+  stage_aging_days: number;
   next_responsible_role: "comercial" | "analista_financeiro" | "aprovador" | string;
   available_actions: string[];
 };

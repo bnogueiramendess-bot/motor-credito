@@ -179,8 +179,9 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             db.add(row)
             db.flush()
             self.created["rows"].append(row.id)
+            status_enum = AnalysisStatus.CREATED if status == "created" else AnalysisStatus.IN_PROGRESS
             decision_memory = {} if status == "created" else {"triage_submission": {"source": "cliente_existente_carteira"}}
-            analysis = CreditAnalysis(customer_id=customer.id, protocol_number=f"PROTO-{customer.id}", requested_limit=Decimal("10000"), current_limit=Decimal("0"), exposure_amount=Decimal("0"), annual_revenue_estimated=Decimal("0"), suggested_limit=Decimal("10000"), analysis_status=status, decision_memory_json=decision_memory)
+            analysis = CreditAnalysis(customer_id=customer.id, protocol_number=f"PROTO-{customer.id}", requested_limit=Decimal("10000"), current_limit=Decimal("0"), exposure_amount=Decimal("0"), annual_revenue_estimated=Decimal("0"), suggested_limit=Decimal("10000"), analysis_status=status_enum, decision_memory_json=decision_memory)
             db.add(analysis)
             db.flush()
             self.created["analyses"].append(analysis.id)
@@ -219,6 +220,19 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         with SessionLocal() as db:
             updated = start_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
             self.assertEqual(updated.analysis_status, AnalysisStatus.IN_PROGRESS)
+            self.assertEqual(updated.current_owner_user_id, analyst.user.id)
+            self.assertEqual(updated.current_owner_role, "analista_financeiro")
+            self.assertIsNotNone(updated.analysis_started_at)
+            self.assertIsNotNone(updated.claimed_at)
+            event = db.scalar(
+                select(DecisionEvent).where(
+                    DecisionEvent.credit_analysis_id == analysis_id,
+                    DecisionEvent.event_type == "analysis_started",
+                )
+            )
+            self.assertIsNotNone(event)
+            assert event is not None
+            self.assertEqual((event.event_payload_json or {}).get("new_status"), "in_progress")
         with SessionLocal() as db:
             response = list_credit_analyses_monitor(db=db, current=analyst)
         self.assertIn("continue_analysis", response.items[0].available_actions)

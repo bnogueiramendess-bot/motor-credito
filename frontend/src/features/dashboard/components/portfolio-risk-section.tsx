@@ -194,7 +194,7 @@ export function PortfolioRiskSection({ snapshotId, businessUnitContext }: { snap
         {showTopClients ? <div className="mt-2 space-y-2">
           {(data.top_clients_at_risk ?? []).map((item, index) => {
             const isCritical = item.risk_level === "critical";
-            const isHealthy = item.risk_level === "healthy";
+            const isAttention = item.risk_level === "attention";
             const isExpanded = expandedIndex === index;
             return (
               <button
@@ -202,14 +202,14 @@ export function PortfolioRiskSection({ snapshotId, businessUnitContext }: { snap
                 key={`${item.customer_name}-${index}`}
                 onClick={() => setExpandedIndex((current) => (current === index ? null : index))}
                 className={`w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-left transition hover:bg-white/[0.06] ${
-                  isCritical ? "border-l-4 border-l-rose-500" : isHealthy ? "border-l-4 border-l-emerald-400" : "border-l-4 border-l-amber-400"
+                  isCritical ? "border-l-4 border-l-rose-500" : isAttention ? "border-l-4 border-l-amber-400" : "border-l-4 border-l-[#2b4a72]"
                 }`}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-white">{item.customer_name}</p>
-                    <p className={`text-xs ${isCritical ? "text-rose-300" : isHealthy ? "text-emerald-300" : "text-amber-300"}`}>
-                      {isCritical ? "Probable" : isHealthy ? "Rare" : "Possible"}{item.bu ? ` · BU: ${item.bu}` : ""}
+                    <p className={`text-xs ${isCritical ? "text-rose-300" : isAttention ? "text-amber-300" : "text-white/70"}`}>
+                      {isCritical ? "Probable" : isAttention ? "Possible" : "Nível não classificado"}{item.bu ? ` · BU: ${item.bu}` : ""}
                     </p>
                   </div>
                   <p className="shrink-0 text-sm font-semibold text-white">{formatCurrencyInThousands(item.amount)}</p>

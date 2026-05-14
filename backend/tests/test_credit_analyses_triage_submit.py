@@ -424,16 +424,24 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             self.assertIsNotNone(analysis)
             self.assertEqual(str(analysis.suggested_limit), "120000.00")
             self.assertEqual(analysis.analysis_status.value, "created")
+            self.assertIsNone(analysis.current_owner_user_id)
+            self.assertEqual(analysis.current_owner_role, "analista_financeiro")
+            self.assertEqual(analysis.last_owner_user_id, user_id)
+            self.assertEqual(analysis.last_owner_role, "comercial_solicitante")
+            self.assertIsNotNone(analysis.current_stage_started_at)
 
             event = db.scalar(
                 select(DecisionEvent).where(
                     DecisionEvent.credit_analysis_id == analysis_id,
-                    DecisionEvent.event_type == "analysis_submitted",
+                    DecisionEvent.event_type == "analysis_created",
                 )
             )
             self.assertIsNotNone(event)
             assert event is not None
             self.assertEqual(event.event_payload_json["source"], "cliente_existente_carteira")
+            self.assertEqual(event.event_payload_json["new_status"], "pending")
+            self.assertEqual(event.event_payload_json["stage"], "commercial_submitted")
+            self.assertEqual(event.event_payload_json["current_owner_role"], "analista_financeiro")
 
             audit = db.scalar(
                 select(AuditLog).where(
@@ -679,7 +687,7 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             event = db.scalar(
                 select(DecisionEvent).where(
                     DecisionEvent.credit_analysis_id == payload.analysis_id,
-                    DecisionEvent.event_type == "analysis_submitted",
+                    DecisionEvent.event_type == "analysis_created",
                 )
             )
             self.assertIsNotNone(event)

@@ -136,7 +136,18 @@ def _latest_valid_import_run_id(db: Session) -> int | None:
 
 
 def _build_portfolio_row_for_cnpj(db: Session, *, normalized_cnpj: str) -> tuple:
-    latest_run_id = _latest_valid_import_run_id(db)
+    latest_run_id = db.scalar(
+        select(ArAgingDataTotalRow.import_run_id)
+        .join(ArAgingImportRun, ArAgingImportRun.id == ArAgingDataTotalRow.import_run_id)
+        .where(
+            ArAgingDataTotalRow.cnpj_normalized == normalized_cnpj,
+            ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
+        )
+        .order_by(ArAgingDataTotalRow.import_run_id.desc())
+        .limit(1)
+    )
+    if latest_run_id is None:
+        latest_run_id = _latest_valid_import_run_id(db)
     if latest_run_id is None:
         return (None, None, None, Decimal("0"), Decimal("0"), Decimal("0"))
 
@@ -241,11 +252,73 @@ def _status_label(status_value: str) -> str:
     mapping = {
         "pending": "Pendente",
         "in_progress": "Em andamento",
-        "in_approval": "Em aprova??o",
+        "in_approval": "Em aprovacao",
         "approved": "Aprovado",
         "rejected": "Recusado",
     }
     return mapping.get(status_value, status_value)
+
+
+def _current_status_value(analysis: CreditAnalysis) -> str:
+    if analysis.final_decision is not None:
+        return "approved" if analysis.final_decision.value == "approved" else "rejected"
+    if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
+        return "in_approval"
+    if analysis.analysis_status == AnalysisStatus.CREATED:
+        return "pending"
+    return "in_progress"
+
+
+def _resolve_owner_role_for_status(status_value: str) -> str:
+    if status_value == "in_approval":
+        return "aprovador"
+    if status_value in {"approved", "rejected"}:
+        return "workflow_encerrado"
+    return "analista_financeiro"
+
+
+def _apply_owner_transition(
+    analysis: CreditAnalysis,
+    *,
+    new_status: str,
+    owner_user_id: int | None,
+    owner_role: str,
+    transition_at: datetime,
+) -> None:
+    analysis.last_owner_user_id = analysis.current_owner_user_id
+    analysis.last_owner_role = analysis.current_owner_role
+    analysis.current_owner_user_id = owner_user_id
+    analysis.current_owner_role = owner_role
+    analysis.current_stage_started_at = transition_at
+    analysis.assigned_at = transition_at
+
+
+def _build_event_payload(
+    *,
+    analysis: CreditAnalysis,
+    previous_status: str | None,
+    new_status: str,
+    current: CurrentUser | None,
+    bu_name: str | None,
+    stage: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    payload = {
+        "analysis_id": analysis.id,
+        "business_unit": bu_name,
+        "stage": stage or _resolve_workflow_stage(new_status),
+        "previous_status": previous_status,
+        "new_status": new_status,
+        "current_owner_user_id": analysis.current_owner_user_id,
+        "current_owner_role": analysis.current_owner_role,
+        "last_owner_user_id": analysis.last_owner_user_id,
+        "last_owner_role": analysis.last_owner_role,
+        "changed_by_user_id": current.user.id if current else None,
+        "changed_by_email": current.user.email if current else None,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
 
 
 def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
@@ -465,6 +538,7 @@ def submit_credit_analysis_from_triage(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="BU informada fora do escopo permitido para o usuario.")
             selected_bu_name = selected_bu.name
 
+    now_utc = datetime.now(timezone.utc)
     analysis = CreditAnalysis(
         customer_id=customer.id,
         protocol_number=generate_protocol_number(db),
@@ -475,6 +549,12 @@ def submit_credit_analysis_from_triage(
         suggested_limit=payload.suggested_limit,
         analysis_status=AnalysisStatus.CREATED,
         assigned_analyst_name=None,
+        current_owner_user_id=None,
+        current_owner_role="analista_financeiro",
+        last_owner_user_id=current.user.id,
+        last_owner_role="comercial_solicitante",
+        assigned_at=now_utc,
+        current_stage_started_at=now_utc,
         decision_memory_json={
             "triage_submission": {
                 "source": payload.source,
@@ -497,15 +577,22 @@ def submit_credit_analysis_from_triage(
     db.add(
         DecisionEvent(
             credit_analysis_id=analysis.id,
-            event_type="analysis_submitted",
+            event_type="analysis_created",
             actor_type=ActorType.USER,
             actor_name=current.user.full_name,
-            description="Solicitacao enviada para analise financeira",
-            event_payload_json={
+            description="Solicitacao de analise criada e encaminhada para fila financeira.",
+            event_payload_json=_build_event_payload(
+                analysis=analysis,
+                previous_status=None,
+                new_status="pending",
+                current=current,
+                bu_name=selected_bu_name,
+                stage="commercial_submitted",
+                extra={
                 "source": payload.source,
                 "cnpj": normalized_cnpj,
                 "suggested_limit": str(payload.suggested_limit),
-                "initial_status": AnalysisStatus.CREATED.value,
+                "initial_status": "pending",
                 "is_early_review_request": payload.is_early_review_request,
                 "early_review_justification": early_justification if payload.is_early_review_request else None,
                 "previous_analysis_id": payload.previous_analysis_id or (recent_analysis.id if recent_analysis else None),
@@ -514,8 +601,8 @@ def submit_credit_analysis_from_triage(
                     if recent_analysis
                     else None
                 ),
-                "business_unit": selected_bu_name,
-            },
+                },
+            ),
         )
     )
     db.add(
@@ -529,8 +616,10 @@ def submit_credit_analysis_from_triage(
                 "cnpj": normalized_cnpj,
                 "source": payload.source,
                 "suggested_limit": str(payload.suggested_limit),
-                "initial_status": AnalysisStatus.CREATED.value,
+                "initial_status": "pending",
                 "analysis_id": analysis.id,
+                "current_owner_user_id": analysis.current_owner_user_id,
+                "current_owner_role": analysis.current_owner_role,
                 "is_early_review_request": payload.is_early_review_request,
                 "business_unit": selected_bu_name,
                 "early_review_justification": early_justification if payload.is_early_review_request else None,
@@ -573,10 +662,16 @@ def create_credit_analysis(
             detail="Customer not found.",
         )
 
+    now_utc = datetime.now(timezone.utc)
     analysis = CreditAnalysis(
         **payload.model_dump(),
         protocol_number=generate_protocol_number(db),
         analysis_status=AnalysisStatus.CREATED,
+        current_owner_role="analista_financeiro",
+        last_owner_user_id=current.user.id,
+        last_owner_role="comercial_solicitante",
+        assigned_at=now_utc,
+        current_stage_started_at=now_utc,
     )
     db.add(analysis)
     db.flush()
@@ -585,10 +680,17 @@ def create_credit_analysis(
     initial_event = DecisionEvent(
         credit_analysis_id=analysis.id,
         event_type="analysis_created",
-        actor_type=ActorType.SYSTEM,
-        actor_name="system",
-        description="Analise criada",
-        event_payload_json=None,
+        actor_type=ActorType.USER,
+        actor_name=current.user.full_name or current.user.email,
+        description="Analise criada e encaminhada para fila financeira.",
+        event_payload_json=_build_event_payload(
+            analysis=analysis,
+            previous_status=None,
+            new_status="pending",
+            current=current,
+            bu_name=resolve_analysis_business_unit(db, analysis),
+            stage="commercial_submitted",
+        ),
     )
     db.add(initial_event)
 
@@ -833,7 +935,7 @@ def list_credit_analyses_queue_options(
     status_label_map = {
         "pending": "Pendente",
         "in_progress": "Em andamento",
-        "in_approval": "Em aprova??o",
+        "in_approval": "Em aprovacao",
         "approved": "Aprovado",
         "rejected": "Recusado",
     }
@@ -886,9 +988,17 @@ def list_credit_analyses_monitor(
     query = select(CreditAnalysis, Customer).join(Customer, Customer.id == CreditAnalysis.customer_id).order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
     rows = db.execute(query).all()
     items: list[CreditAnalysisMonitorItem] = []
-    latest_run_id = _latest_valid_import_run_id(db)
-
     for analysis, customer in rows:
+        latest_run_id = db.scalar(
+            select(ArAgingDataTotalRow.import_run_id)
+            .join(ArAgingImportRun, ArAgingImportRun.id == ArAgingDataTotalRow.import_run_id)
+            .where(
+                ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+                ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
+            )
+            .order_by(ArAgingDataTotalRow.import_run_id.desc())
+            .limit(1)
+        )
         if latest_run_id is None:
             portfolio = (None, None, Decimal("0"))
         else:
@@ -984,6 +1094,8 @@ def list_credit_analyses_monitor(
             next_role = "comercial"
 
         aging_days = max((datetime.now(timezone.utc) - analysis.created_at).days, 0)
+        stage_start = analysis.current_stage_started_at or analysis.created_at
+        stage_aging_days = max((datetime.now(timezone.utc) - stage_start).days, 0)
         item = CreditAnalysisMonitorItem(
             analysis_id=analysis.id,
             protocol=analysis.protocol_number,
@@ -993,6 +1105,8 @@ def list_credit_analyses_monitor(
             business_unit=bu_name,
             requester_name=requester_name,
             assigned_analyst_name=analysis.assigned_analyst_name,
+            current_owner_user_id=analysis.current_owner_user_id,
+            current_owner_role=analysis.current_owner_role,
             approver_name=None,
             current_status=status_value,
             status_label=_status_label(status_value),
@@ -1006,6 +1120,7 @@ def list_credit_analyses_monitor(
             created_at=analysis.created_at,
             updated_at=analysis.created_at,
             aging_days=aging_days,
+            stage_aging_days=stage_aging_days,
             next_responsible_role=next_role,
             available_actions=sorted(set(available_actions)),
         )
@@ -1104,7 +1219,18 @@ def start_credit_analysis(
     _enforce_technical_access_or_403(db, current, analysis)
 
     if analysis.analysis_status == AnalysisStatus.CREATED:
+        transition_at = datetime.now(timezone.utc)
+        previous_status = _current_status_value(analysis)
         analysis.analysis_status = AnalysisStatus.IN_PROGRESS
+        analysis.claimed_at = transition_at
+        analysis.analysis_started_at = analysis.analysis_started_at or transition_at
+        _apply_owner_transition(
+            analysis,
+            new_status="in_progress",
+            owner_user_id=current.user.id,
+            owner_role="analista_financeiro",
+            transition_at=transition_at,
+        )
         db.add(
             DecisionEvent(
                 credit_analysis_id=analysis.id,
@@ -1112,12 +1238,19 @@ def start_credit_analysis(
                 actor_type=ActorType.USER,
                 actor_name=current.user.full_name or current.user.email,
                 description="Analise iniciada pelo analista financeiro.",
-                event_payload_json={
-                    "started_by_user_id": current.user.id,
-                    "started_by_email": current.user.email,
-                    "previous_status": AnalysisStatus.CREATED.value,
-                    "new_status": AnalysisStatus.IN_PROGRESS.value,
-                },
+                event_payload_json=_build_event_payload(
+                    analysis=analysis,
+                    previous_status=previous_status,
+                    new_status="in_progress",
+                    current=current,
+                    bu_name=resolve_analysis_business_unit(db, analysis),
+                    stage="financial_review",
+                    extra={
+                        "started_by_user_id": current.user.id,
+                        "started_by_email": current.user.email,
+                        "claimed_at": transition_at.isoformat(),
+                    },
+                ),
             )
         )
         db.add(
@@ -1127,8 +1260,10 @@ def start_credit_analysis(
                 resource="credit_analysis",
                 resource_id=str(analysis.id),
                 metadata_json={
-                    "previous_status": AnalysisStatus.CREATED.value,
-                    "new_status": AnalysisStatus.IN_PROGRESS.value,
+                    "previous_status": previous_status,
+                    "new_status": "in_progress",
+                    "current_owner_user_id": analysis.current_owner_user_id,
+                    "current_owner_role": analysis.current_owner_role,
                 },
                 notes="Inicio formal da analise pelo time financeiro.",
             )
@@ -1153,13 +1288,24 @@ def list_credit_analysis_events(
         )
     _enforce_technical_access_or_403(db, current, analysis)
 
-    return list(
+    canonical_types = {
+        "analysis_created",
+        "analysis_started",
+        "analysis_submitted_for_approval",
+        "analysis_approved",
+        "analysis_rejected",
+        "reassigned",
+        "returned_for_revision",
+        "comments_added",
+    }
+    events = list(
         db.scalars(
             select(DecisionEvent)
             .where(DecisionEvent.credit_analysis_id == analysis_id)
             .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
         ).all()
     )
+    return [event for event in events if event.event_type in canonical_types]
 
 
 @router.post(
@@ -1426,6 +1572,7 @@ def calculate_decision(
         )
     _enforce_technical_access_or_403(db, current, analysis)
     previous_motor_result = analysis.motor_result
+    previous_status = _current_status_value(analysis)
 
     score_result = db.scalar(select(ScoreResult.id).where(ScoreResult.credit_analysis_id == analysis_id))
     if score_result is None:
@@ -1461,6 +1608,15 @@ def calculate_decision(
         )
     )
     if previous_motor_result is None:
+        transition_at = datetime.now(timezone.utc)
+        analysis.submitted_for_approval_at = analysis.submitted_for_approval_at or transition_at
+        _apply_owner_transition(
+            analysis,
+            new_status="in_approval",
+            owner_user_id=None,
+            owner_role="aprovador",
+            transition_at=transition_at,
+        )
         db.add(
             DecisionEvent(
                 credit_analysis_id=analysis_id,
@@ -1468,13 +1624,19 @@ def calculate_decision(
                 actor_type=ActorType.USER,
                 actor_name=current.user.full_name or current.user.email,
                 description="Analise submetida para aprovacao.",
-                event_payload_json={
-                    "submitted_by_user_id": current.user.id,
-                    "submitted_by_email": current.user.email,
-                    "previous_status": "in_progress",
-                    "new_status": "in_approval",
-                    "motor_result": analysis.motor_result.value if analysis.motor_result is not None else None,
-                },
+                event_payload_json=_build_event_payload(
+                    analysis=analysis,
+                    previous_status=previous_status,
+                    new_status="in_approval",
+                    current=current,
+                    bu_name=resolve_analysis_business_unit(db, analysis),
+                    stage="pending_approval",
+                    extra={
+                        "submitted_by_user_id": current.user.id,
+                        "submitted_by_email": current.user.email,
+                        "motor_result": analysis.motor_result.value if analysis.motor_result is not None else None,
+                    },
+                ),
             )
         )
 
@@ -1554,10 +1716,24 @@ def apply_analysis_final_decision(
             detail="Credit analysis not found.",
         )
     _enforce_technical_access_or_403(db, current, analysis_record)
+    previous_status = _current_status_value(analysis_record)
     try:
         analysis, event_type = apply_final_decision(db, analysis_id, payload)
     except FinalDecisionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    decision_timestamp = datetime.now(timezone.utc)
+    if analysis.final_decision == FinalDecision.APPROVED:
+        analysis.approved_at = analysis.approved_at or decision_timestamp
+    elif analysis.final_decision == FinalDecision.REJECTED:
+        analysis.rejected_at = analysis.rejected_at or decision_timestamp
+    _apply_owner_transition(
+        analysis,
+        new_status="approved" if analysis.final_decision == FinalDecision.APPROVED else "rejected",
+        owner_user_id=current.user.id,
+        owner_role="workflow_encerrado",
+        transition_at=decision_timestamp,
+    )
 
     db.add(
         DecisionEvent(
@@ -1569,12 +1745,20 @@ def apply_analysis_final_decision(
                 f"Final decision {analysis.final_decision.value} "
                 f"with final limit {analysis.final_limit} by {payload.analyst_name}"
             ),
-            event_payload_json={
-                "analyst_name": payload.analyst_name,
-                "final_decision": analysis.final_decision.value,
-                "final_limit": str(analysis.final_limit) if analysis.final_limit is not None else None,
-                "analyst_notes": payload.analyst_notes,
-            },
+            event_payload_json=_build_event_payload(
+                analysis=analysis,
+                previous_status=previous_status,
+                new_status="approved" if analysis.final_decision == FinalDecision.APPROVED else "rejected",
+                current=current,
+                bu_name=resolve_analysis_business_unit(db, analysis),
+                stage="decided",
+                extra={
+                    "analyst_name": payload.analyst_name,
+                    "final_decision": analysis.final_decision.value,
+                    "final_limit": str(analysis.final_limit) if analysis.final_limit is not None else None,
+                    "analyst_notes": payload.analyst_notes,
+                },
+            ),
         )
     )
 

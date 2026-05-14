@@ -601,7 +601,17 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   });
 
   const triageSubmitMutation = useMutation({
-    mutationFn: (payload: { cnpj: string; suggested_limit: number; source: "cliente_existente_carteira" | "cliente_novo_consulta_externa"; customer_id?: number | null; company_name?: string | null; business_unit?: string | null }) =>
+    mutationFn: (payload: {
+      cnpj: string;
+      suggested_limit: number;
+      source: "cliente_existente_carteira" | "cliente_novo_consulta_externa";
+      customer_id?: number | null;
+      company_name?: string | null;
+      business_unit?: string | null;
+      is_early_review_request?: boolean;
+      early_review_justification?: string | null;
+      previous_analysis_id?: number | null;
+    }) =>
       submitTriageCreditRequest(payload),
     onMutate: () => setTriageState("submitting"),
     onSuccess: (response) => {
