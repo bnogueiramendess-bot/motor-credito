@@ -152,12 +152,13 @@ export function AppTopbar() {
   const router = useRouter();
   const pathname = usePathname();
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
-  const [permissions] = useState<string[]>(() => getPermissionsFromCookie());
+  const [permissions, setPermissions] = useState<string[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState("");
   const [currentUserName, setCurrentUserName] = useState("Usuário");
   const [currentLoginName, setCurrentLoginName] = useState("Usuário");
 
   useEffect(() => {
+    setPermissions(getPermissionsFromCookie());
     setCurrentUserRole(getRoleFromCookie());
     setCurrentUserName(toFirstAndSecondName(getCurrentUserDisplayName()));
     setCurrentLoginName(getCurrentUserLoginName());

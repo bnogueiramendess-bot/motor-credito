@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { ChangeEvent, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -44,8 +44,8 @@ function formatFileSize(bytes: number) {
 }
 
 function statusLabel(status: AgingImportItem["status"]) {
-  if (status === "valid") return "VÃ¡lida";
-  if (status === "valid_with_warnings") return "VÃ¡lida com alertas";
+  if (status === "valid") return "Válida";
+  if (status === "valid_with_warnings") return "Válida com alertas";
   if (status === "error") return "Erro";
   return "Processando";
 }
@@ -60,7 +60,7 @@ function statusTone(status: AgingImportItem["status"]) {
 function closingStatusBadge(item: AgingImportItem): { label: string; className: string } | null {
   if (item.closing_status === "superseded") {
     return {
-      label: "Base substituÃ­da",
+      label: "Base substituída",
       className: "border border-slate-200 bg-slate-100 text-slate-700"
     };
   }
@@ -159,7 +159,7 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
       const month = Number(closingMonth);
       const year = Number(closingYear);
       if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000) {
-        setDrawerErrorMessage("Informe mÃªs e ano vÃ¡lidos para o fechamento mensal.");
+        setDrawerErrorMessage("Informe mês e ano válidos para o fechamento mensal.");
         return;
       }
       payload.closing_month = month;
@@ -175,9 +175,9 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        setDuplicateMessage("JÃ¡ existe uma base importada para esta data.");
-        setDrawerErrorMessage("JÃ¡ existe uma base importada para esta data.");
-        setToastState({ message: "JÃ¡ existe uma base importada para esta data.", tone: "error" });
+        setDuplicateMessage("Já existe uma base importada para esta data.");
+        setDrawerErrorMessage("Já existe uma base importada para esta data.");
+        setToastState({ message: "Já existe uma base importada para esta data.", tone: "error" });
         return;
       }
       const message = error instanceof Error ? error.message : "Falha ao importar base Aging AR.";
@@ -225,8 +225,8 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
       <aside className="fixed right-0 top-0 z-[61] h-screen w-full max-w-[560px] overflow-y-auto border-l border-[#cbd5e1] bg-white shadow-[0_8px_30px_rgba(15,23,42,0.24)]">
         <div className="flex items-center justify-between border-b border-[#e2e8f0] px-6 py-5">
           <div>
-            <h3 className="text-lg font-semibold text-[#0f172a]">ImportaÃ§Ã£o Aging AR</h3>
-            <p className="mt-1 text-sm text-[#64748b]">Atualize a base diÃ¡ria da carteira de clientes.</p>
+            <h3 className="text-lg font-semibold text-[#0f172a]">Importação Aging AR</h3>
+            <p className="mt-1 text-sm text-[#64748b]">Atualize a base diária da carteira de clientes.</p>
           </div>
           <button
             type="button"
@@ -250,15 +250,15 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
               <span className="max-w-[280px] truncate text-sm text-[#475569]">{selectedFile?.name ?? "Nenhum arquivo selecionado"}</span>
             </div>
             {selectedFile ? <p className="mt-2 text-xs text-[#475569]">Tamanho: {formatFileSize(selectedFile.size)}</p> : null}
-            <p className="mt-2 text-xs text-[#64748b]">A nova base substituirÃ¡ a base vigente para fins de dashboard.</p>
+            <p className="mt-2 text-xs text-[#64748b]">A nova base substituirá a base vigente para fins de dashboard.</p>
             <div className="mt-4 rounded-md border border-[#dbe3ef] bg-white p-3">
-              <p className="text-sm font-semibold text-[#0f172a]">Tipo da importaÃ§Ã£o</p>
+              <p className="text-sm font-semibold text-[#0f172a]">Tipo da importação</p>
               <label className="mt-2 flex items-start gap-2 text-sm text-[#334155]">
                 <input type="radio" name="snapshot_type" checked={snapshotType === "daily"} onChange={() => setSnapshotType("daily")} />
                 <span>
-                  <strong>ImportaÃ§Ã£o diÃ¡ria</strong>
+                  <strong>Importação diária</strong>
                   <br />
-                  Utilizada para atualizaÃ§Ã£o operacional da carteira no dia a dia.
+                  Utilizada para atualização operacional da carteira no dia a dia.
                 </span>
               </label>
               <label className="mt-2 flex items-start gap-2 text-sm text-[#334155]">
@@ -266,15 +266,15 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
                 <span>
                   <strong>Fechamento mensal</strong>
                   <br />
-                  Cria um snapshot oficial da carteira para consulta histÃ³rica.
+                  Cria um snapshot oficial da carteira para consulta histórica.
                 </span>
               </label>
               {snapshotType === "monthly_closing" ? (
                 <div className="mt-3">
-                  <p className="mb-2 text-sm font-semibold text-[#0f172a]">CompetÃªncia do fechamento</p>
+                  <p className="mb-2 text-sm font-semibold text-[#0f172a]">Competência do fechamento</p>
                   <div className="grid grid-cols-2 gap-2">
                     <select value={closingMonth} onChange={(event) => setClosingMonth(event.target.value)} className="h-10 rounded-md border border-[#dbe3ef] px-2 text-sm">
-                      <option value="">MÃªs</option>
+                      <option value="">Mês</option>
                       {Array.from({ length: 12 }).map((_, index) => {
                         const month = index + 1;
                         return (
@@ -305,7 +305,7 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
 
             {warningMessage ? (
               <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                VocÃª estÃ¡ importando uma base mais antiga que a atual.
+                Você está importando uma base mais antiga que a atual.
               </div>
             ) : null}
             {duplicateMessage ? (
@@ -324,7 +324,7 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
                   className="inline-flex h-10 items-center gap-2 rounded-md bg-[#0f172a] px-4 text-sm font-semibold text-white transition hover:bg-[#1e293b] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {importMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-                  {importMutation.isPending ? "Importando base..." : selectedFile ? "Confirmar importaÃ§Ã£o" : "Importar base"}
+                  {importMutation.isPending ? "Importando base..." : selectedFile ? "Confirmar importação" : "Importar base"}
                 </button>
               ) : null}
 
@@ -343,7 +343,7 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
 
           <section>
             <div className="mb-3 flex items-center justify-between">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.06em] text-[#334155]">Ãšltimas importaÃ§Ãµes</h4>
+              <h4 className="text-sm font-semibold uppercase tracking-[0.06em] text-[#334155]">ltimas importações</h4>
               {canViewHistory ? (
                 <button
                   type="button"
@@ -356,9 +356,9 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
             </div>
 
             <div className="space-y-2">
-              {!canViewHistory ? <p className="text-sm text-[#64748b]">VocÃª nÃ£o possui permissÃ£o para visualizar o histÃ³rico.</p> : null}
-              {canViewHistory && historyQuery.isLoading ? <p className="text-sm text-[#64748b]">Carregando histÃ³rico...</p> : null}
-              {canViewHistory && historyQuery.isError ? <p className="text-sm text-rose-700">NÃ£o foi possÃ­vel carregar o histÃ³rico.</p> : null}
+              {!canViewHistory ? <p className="text-sm text-[#64748b]">Você não possui permissão para visualizar o histórico.</p> : null}
+              {canViewHistory && historyQuery.isLoading ? <p className="text-sm text-[#64748b]">Carregando histórico...</p> : null}
+              {canViewHistory && historyQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar o histórico.</p> : null}
               {canViewHistory && sortedHistory.map((item) => {
                   const isCurrentBase = currentBaseId === item.id;
                   const closingBadge = closingStatusBadge(item);
@@ -368,7 +368,7 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
                     <div>
                       <p className="text-sm font-semibold text-[#0f172a]">Base: {formatDate(item.base_date)}</p>
                       <p className="mt-1 text-xs text-[#64748b]">Importado em {formatDateTime(item.created_at)}</p>
-                      <p className="text-xs text-[#64748b]">Importado por: {item.imported_by?.trim() || "UsuÃ¡rio nÃ£o identificado"}</p>
+                      <p className="text-xs text-[#64748b]">Importado por: {item.imported_by?.trim() || "Usuário não identificado"}</p>
                     </div>
                     <div className="flex flex-col items-end gap-1">
                       <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold", statusTone(item.status))}>{statusLabel(item.status)}</span>
@@ -383,7 +383,7 @@ export function AgingImportDrawer({ open, onOpenChange, canImport = true, canVie
                 })}
 
               {canViewHistory && !historyQuery.isLoading && !historyQuery.isError && (historyQuery.data?.length ?? 0) === 0 ? (
-                <p className="text-sm text-[#64748b]">Nenhuma importaÃ§Ã£o encontrada.</p>
+                <p className="text-sm text-[#64748b]">Nenhuma importação encontrada.</p>
               ) : null}
             </div>
           </section>

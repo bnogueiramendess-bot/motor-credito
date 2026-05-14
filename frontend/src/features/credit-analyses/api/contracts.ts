@@ -243,6 +243,7 @@ export type CreditAnalysisMonitorItemDto = {
   status_label: string;
   workflow_stage: "commercial_submitted" | "financial_review" | "pending_approval" | "decided" | "returned" | string;
   suggested_limit: number | string | null;
+  total_limit: number | string | null;
   approved_limit: number | string | null;
   is_new_customer: boolean;
   is_early_review_request: boolean;

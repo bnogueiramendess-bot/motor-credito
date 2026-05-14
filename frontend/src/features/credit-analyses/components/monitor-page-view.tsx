@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { CalendarDays, CheckCircle2, ChevronDown, ChevronsLeft, ChevronsRight, Clock3, Filter, FlaskConical, Hourglass, Search, Undo2, UserRoundCheck } from "lucide-react";
@@ -10,7 +10,6 @@ import { startCreditAnalysis } from "@/features/credit-analyses/api/credit-analy
 import { useCreditAnalysesMonitorOptionsQuery, useCreditAnalysesMonitorQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-monitor-query";
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
 import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
-import { formatCurrency } from "@/features/credit-analyses/utils/formatters";
 import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
@@ -47,29 +46,45 @@ function mapActionLabel(actions: string[]): string {
   return "Acompanhar status";
 }
 
+function formatCurrencyNoCents(value: number | string | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "-";
+  }
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(parsed);
+}
+
 function statusAccent(status: string): string {
   if (status === "approved") return "bg-[#16A34A]";
   if (status === "rejected") return "bg-[#DC2626]";
-  if (status === "pending_approval") return "bg-[#4F46E5]";
-  if (status === "returned_for_adjustment") return "bg-[#EA580C]";
+  if (status === "in_approval") return "bg-[#4F46E5]";
+  
   if (status === "cancelled") return "bg-[#6B7280]";
   return "bg-[#D97706]";
 }
 
-function summarizeStatus(status: string): "Aprovado" | "Reprovado" | "Pendente" | "Em aprovação" | "Em andamento" {
+function summarizeStatus(status: string): "Aprovado" | "Recusado" | "Pendente" | "Em aprovação" | "Em andamento" {
   if (status === "approved") return "Aprovado";
-  if (status === "rejected") return "Reprovado";
-  if (status === "submitted") return "Pendente";
-  if (status === "pending_approval") return "Em aprovação";
+  if (status === "rejected") return "Recusado";
+  if (status === "pending") return "Pendente";
+  if (status === "in_approval") return "Em aprovação";
   return "Em andamento";
 }
 
 function statusBadge(status: string, label: string): string {
   if (status === "approved") return "border-[#A7F3D0] bg-[#ECFDF5] text-[#047857]";
   if (status === "rejected") return "border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]";
-  if (status === "pending_approval") return "border-[#C7D2FE] bg-[#EEF2FF] text-[#4338CA]";
-  if (status === "returned_for_adjustment") return "border-[#FDBA74] bg-[#FFF7ED] text-[#C2410C]";
-  if (status === "pending_external_reports") return "border-[#FCD34D] bg-[#FFFBEB] text-[#B45309]";
+  if (status === "in_approval") return "border-[#C7D2FE] bg-[#EEF2FF] text-[#4338CA]";
+  
+  
   return label === "Em análise financeira" || label === "Aguardando análise"
     ? "border-[#FCD34D] bg-[#FFFBEB] text-[#B45309]"
     : "border-[#D7E1EC] bg-[#F8FAFC] text-[#295B9A]";
@@ -116,7 +131,16 @@ export function MonitorPageView() {
   );
   const monitorQuery = useCreditAnalysesMonitorQuery(params);
   const optionsQuery = useCreditAnalysesMonitorOptionsQuery(businessUnitContext || undefined);
-  const [permissions] = useState<string[]>(() => getEffectivePermissions());
+  const [permissions, setPermissions] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    setPermissions(getEffectivePermissions());
+  }, []);
+
+  if (permissions === null) {
+    return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando permissões...</div>;
+  }
+
   const canViewRequests = hasPermission("credit.requests.view", permissions);
   const canExecuteAnalysis = hasPermission("credit.analysis.execute", permissions);
   const canSubmitRequest = hasPermission("credit.request.submit", permissions);
@@ -146,11 +170,11 @@ export function MonitorPageView() {
 
   const kpis = [
     { label: "Total", value: payload?.kpis.total ?? 0, icon: FlaskConical, tone: "text-[#4F46E5] bg-[#EEF2FF]" },
-    { label: "Pendente", value: items.filter((i) => i.current_status === "submitted").length, icon: Hourglass, tone: "text-[#D97706] bg-[#FFFBEB]" },
+    { label: "Pendente", value: items.filter((i) => i.current_status === "pending").length, icon: Hourglass, tone: "text-[#D97706] bg-[#FFFBEB]" },
     { label: "Em andamento", value: payload?.kpis.in_analysis ?? 0, icon: Clock3, tone: "text-[#2563EB] bg-[#EFF6FF]" },
     { label: "Em aprovação", value: payload?.kpis.awaiting_approval ?? 0, icon: UserRoundCheck, tone: "text-[#7C3AED] bg-[#F5F3FF]" },
     { label: "Aprovado", value: items.filter((i) => i.current_status === "approved").length, icon: CheckCircle2, tone: "text-[#059669] bg-[#ECFDF5]" },
-    { label: "Reprovado", value: items.filter((i) => i.current_status === "rejected").length, icon: Undo2, tone: "text-[#B91C1C] bg-[#FEF2F2]" },
+    { label: "Recusado", value: items.filter((i) => i.current_status === "rejected").length, icon: Undo2, tone: "text-[#B91C1C] bg-[#FEF2F2]" },
     { label: "Revisões antecipadas", value: payload?.kpis.early_reviews ?? 0, icon: CalendarDays, tone: "text-[#2563EB] bg-[#EFF6FF]" }
   ];
   const rowGridClass = "xl:grid-cols-[minmax(280px,1.7fr)_150px_150px_150px_150px_180px_90px_180px_170px]";
@@ -243,8 +267,12 @@ export function MonitorPageView() {
                 <span key={`${item.analysis_id}-${label}`} className="whitespace-nowrap rounded-full border border-[#D7E1EC] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-medium text-[#475569]">{label}</span>
               ))}
                 </div>
-                <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">{formatCurrency(item.suggested_limit ?? 0)}</div>
-                <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">{item.approved_limit != null ? formatCurrency(item.approved_limit) : "-"}</div>
+                <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">{formatCurrencyNoCents(item.suggested_limit ?? 0)}</div>
+                <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">
+                  {item.is_new_customer
+                    ? (item.approved_limit != null ? formatCurrencyNoCents(item.approved_limit) : "-")
+                    : formatCurrencyNoCents(item.total_limit ?? 0)}
+                </div>
                 <div className="min-w-0">
                   <p className="truncate whitespace-nowrap text-[12px] font-medium text-[#0F172A]">{mapRole(item.next_responsible_role)}</p>
                   <p className="truncate whitespace-nowrap text-[11px] text-[#64748B]">Equipe Crédito</p>

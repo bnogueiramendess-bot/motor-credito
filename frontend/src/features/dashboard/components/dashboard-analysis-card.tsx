@@ -1,5 +1,8 @@
-Ôªøimport Link from "next/link";
+"use client";
+
+import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/shared/components/ui/badge";
 import { DashboardAnalysisCardViewModel } from "@/features/dashboard/utils/dashboard-analysis-view-models";
@@ -52,7 +55,14 @@ function scoreToneClass(tone: DashboardAnalysisCardViewModel["scoreTone"]) {
 }
 
 export function DashboardAnalysisCard({ analysis }: DashboardAnalysisCardProps) {
-  const canViewDossier = hasPermission("clients.dossier.view", getEffectivePermissions());
+  const [permissions, setPermissions] = useState<string[]>([]);
+
+  useEffect(() => {
+    setPermissions(getEffectivePermissions());
+  }, []);
+
+  const canViewDossier = hasPermission("clients.dossier.view", permissions);
+
   return (
     <article
       className={`flex h-full min-h-[252px] flex-col rounded-2xl border-2 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${scoreAccentClass(analysis.scoreBand)}`}
@@ -80,13 +90,13 @@ export function DashboardAnalysisCard({ analysis }: DashboardAnalysisCardProps) 
       </div>
 
       <div className="mt-auto flex items-center justify-between border-t border-[#eef1f6] pt-4">
-        <p className="text-xs font-medium text-[#6b7280]">An√°lise #{analysis.id}</p>
+        <p className="text-xs font-medium text-[#6b7280]">An·lise #{analysis.id}</p>
         {canViewDossier ? (
           <Link
             href={`/analises/${analysis.id}`}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#c9d5ec] bg-[#f4f7ff] px-3 text-sm font-semibold text-[#1a2b5e] transition hover:border-[#b3c5e8] hover:bg-[#ebf1ff]"
           >
-            Abrir an√°lise
+            Abrir an·lise
             <ArrowUpRight className="h-3.5 w-3.5" />
           </Link>
         ) : null}

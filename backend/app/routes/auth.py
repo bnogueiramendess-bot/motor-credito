@@ -160,7 +160,7 @@ def me_business_units_context(current: CurrentUser = Depends(get_current_user), 
         consolidated=can_view_consolidated,
         business_unit_code=None if can_view_consolidated else (allowed[0].code if allowed else None),
     )
-    consolidated_label = "Visao consolidada global" if is_global_scope else "Visao consolidada"
+    consolidated_label = "Consolidada"
     return BusinessUnitContextResponse(
         allowed_business_units=[BusinessUnitContextItem(id=item.id, code=item.code, name=item.name) for item in allowed],
         can_view_consolidated=can_view_consolidated,

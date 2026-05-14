@@ -1,4 +1,4 @@
-﻿import { CreditAnalysisDetailApiResponse } from "@/features/credit-analyses/api/contracts";
+import { CreditAnalysisDetailApiResponse } from "@/features/credit-analyses/api/contracts";
 import {
   buildExplainabilityRuleRows,
   buildExplainabilitySummary,
@@ -27,7 +27,7 @@ const DOSSIER_CONTAINER = "w-full px-8 xl:px-10 2xl:px-12";
 const riskLabelByBand: Record<string, string> = {
   A: "Baixo risco",
   B: "Risco moderado",
-  C: "AtenÃ§Ã£o",
+  C: "Atenção",
   D: "Alto risco"
 };
 
@@ -47,7 +47,7 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function noInfo(value: string | null | undefined, fallback = "Dados nÃ£o disponÃ­veis") {
+function noInfo(value: string | null | undefined, fallback = "Dados não disponíveis") {
   if (!value) return fallback;
   const normalized = normalizeText(value).toLowerCase();
   if (
@@ -95,9 +95,9 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
 
   const recommendationTitle =
     resolvedDecision.tone === "danger"
-      ? "NÃ£o recomendado no momento"
+      ? "Não recomendado no momento"
       : resolvedDecision.tone === "success"
-        ? "AprovaÃ§Ã£o recomendada"
+        ? "Aprovação recomendada"
         : "Revisar antes de decidir";
 
   const recommendationLimit = noInfo(
@@ -123,7 +123,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
           points: item.impactLabel.replace("pontos", "pts"),
           tone: "negative" as const
         }))
-      : [{ text: "Dados financeiros insuficientes", points: "AtenÃ§Ã£o", tone: "warning" as const }];
+      : [{ text: "Dados financeiros insuficientes", points: "Atenção", tone: "warning" as const }];
 
   const insights = [
     {
@@ -132,7 +132,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
       tone: "positive" as const
     },
     {
-      text: "Fatores crÃ­ticos encontrados",
+      text: "Fatores críticos encontrados",
       points: String(riskFactors.length),
       tone: "negative" as const
     },
@@ -151,22 +151,22 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   const rules = explainabilityRows.length
     ? explainabilityRows.slice(0, 14).map((row) => ({
         name: row.label,
-        condition: `${row.expectedValueLabel} â†’ ${row.actualValueLabel}`,
+        condition: `${row.expectedValueLabel}  ${row.actualValueLabel}`,
         result: row.statusLabel === "Atendida" ? ("ok" as const) : row.tone === "danger" ? ("fail" as const) : ("warn" as const),
-        label: row.statusLabel === "Atendida" ? "Passou âœ“" : row.tone === "danger" ? "Falhou âœ•" : "AtenÃ§Ã£o!"
+        label: row.statusLabel === "Atendida" ? "Passou " : row.tone === "danger" ? "Falhou " : "Atenção!"
       }))
     : [
-        { name: "Score mÃ­nimo", condition: "score >= 500", result: "warn" as const, label: "AtenÃ§Ã£o!" },
-        { name: "Sem protestos", condition: "protestos = 0", result: "ok" as const, label: "Passou âœ“" }
+        { name: "Score mínimo", condition: "score >= 500", result: "warn" as const, label: "Atenção!" },
+        { name: "Sem protestos", condition: "protestos = 0", result: "ok" as const, label: "Passou " }
       ];
 
   const operationRows = [
-    ["Valor solicitado", noInfo(formatCurrency(analysis.requested_limit), "InformaÃ§Ã£o nÃ£o disponÃ­vel")],
-    ["Prazo", "NÃ£o disponÃ­vel no momento"],
-    ["Modalidade", "NÃ£o disponÃ­vel no momento"],
-    ["MitigaÃ§Ã£o", "NÃ£o disponÃ­vel no momento"],
-    ["Garantias", "NÃ£o disponÃ­vel no momento"],
-    ["Colateral", "NÃ£o disponÃ­vel no momento"]
+    ["Valor solicitado", noInfo(formatCurrency(analysis.requested_limit), "Informação não disponível")],
+    ["Prazo", "Não disponível no momento"],
+    ["Modalidade", "Não disponível no momento"],
+    ["Mitigação", "Não disponível no momento"],
+    ["Garantias", "Não disponível no momento"],
+    ["Colateral", "Não disponível no momento"]
   ] as const;
 
   const timelineItems = milestones.map((item) => ({
@@ -176,14 +176,14 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   }));
 
   const kpiLimitValue = noInfo(formatCurrency(decision?.suggested_limit ?? analysis.suggested_limit));
-  const annualRevenue = noInfo(formatCurrency(analysis.annual_revenue_estimated), "InformaÃ§Ã£o nÃ£o disponÃ­vel");
-  const annualRevenueMissing = annualRevenue === "InformaÃ§Ã£o nÃ£o disponÃ­vel";
-  const exposureValue = noInfo(formatCurrency(analysis.exposure_amount), "InformaÃ§Ã£o nÃ£o disponÃ­vel");
-  const exposureMissing = exposureValue === "InformaÃ§Ã£o nÃ£o disponÃ­vel";
+  const annualRevenue = noInfo(formatCurrency(analysis.annual_revenue_estimated), "Informação não disponível");
+  const annualRevenueMissing = annualRevenue === "Informação não disponível";
+  const exposureValue = noInfo(formatCurrency(analysis.exposure_amount), "Informação não disponível");
+  const exposureMissing = exposureValue === "Informação não disponível";
   const customerMeta = [
-    customer?.segment || "Segmento nÃ£o informado",
-    customer?.region || "RegiÃ£o nÃ£o informada",
-    customer?.relationship_start_date ? `Relacionamento: ${formatDate(customer.relationship_start_date)}` : "Relacionamento nÃ£o informado"
+    customer?.segment || "Segmento não informado",
+    customer?.region || "Região não informada",
+    customer?.relationship_start_date ? `Relacionamento: ${formatDate(customer.relationship_start_date)}` : "Relacionamento não informado"
   ];
 
   return (
@@ -194,13 +194,13 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
             <div className="col-span-12 min-w-0 xl:col-span-9">
               <div className="mb-2 inline-flex items-center gap-1.5 rounded-[20px] border border-[rgba(117,212,238,0.25)] bg-[rgba(117,212,238,0.12)] px-2.5 py-1 text-[11px] text-[#75D4EE]">
                 <div className="h-1.5 w-1.5 rounded-full bg-[#75D4EE]" />
-                {(customer?.segment || "Cliente") + " Â· AnÃ¡lise em andamento"}
+                {(customer?.segment || "Cliente") + " · Análise em andamento"}
               </div>
               <div className="mb-0.5 max-w-full break-words text-[26px] font-semibold leading-[1.1] tracking-[-0.5px] text-white [overflow-wrap:anywhere]">
                 {customer?.company_name ?? `Cliente #${analysis.customer_id}`}
               </div>
               <div className="mb-2 break-words text-xs text-[rgba(255,255,255,0.45)] [overflow-wrap:anywhere]">
-                CNPJ {customer?.document_number ?? "NÃ£o disponÃ­vel no momento"} Â· Protocolo {analysis.protocol_number}
+                CNPJ {customer?.document_number ?? "Não disponível no momento"} · Protocolo {analysis.protocol_number}
               </div>
               <div className="flex flex-wrap gap-y-0.5">
                 {customerMeta.map((meta, index, arr) => (
@@ -237,13 +237,13 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
             <div className="mb-2 text-xs uppercase text-muted-foreground">Resumo executivo</div>
             <p className="text-base leading-relaxed text-foreground">
               {scoreSummary?.executiveReason ??
-                "AnÃ¡lise com sinais de risco que exigem validaÃ§Ã£o humana antes da conclusÃ£o."}
+                "Análise com sinais de risco que exigem validação humana antes da conclusão."}
             </p>
           </Card>
 
           <RecommendationBanner
             title={recommendationTitle}
-            subtitle={scoreSummary?.executiveReason ?? "A recomendaÃ§Ã£o considera score, regras e sinais de risco."}
+            subtitle={scoreSummary?.executiveReason ?? "A recomendação considera score, regras e sinais de risco."}
             limitSuggested={recommendationLimit}
             risk={riskLabelByBand[scoreBand] ?? "Risco moderado"}
             confidence={`${confidencePercent}%`}
@@ -255,34 +255,34 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
               label="Faturamento anual"
               value={annualRevenue}
               muted={annualRevenueMissing}
-              helper={annualRevenueMissing ? "InformaÃ§Ã£o nÃ£o disponÃ­vel" : "Valor informado"}
+              helper={annualRevenueMissing ? "Informação não disponível" : "Valor informado"}
               state={annualRevenueMissing ? "warning" : "normal"}
             />
             <KpiCard
               label="Endividamento total"
-              value="InformaÃ§Ã£o nÃ£o disponÃ­vel"
+              value="Informação não disponível"
               muted
-              helper="InformaÃ§Ã£o nÃ£o disponÃ­vel"
+              helper="Informação não disponível"
               state="warning"
             />
             <KpiCard
-              label="ExposiÃ§Ã£o atual"
+              label="Exposição atual"
               value={exposureValue}
-              helper={exposureMissing ? "InformaÃ§Ã£o nÃ£o disponÃ­vel" : "CrÃ©dito ativo em aberto"}
+              helper={exposureMissing ? "Informação não disponível" : "Crédito ativo em aberto"}
               state={exposureMissing ? "warning" : "normal"}
             />
             <KpiCard
               label="Limite sugerido"
               value={kpiLimitValue}
-              muted={kpiLimitValue === "Dados nÃ£o disponÃ­veis"}
-              helper={kpiLimitValue === "Dados nÃ£o disponÃ­veis" ? "InformaÃ§Ã£o nÃ£o disponÃ­vel" : "Calculado pelo motor"}
-              state={kpiLimitValue === "Dados nÃ£o disponÃ­veis" ? "danger" : "normal"}
+              muted={kpiLimitValue === "Dados não disponíveis"}
+              helper={kpiLimitValue === "Dados não disponíveis" ? "Informação não disponível" : "Calculado pelo motor"}
+              state={kpiLimitValue === "Dados não disponíveis" ? "danger" : "normal"}
             />
           </div>
 
           <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-3">
             <FactorList
-              title="Insights da anÃ¡lise"
+              title="Insights da análise"
               titleTone="neutral"
               titleIcon={
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -324,7 +324,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
                   <rect x="1.5" y="2" width="11" height="10" rx="1.5" stroke="#4F647A" strokeWidth="1.2" />
                   <path d="M4 6h6M4 8.5h4" stroke="#4F647A" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
-                Dados da operaÃ§Ã£o
+                Dados da operação
               </div>
               {operationRows.map((row) => (
                 <div key={row[0]} className="flex items-baseline justify-between border-b border-[#F0F4F8] py-2 last:border-b-0">
@@ -340,7 +340,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
                   <circle cx="7" cy="7" r="5.5" stroke="#4F647A" strokeWidth="1.2" />
                   <path d="M7 4.5v3.5M7 9v.5" stroke="#4F647A" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
-                Linha do tempo da anÃ¡lise
+                Linha do tempo da análise
               </div>
               <Timeline items={timelineItems} />
             </div>
@@ -350,18 +350,18 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
 
           <div className="flex flex-col items-start justify-between gap-4 rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px] lg:flex-row lg:items-center">
             <div>
-              <div className="mb-1 text-[11px] text-[#4F647A]">DecisÃ£o do analista Â· {analysis.assigned_analyst_name ?? "Backoffice"}</div>
+              <div className="mb-1 text-[11px] text-[#4F647A]">Decisão do analista · {analysis.assigned_analyst_name ?? "Backoffice"}</div>
               <div className="text-sm font-medium text-[#102033]">
                 {resolvedDecision.tone === "success"
-                  ? "Motor sugere aprovaÃ§Ã£o. Confirme limites e conclua a anÃ¡lise."
+                  ? "Motor sugere aprovação. Confirme limites e conclua a análise."
                   : resolvedDecision.tone === "danger"
-                    ? "Motor sugere reprovar. RevisÃ£o manual recomendada antes da decisÃ£o final."
-                    : "Aguardando revisÃ£o dos fatores crÃ­ticos para concluir anÃ¡lise."}
+                    ? "Motor sugere reprovar. Revisão manual recomendada antes da decisão final."
+                    : "Aguardando revisão dos fatores críticos para concluir análise."}
               </div>
             </div>
             <div className="flex flex-wrap gap-2.5">
               <Button variant="outline" className="h-auto rounded-lg border-[#D7E1EC] px-5 py-2.5 text-[13px] font-medium text-[#102033]">
-                Solicitar exceÃ§Ã£o
+                Solicitar exceção
               </Button>
               {canReject ? (
                 <button
@@ -376,7 +376,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
                   type="button"
                   className="rounded-lg bg-[#E8B83A] px-5 py-2.5 text-[13px] font-medium text-[#102033] transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
                 >
-                  Concluir decisÃ£o â†’
+                  Concluir decisão 
                 </button>
               ) : null}
             </div>

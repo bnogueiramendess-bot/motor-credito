@@ -3,11 +3,11 @@
 export function analysisStatusLabel(status: AnalysisStatus): string {
   switch (status) {
     case "created":
-      return "Criada";
+      return "Pendente";
     case "in_progress":
       return "Em andamento";
     case "completed":
-      return "Concluída";
+      return "Finalizada";
     default:
       return status;
   }
@@ -16,9 +16,9 @@ export function analysisStatusLabel(status: AnalysisStatus): string {
 export function decisionLabel(decision: MotorResult | FinalDecision): string {
   switch (decision) {
     case "approved":
-      return "Aprovada";
+      return "Aprovado";
     case "rejected":
-      return "Rejeitada";
+      return "Recusado";
     case "manual_review":
       return "Revisão manual";
     default:

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
@@ -83,7 +83,10 @@ const statusFilters: Array<{ value: StatusFilter; label: string }> = [
 ];
 
 export function DashboardPageViewLegacy() {
-  const permissions = getEffectivePermissions();
+  const [permissions, setPermissions] = useState<string[]>([]);
+  useEffect(() => {
+    setPermissions(getEffectivePermissions());
+  }, []);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const normalizedSearch = search.trim().toLowerCase();

@@ -204,16 +204,11 @@ def _find_recent_analysis(db: Session, *, customer_id: int) -> CreditAnalysis | 
 def _resolve_operational_status(analysis: CreditAnalysis, external_entries: list[ExternalDataEntry]) -> str:
     if analysis.final_decision is not None:
         return "approved" if analysis.final_decision.value == "approved" else "rejected"
-    if analysis.analysis_status == AnalysisStatus.COMPLETED:
-        return "completed"
     if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
-        return "pending_approval"
-    if analysis.decision_memory_json and analysis.decision_memory_json.get("triage_submission"):
-        if not external_entries:
-            return "pending_external_reports"
+        return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CREATED:
-        return "submitted"
-    return "under_financial_review"
+        return "pending"
+    return "in_progress"
 
 
 def _has_any_permission(current: CurrentUser, *keys: str) -> bool:
@@ -231,29 +226,24 @@ def _require_any_permission_or_403(current: CurrentUser, *keys: str) -> None:
 
 
 def _resolve_workflow_stage(status_value: str) -> str:
-    if status_value in {"submitted"}:
+    if status_value in {"pending"}:
         return "commercial_submitted"
-    if status_value in {"under_financial_review", "pending_external_reports", "ready_for_credit_engine", "dossier_generated"}:
+    if status_value in {"in_progress"}:
         return "financial_review"
-    if status_value in {"pending_approval"}:
+    if status_value in {"in_approval"}:
         return "pending_approval"
-    if status_value in {"approved", "rejected", "completed"}:
+    if status_value in {"approved", "rejected"}:
         return "decided"
     return "returned"
 
 
 def _status_label(status_value: str) -> str:
     mapping = {
-        "submitted": "Submetida",
-        "under_financial_review": "Em análise financeira",
-        "pending_external_reports": "Aguardando relatórios",
-        "ready_for_credit_engine": "Pronta para motor",
-        "dossier_generated": "Dossiê gerado",
-        "pending_approval": "Aguardando aprovação",
-        "approved": "Aprovada",
-        "rejected": "Reprovada",
-        "returned_for_adjustment": "Devolvida para ajuste",
-        "completed": "Concluída",
+        "pending": "Pendente",
+        "in_progress": "Em andamento",
+        "in_approval": "Em aprova??o",
+        "approved": "Aprovado",
+        "rejected": "Recusado",
     }
     return mapping.get(status_value, status_value)
 
@@ -769,11 +759,11 @@ def list_credit_analyses_queue(
 
     filtered = [item for item in items if _match(item)]
     kpis = CreditAnalysisQueueKpis(
-        awaiting_analysis=sum(1 for item in filtered if item.current_status in {"submitted", "under_financial_review"}),
+        awaiting_analysis=sum(1 for item in filtered if item.current_status in {"pending", "in_progress"}),
         early_reviews=sum(1 for item in filtered if item.is_early_review_request),
         new_customers=sum(1 for item in filtered if item.analysis_type == "novo_cliente"),
-        awaiting_reports=sum(1 for item in filtered if item.current_status == "pending_external_reports"),
-        pending_approval=sum(1 for item in filtered if item.current_status == "pending_approval"),
+        awaiting_reports=0,
+        pending_approval=sum(1 for item in filtered if item.current_status == "in_approval"),
         total_in_analysis=len(filtered),
     )
     total = len(filtered)
@@ -841,16 +831,11 @@ def list_credit_analyses_queue_options(
                 requesters.add(requester)
 
     status_label_map = {
-        "submitted": "Submetida",
-        "under_financial_review": "Em análise financeira",
-        "pending_external_reports": "Aguardando relatórios",
-        "ready_for_credit_engine": "Pronta para motor",
-        "dossier_generated": "Dossiê gerado",
-        "pending_approval": "Aguardando aprovação",
-        "approved": "Aprovada",
-        "rejected": "Reprovada",
-        "returned_for_adjustment": "Retornada para ajuste",
-        "completed": "Concluída",
+        "pending": "Pendente",
+        "in_progress": "Em andamento",
+        "in_approval": "Em aprova??o",
+        "approved": "Aprovado",
+        "rejected": "Recusado",
     }
     type_label_map = {
         "cliente_carteira": "Cliente da carteira",
@@ -901,14 +886,37 @@ def list_credit_analyses_monitor(
     query = select(CreditAnalysis, Customer).join(Customer, Customer.id == CreditAnalysis.customer_id).order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
     rows = db.execute(query).all()
     items: list[CreditAnalysisMonitorItem] = []
+    latest_run_id = _latest_valid_import_run_id(db)
 
     for analysis, customer in rows:
-        portfolio = db.execute(
-            select(
-                func.max(ArAgingDataTotalRow.bu_normalized),
-                func.max(ArAgingDataTotalRow.economic_group_normalized),
-            ).where(ArAgingDataTotalRow.cnpj_normalized == customer.document_number)
-        ).one()
+        if latest_run_id is None:
+            portfolio = (None, None, Decimal("0"))
+        else:
+            portfolio_base = db.execute(
+                select(
+                    func.max(ArAgingDataTotalRow.bu_normalized),
+                    func.max(ArAgingDataTotalRow.economic_group_normalized),
+                ).where(
+                    ArAgingDataTotalRow.import_run_id == latest_run_id,
+                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+                )
+            ).one()
+            group_keys_subquery = (
+                select(ArAgingDataTotalRow.economic_group_normalized)
+                .where(
+                    ArAgingDataTotalRow.import_run_id == latest_run_id,
+                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+                    ArAgingDataTotalRow.economic_group_normalized.is_not(None),
+                )
+                .distinct()
+            )
+            approved_credit_total = db.scalar(
+                select(func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0)).where(
+                    ArAgingGroupConsolidatedRow.import_run_id == latest_run_id,
+                    ArAgingGroupConsolidatedRow.economic_group_normalized.in_(group_keys_subquery),
+                )
+            )
+            portfolio = (portfolio_base[0], portfolio_base[1], approved_credit_total or Decimal("0"))
         bu_name = portfolio[0]
 
         triage_data = {}
@@ -940,10 +948,10 @@ def list_credit_analyses_monitor(
             if requester_email != current.user.email.strip().lower():
                 continue
         elif can_approve and not can_validate:
-            if status_value != "pending_approval":
+            if status_value != "in_approval":
                 continue
         elif can_validate:
-            if status_value in {"approved", "rejected", "completed"}:
+            if status_value in {"approved", "rejected"}:
                 continue
 
         is_early = bool(triage_data.get("is_early_review_request"))
@@ -957,15 +965,15 @@ def list_credit_analyses_monitor(
             else:
                 available_actions.append("view_tracking")
         else:
-            if can_validate and status_value == "submitted":
+            if can_validate and status_value == "pending":
                 available_actions.append("start_analysis")
-            if can_validate and status_value in {"under_financial_review", "pending_external_reports", "ready_for_credit_engine"}:
+            if can_validate and status_value in {"in_progress"}:
                 available_actions.append("continue_analysis")
-            if can_validate and can_submit_approval and status_value in {"dossier_generated", "under_financial_review"}:
+            if can_validate and can_submit_approval and status_value in {"in_progress"}:
                 available_actions.append("submit_approval")
-            if can_approve and status_value == "pending_approval":
+            if can_approve and status_value == "in_approval":
                 available_actions.append("review_decision")
-            if status_value in {"approved", "rejected", "completed"}:
+            if status_value in {"approved", "rejected"}:
                 available_actions.append("view_result")
             if can_view_own and requester_email == current.user.email.strip().lower() and status_value not in {"approved", "rejected"}:
                 available_actions.append("view_tracking")
@@ -990,6 +998,7 @@ def list_credit_analyses_monitor(
             status_label=_status_label(status_value),
             workflow_stage=stage,
             suggested_limit=analysis.suggested_limit,
+            total_limit=portfolio[2] or Decimal("0"),
             approved_limit=analysis.final_limit,
             is_new_customer=is_new_customer,
             is_early_review_request=is_early,
@@ -1042,9 +1051,9 @@ def list_credit_analyses_monitor(
     kpis = CreditAnalysisMonitorKpis(
         total=len(filtered),
         awaiting_financial_review=sum(1 for item in filtered if item.workflow_stage == "financial_review"),
-        in_analysis=sum(1 for item in filtered if item.current_status in {"under_financial_review", "pending_external_reports", "ready_for_credit_engine"}),
+        in_analysis=sum(1 for item in filtered if item.current_status == "in_progress"),
         awaiting_approval=sum(1 for item in filtered if item.workflow_stage == "pending_approval"),
-        returned_for_adjustment=sum(1 for item in filtered if item.current_status == "returned_for_adjustment"),
+        returned_for_adjustment=0,
         completed=sum(1 for item in filtered if item.workflow_stage == "decided"),
         early_reviews=sum(1 for item in filtered if item.is_early_review_request),
     )
@@ -1416,6 +1425,7 @@ def calculate_decision(
             detail="Credit analysis not found.",
         )
     _enforce_technical_access_or_403(db, current, analysis)
+    previous_motor_result = analysis.motor_result
 
     score_result = db.scalar(select(ScoreResult.id).where(ScoreResult.credit_analysis_id == analysis_id))
     if score_result is None:
@@ -1450,6 +1460,23 @@ def calculate_decision(
             },
         )
     )
+    if previous_motor_result is None:
+        db.add(
+            DecisionEvent(
+                credit_analysis_id=analysis_id,
+                event_type="analysis_submitted_for_approval",
+                actor_type=ActorType.USER,
+                actor_name=current.user.full_name or current.user.email,
+                description="Analise submetida para aprovacao.",
+                event_payload_json={
+                    "submitted_by_user_id": current.user.id,
+                    "submitted_by_email": current.user.email,
+                    "previous_status": "in_progress",
+                    "new_status": "in_approval",
+                    "motor_result": analysis.motor_result.value if analysis.motor_result is not None else None,
+                },
+            )
+        )
 
     try:
         db.commit()

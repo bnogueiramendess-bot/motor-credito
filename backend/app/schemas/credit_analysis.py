@@ -175,6 +175,7 @@ class CreditAnalysisMonitorItem(BaseModel):
     status_label: str
     workflow_stage: str
     suggested_limit: Decimal | None = None
+    total_limit: Decimal | None = None
     approved_limit: Decimal | None = None
     is_new_customer: bool = False
     is_early_review_request: bool = False

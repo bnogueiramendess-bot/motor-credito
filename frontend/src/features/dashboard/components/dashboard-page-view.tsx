@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
@@ -271,7 +271,10 @@ function movementReadableMessage(movement: PortfolioMovementDto) {
 }
 
 export function DashboardPageView({ context = "clientes" }: DashboardPageViewProps) {
-  const [permissions] = useState<string[]>(() => getEffectivePermissions());
+  const [permissions, setPermissions] = useState<string[]>([]);
+  useEffect(() => {
+    setPermissions(getEffectivePermissions());
+  }, []);
   const canViewDashboard = context === "motor-credito"
     ? hasPermission("credit.dashboard.view", permissions)
     : hasPermission("clients.dashboard.view", permissions);

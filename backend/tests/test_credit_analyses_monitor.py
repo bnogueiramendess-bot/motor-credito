@@ -236,6 +236,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             response = list_credit_analyses_monitor(db=db, current=approver)
         self.assertGreaterEqual(response.total, 1)
         self.assertEqual(response.items[0].workflow_stage, "pending_approval")
+        self.assertEqual(response.items[0].current_status, "in_approval")
         self.assertIn("review_decision", response.items[0].available_actions)
 
     def test_commercial_gets_view_dossier_only_after_approved_or_rejected(self) -> None:
