@@ -10,6 +10,7 @@ type CreditRulesToolbarProps = {
   selectedContext: CreditPolicyContextMode;
   onCreateRule: () => void;
   disableCreateRule?: boolean;
+  showCreateRule?: boolean;
 };
 
 export function CreditRulesToolbar({
@@ -17,7 +18,8 @@ export function CreditRulesToolbar({
   draftVersion,
   selectedContext,
   onCreateRule,
-  disableCreateRule
+  disableCreateRule,
+  showCreateRule = true
 }: CreditRulesToolbarProps) {
   const isDraftContext = selectedContext === "draft";
 
@@ -37,15 +39,17 @@ export function CreditRulesToolbar({
           <Badge variant="outline" className="border-[#d4dbe7] bg-[#f8faff] px-3 py-1 text-[#32456f]">
             Rascunho: {draftVersion}
           </Badge>
-          <Button
-            type="button"
-            onClick={onCreateRule}
-            disabled={disableCreateRule}
-            className="gap-2 rounded-lg bg-[#1a2b5e] text-white hover:bg-[#233a7d]"
-          >
-            <Plus className="h-4 w-4" />
-            {isDraftContext ? "Nova regra" : "Nova regra (somente no rascunho)"}
-          </Button>
+          {showCreateRule ? (
+            <Button
+              type="button"
+              onClick={onCreateRule}
+              disabled={disableCreateRule}
+              className="gap-2 rounded-lg bg-[#1a2b5e] text-white hover:bg-[#233a7d]"
+            >
+              <Plus className="h-4 w-4" />
+              {isDraftContext ? "Nova regra" : "Nova regra (somente no rascunho)"}
+            </Button>
+          ) : null}
         </div>
       </div>
     </header>

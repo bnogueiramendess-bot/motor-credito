@@ -8,18 +8,11 @@ from app.models.permission import Permission
 from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.user import User
+from app.services.permission_catalog import PROFILE_PERMISSION_CATALOG
 from app.services.security import hash_password
 
 ROLE_MATRIX: dict[str, list[str]] = {
-    "administrador_master": [
-        "clients.aging.import",
-        "company:manage",
-        "bu:manage",
-        "users:manage",
-        "profiles:view",
-        "profiles:manage",
-        "scope:all_bu",
-    ]
+    "administrador_master": sorted(PROFILE_PERMISSION_CATALOG.keys())
 }
 
 DEFAULT_MASTER_EMAIL = "adm@administrador.com"

@@ -5,6 +5,8 @@ import unittest
 from fastapi import HTTPException
 
 from app.core.security import CurrentUser, require_permissions
+from app.services.bootstrap_admin import ROLE_MATRIX
+from app.services.permission_catalog import PROFILE_PERMISSION_CATALOG
 from app.models.user import User
 
 
@@ -99,6 +101,29 @@ class P0BackendRbacEnforcementTestCase(unittest.TestCase):
         require_permissions(["clients.portfolio.evolution.view"])(current=current)
         require_permissions(["credit.request.create"])(current=current)
         require_permissions(["clients.dossier.view"])(current=current)
+
+    def test_import_history_requires_specific_view_permission(self) -> None:
+        current_without_history = self._build_current_user({"clients.dashboard.view"})
+        with self.assertRaises(HTTPException) as blocked_history:
+            require_permissions(["clients.imports.history.view"])(current=current_without_history)
+        self.assertEqual(blocked_history.exception.status_code, 403)
+
+        current_with_history = self._build_current_user({"clients.imports.history.view"})
+        require_permissions(["clients.imports.history.view"])(current=current_with_history)
+
+    def test_admin_users_list_requires_users_view(self) -> None:
+        current_without_users_view = self._build_current_user({"users:manage"})
+        with self.assertRaises(HTTPException) as blocked_users:
+            require_permissions(["users:view"])(current=current_without_users_view)
+        self.assertEqual(blocked_users.exception.status_code, 403)
+
+        current_with_users_view = self._build_current_user({"users:view"})
+        require_permissions(["users:view"])(current=current_with_users_view)
+
+    def test_master_seed_role_matrix_matches_catalog(self) -> None:
+        master_permissions = set(ROLE_MATRIX["administrador_master"])
+        catalog_permissions = set(PROFILE_PERMISSION_CATALOG.keys())
+        self.assertSetEqual(master_permissions, catalog_permissions)
 
 
 if __name__ == "__main__":

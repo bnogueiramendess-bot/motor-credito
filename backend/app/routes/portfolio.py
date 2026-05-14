@@ -1078,21 +1078,25 @@ def get_portfolio_customer(
     if not cnpj_normalized:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CNPJ invalido.")
 
+    row_query = select(
+        ArAgingDataTotalRow.cnpj_normalized,
+        func.max(ArAgingDataTotalRow.customer_name),
+        func.max(ArAgingDataTotalRow.bu_normalized),
+        func.max(ArAgingDataTotalRow.economic_group_normalized),
+        func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
+        func.coalesce(func.sum(ArAgingDataTotalRow.overdue_amount), 0),
+        func.coalesce(func.sum(ArAgingDataTotalRow.due_amount), 0),
+    ).where(
+        ArAgingDataTotalRow.import_run_id == run.id,
+        ArAgingDataTotalRow.cnpj_normalized == cnpj_normalized,
+    )
+    if not has_all_scope and allowed_bu_names:
+        row_query = row_query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        row_query = row_query.where(False)
+
     row = db.execute(
-        select(
-            ArAgingDataTotalRow.cnpj_normalized,
-            func.max(ArAgingDataTotalRow.customer_name),
-            func.max(ArAgingDataTotalRow.bu_normalized),
-            func.max(ArAgingDataTotalRow.economic_group_normalized),
-            func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.due_amount), 0),
-        )
-        .where(
-            ArAgingDataTotalRow.import_run_id == run.id,
-            ArAgingDataTotalRow.cnpj_normalized == cnpj_normalized,
-        )
-        .group_by(ArAgingDataTotalRow.cnpj_normalized)
+        row_query.group_by(ArAgingDataTotalRow.cnpj_normalized)
     ).first()
 
     if row is None:
@@ -1281,25 +1285,28 @@ def get_portfolio_group(
     if group_metrics is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo economico nao encontrado.")
 
+    customers_query = select(
+        ArAgingDataTotalRow.cnpj_normalized,
+        func.max(ArAgingDataTotalRow.customer_name),
+        func.max(ArAgingDataTotalRow.bu_normalized),
+        func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
+        func.coalesce(func.sum(ArAgingDataTotalRow.overdue_amount), 0),
+        func.coalesce(func.sum(ArAgingDataTotalRow.due_amount), 0),
+    ).where(
+        ArAgingDataTotalRow.import_run_id == run.id,
+        ArAgingDataTotalRow.economic_group_normalized == group_key,
+        ArAgingDataTotalRow.cnpj_normalized.is_not(None),
+    )
+    if not has_all_scope and allowed_bu_names:
+        customers_query = customers_query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        customers_query = customers_query.where(False)
+
     customers_rows = db.execute(
-        select(
-            ArAgingDataTotalRow.cnpj_normalized,
-            func.max(ArAgingDataTotalRow.customer_name),
-            func.max(ArAgingDataTotalRow.bu_normalized),
-            func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.overdue_amount), 0),
-            func.coalesce(func.sum(ArAgingDataTotalRow.due_amount), 0),
-        )
-        .where(
-            ArAgingDataTotalRow.import_run_id == run.id,
-            ArAgingDataTotalRow.economic_group_normalized == group_key,
-            ArAgingDataTotalRow.cnpj_normalized.is_not(None),
-        )
+        customers_query
         .group_by(ArAgingDataTotalRow.cnpj_normalized)
         .order_by(ArAgingDataTotalRow.cnpj_normalized)
     ).all()
-    if customers_rows:
-        assert_bu_in_scope(allowed_bu_names, customers_rows[0][2], has_all_scope=has_all_scope)
 
     customers = [
         PortfolioCustomerSummary(

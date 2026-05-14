@@ -14,6 +14,8 @@ import { formatCurrency } from "@/features/credit-analyses/utils/formatters";
 import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { PermissionDeniedState } from "@/shared/components/states/permission-denied-state";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 
 function mapNextStep(workflowStage: string): string {
   if (workflowStage === "financial_review") return "Em análise financeira";
@@ -114,6 +116,15 @@ export function MonitorPageView() {
   );
   const monitorQuery = useCreditAnalysesMonitorQuery(params);
   const optionsQuery = useCreditAnalysesMonitorOptionsQuery(businessUnitContext || undefined);
+  const [permissions] = useState<string[]>(() => getEffectivePermissions());
+  const canViewRequests = hasPermission("credit.requests.view", permissions);
+  const canExecuteAnalysis = hasPermission("credit.analysis.execute", permissions);
+  const canSubmitRequest = hasPermission("credit.request.submit", permissions);
+  const canViewDossier = hasPermission("clients.dossier.view", permissions);
+
+  if (!canViewRequests) {
+    return <PermissionDeniedState />;
+  }
 
   if (monitorQuery.isLoading) {
     return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando monitor de solicitações...</div>;
@@ -246,7 +257,7 @@ export function MonitorPageView() {
                       Acompanhar status <ChevronDown className="ml-2 h-4 w-4" />
                     </button>
                   ) : (
-                    item.available_actions.includes("start_analysis") ? (
+                    item.available_actions.includes("start_analysis") && canExecuteAnalysis ? (
                       <button
                         type="button"
                         onClick={() => {
@@ -259,12 +270,27 @@ export function MonitorPageView() {
                         {startAnalysisMutation.isPending && startingAnalysisId === item.analysis_id ? "Iniciando..." : mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />
                       </button>
                     ) : (
+                      (item.available_actions.includes("continue_analysis") && !canExecuteAnalysis) ||
+                      (item.available_actions.includes("start_analysis") && !canExecuteAnalysis) ||
+                      (item.available_actions.includes("submit_approval") && !canSubmitRequest) ||
+                      ((item.available_actions.includes("view_dossier") || item.available_actions.includes("view_result")) && !canViewDossier) ? (
+                        <button type="button" disabled className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-medium text-[#94A3B8]">
+                          Acompanhar status <ChevronDown className="ml-2 h-4 w-4" />
+                        </button>
+                      ) : (
                       <Link
-                        href={item.available_actions.includes("continue_analysis") ? `/analises/${item.analysis_id}/workspace` : `/analises/${item.analysis_id}`}
+                        href={
+                          item.available_actions.includes("continue_analysis")
+                            ? canExecuteAnalysis
+                              ? `/analises/${item.analysis_id}/workspace`
+                              : `/analises/${item.analysis_id}`
+                            : `/analises/${item.analysis_id}`
+                        }
                         className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#1D4ED8] hover:bg-[#F8FAFC]"
                       >
                         {mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />
                       </Link>
+                      )
                     )
                   )}
                 </div>

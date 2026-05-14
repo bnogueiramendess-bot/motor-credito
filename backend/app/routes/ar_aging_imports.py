@@ -52,13 +52,18 @@ def create_import(
 def list_import_history(
     limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["clients.imports.history.view"])),
 ) -> ArAgingImportHistoryResponse:
     entries = db.scalars(select(ArAgingImportRun).order_by(ArAgingImportRun.id.desc()).limit(limit)).all()
     return ArAgingImportHistoryResponse(items=[_to_response(entry) for entry in entries])
 
 
 @router.get("/{import_id}", response_model=ArAgingImportResponse)
-def get_import(import_id: int, db: Session = Depends(get_db)) -> ArAgingImportResponse:
+def get_import(
+    import_id: int,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["clients.imports.history.view"])),
+) -> ArAgingImportResponse:
     entry = db.get(ArAgingImportRun, import_id)
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Importacao Aging AR nao encontrada.")

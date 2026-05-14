@@ -572,7 +572,9 @@ def submit_credit_analysis_from_triage(
 
 @router.post("", response_model=CreditAnalysisRead, status_code=status.HTTP_201_CREATED)
 def create_credit_analysis(
-    payload: CreditAnalysisCreate, db: Session = Depends(get_db)
+    payload: CreditAnalysisCreate,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
 ) -> CreditAnalysis:
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
@@ -588,6 +590,7 @@ def create_credit_analysis(
     )
     db.add(analysis)
     db.flush()
+    _enforce_technical_access_or_403(db, current, analysis)
 
     initial_event = DecisionEvent(
         credit_analysis_id=analysis.id,
@@ -613,8 +616,21 @@ def create_credit_analysis(
 
 
 @router.get("", response_model=list[CreditAnalysisRead])
-def list_credit_analyses(db: Session = Depends(get_db)) -> list[CreditAnalysis]:
-    return list(db.scalars(select(CreditAnalysis).order_by(CreditAnalysis.id.desc())).all())
+def list_credit_analyses(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.requests.view"])),
+) -> list[CreditAnalysis]:
+    analyses = list(db.scalars(select(CreditAnalysis).order_by(CreditAnalysis.id.desc())).all())
+    scoped: list[CreditAnalysis] = []
+    for analysis in analyses:
+        try:
+            _enforce_technical_access_or_403(db, current, analysis)
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_403_FORBIDDEN:
+                continue
+            raise
+        scoped.append(analysis)
+    return scoped
 
 
 @router.get("/queue", response_model=CreditAnalysisQueueResponse)
@@ -1146,6 +1162,7 @@ def create_external_data_entry(
     analysis_id: int,
     payload: ExternalDataEntryCreate,
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> ExternalDataEntry:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
@@ -1153,6 +1170,7 @@ def create_external_data_entry(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
 
     entry = ExternalDataEntry(
         credit_analysis_id=analysis_id,
@@ -1188,13 +1206,18 @@ def create_external_data_entry(
 
 
 @router.get("/{analysis_id}/external-data", response_model=list[ExternalDataEntryRead])
-def list_external_data_entries(analysis_id: int, db: Session = Depends(get_db)) -> list[ExternalDataEntry]:
+def list_external_data_entries(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> list[ExternalDataEntry]:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
 
     return list(
         db.scalars(
@@ -1206,13 +1229,19 @@ def list_external_data_entries(analysis_id: int, db: Session = Depends(get_db)) 
 
 
 @router.get("/{analysis_id}/external-data/{entry_id}", response_model=ExternalDataEntryDetailRead)
-def get_external_data_entry(analysis_id: int, entry_id: int, db: Session = Depends(get_db)) -> ExternalDataEntry:
+def get_external_data_entry(
+    analysis_id: int,
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> ExternalDataEntry:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
 
     entry = db.scalar(
         select(ExternalDataEntry).where(
@@ -1244,6 +1273,7 @@ def create_external_data_file_metadata(
     entry_id: int,
     payload: ExternalDataFileMetadataCreate,
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ) -> ExternalDataFile:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
@@ -1251,6 +1281,7 @@ def create_external_data_file_metadata(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
+    _enforce_technical_access_or_403(db, current, analysis)
 
     entry = db.scalar(
         select(ExternalDataEntry).where(

@@ -13,6 +13,8 @@ import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-
 import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { PermissionDeniedState } from "@/shared/components/states/permission-denied-state";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 
 const EMPTY_METRIC: PortfolioComparisonMetricDto = {
   from_value: 0,
@@ -371,6 +373,7 @@ function ExecutiveInsights({
 }
 
 export function PortfolioEvolutionPage() {
+  const permissions = getEffectivePermissions();
   const router = useRouter();
   const searchParams = useSearchParams();
   const businessUnitContext = searchParams.get("business_unit_context") ?? "";
@@ -407,6 +410,10 @@ export function PortfolioEvolutionPage() {
     setFromSnapshotId(defaultFrom);
     setToSnapshotId(defaultTo);
   }, [monthlyClosingSnapshots, toSnapshotOptions, currentSnapshot, fromSnapshotId, toSnapshotId]);
+
+  if (!hasPermission("clients.portfolio.evolution.view", permissions)) {
+    return <PermissionDeniedState />;
+  }
 
   if (monthlyClosingSnapshots.length < 1 || toSnapshotOptions.length < 1) {
     return (

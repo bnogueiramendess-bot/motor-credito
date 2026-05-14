@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Search } from "lucide-react";
@@ -11,9 +11,11 @@ import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { PermissionDeniedState } from "@/shared/components/states/permission-denied-state";
 import { Badge } from "@/shared/components/ui/badge";
 import { Button } from "@/shared/components/ui/button";
 import { Skeleton } from "@/shared/components/ui/skeleton";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 import { openAgingImportDrawer } from "@/shared/lib/events";
 import { cn } from "@/shared/lib/utils";
 
@@ -176,6 +178,9 @@ function PortfolioGroupCard({ group, snapshotId }: { group: PortfolioGroupCardDt
 }
 
 export function PortfolioCustomersPage() {
+  const permissions = getEffectivePermissions();
+  const canViewPortfolio = hasPermission("clients.portfolio.view", permissions);
+  const canImportAging = hasPermission("clients.aging.import", permissions);
   const snapshotsQuery = usePortfolioSnapshotsQuery();
   const [selectedSnapshotId, setSelectedSnapshotId] = useState("current");
   const [search, setSearch] = useState("");
@@ -219,18 +224,22 @@ export function PortfolioCustomersPage() {
     bu === "Todos" &&
     status === "Todos";
 
+  if (!canViewPortfolio) {
+    return <PermissionDeniedState />;
+  }
+
   return (
     <section className="space-y-4">
       <header className="rounded-2xl border border-[#dde5f0] bg-gradient-to-br from-white via-[#fbfdff] to-[#f7faff] px-5 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] xl:px-7 xl:py-6">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#7b8797]">Gestão de Carteira</p>
+            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#7b8797]">GestÃ£o de Carteira</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-[-0.015em] text-[#0f172a] xl:text-[32px]">Carteira de Clientes</h1>
-            <p className="mt-3 max-w-2xl text-sm text-[#5b6b7f]">Base consolidada dos clientes importados no último AR Aging.</p>
+            <p className="mt-3 max-w-2xl text-sm text-[#5b6b7f]">Base consolidada dos clientes importados no Ãºltimo AR Aging.</p>
           </div>
 
           <div className="w-full self-center rounded-xl border border-[#e2e8f0] bg-white/95 p-4 lg:w-[360px] lg:self-center">
-            <label className="block text-xs font-semibold uppercase tracking-[0.08em] text-[#64748b]">Visão da Carteira</label>
+            <label className="block text-xs font-semibold uppercase tracking-[0.08em] text-[#64748b]">VisÃ£o da Carteira</label>
             <select
               value={selectedSnapshotId}
               onChange={(event) => setSelectedSnapshotId(event.target.value)}
@@ -244,7 +253,7 @@ export function PortfolioCustomersPage() {
               ))}
             </select>
             <div className="mt-3 inline-flex rounded-full border border-[#dbe3ef] bg-[#f8fafc] px-3 py-1 text-xs text-[#475569]">
-              {selectedSnapshotId === "current" ? "Visão atual da carteira" : `Snapshot histórico · ${selectedSnapshot?.label ?? selectedSnapshotId}`}
+              {selectedSnapshotId === "current" ? "VisÃ£o atual da carteira" : `Snapshot histÃ³rico Â· ${selectedSnapshot?.label ?? selectedSnapshotId}`}
             </div>
             <p className="mt-2 text-xs font-medium text-[#475569]">Base Aging vigente: {formatDate(selectedSnapshot?.base_date)}</p>
           </div>
@@ -266,10 +275,10 @@ export function PortfolioCustomersPage() {
       {query.isError ? <ErrorState title="Falha ao carregar carteira" description="Nao foi possivel carregar os grupos da carteira." onRetry={query.refetch} /> : null}
       {!query.isLoading && !query.isError && filteredGroups.length === 0 && isInitialPortfolioImplantation ? (
         <EmptyState
-          title="Ambiente pronto para a primeira importação AR Aging"
-          description="Importe o relatório AR Aging para iniciar a gestão da carteira de clientes, acompanhar exposição, inadimplência, limites e snapshots históricos."
-          actionLabel="Importar AR Aging"
-          onActionClick={openAgingImportDrawer}
+          title="Ambiente pronto para a primeira importaÃ§Ã£o AR Aging"
+          description="Importe o relatÃ³rio AR Aging para iniciar a gestÃ£o da carteira de clientes, acompanhar exposiÃ§Ã£o, inadimplÃªncia, limites e snapshots histÃ³ricos."
+          actionLabel={canImportAging ? "Importar AR Aging" : undefined}
+          onActionClick={canImportAging ? openAgingImportDrawer : undefined}
         />
       ) : null}
       {!query.isLoading && !query.isError && filteredGroups.length === 0 && !isInitialPortfolioImplantation ? <EmptyState title="Nenhum grupo encontrado" description="Ajuste os filtros para visualizar grupos da carteira." /> : null}
@@ -277,3 +286,5 @@ export function PortfolioCustomersPage() {
     </section>
   );
 }
+
+

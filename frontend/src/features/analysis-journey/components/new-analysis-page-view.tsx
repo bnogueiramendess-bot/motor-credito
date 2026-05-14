@@ -19,6 +19,7 @@ import {
 } from "@/features/analysis-journey/utils/formatters";
 import { formatCurrencyBRL, resolveManualStatus, resolveUploadStatus } from "@/features/analysis-journey/utils/view-models";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 
 const steps = ["Identificação do cliente", "Informações para análise", "Dados da solicitação", "Revisão e envio"];
 type ImportSource = "agrisk" | "coface";
@@ -320,6 +321,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const [triageResult, setTriageResult] = useState<CreditAnalysisTriageResponse | null>(null);
   const [triageSelectedBusinessUnit, setTriageSelectedBusinessUnit] = useState("");
   const [canCreateRequest, setCanCreateRequest] = useState(false);
+  const [canSubmitRequest, setCanSubmitRequest] = useState(false);
   const [isEarlyReviewRequest, setIsEarlyReviewRequest] = useState(false);
   const [earlyReviewJustification, setEarlyReviewJustification] = useState("");
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
@@ -446,15 +448,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   });
 
   useEffect(() => {
-    const cookie = document.cookie.split("; ").find((item) => item.startsWith("gcc_permissions="));
-    if (!cookie) return;
-    try {
-      const decoded = decodeURIComponent(cookie.split("=")[1] ?? "");
-      const permissions = JSON.parse(decoded) as string[];
-      setCanCreateRequest(permissions.includes("credit.request.create"));
-    } catch {
-      setCanCreateRequest(false);
-    }
+    const permissions = getEffectivePermissions();
+    setCanCreateRequest(hasPermission("credit.request.create", permissions));
+    setCanSubmitRequest(hasPermission("credit.request.submit", permissions));
   }, []);
 
   useEffect(() => {
@@ -2390,7 +2386,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </span>
               <div className="flex gap-2.5">
                 <Link href="/analises" className="inline-flex h-[42px] items-center rounded-[10px] border border-[#D7E1EC] px-5 text-[14px] font-medium text-[#4F647A] hover:bg-[#F7F9FC]">Cancelar</Link>
-                <button type="button" disabled={!canCreateRequest || !(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found")} onClick={handleTriageSubmit} className="inline-flex h-[42px] items-center gap-2 rounded-[10px] bg-[#27AE6E] px-5 text-[14px] font-medium text-white transition hover:bg-[#219A5F] disabled:opacity-50">
+                <button type="button" disabled={!canSubmitRequest || !(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found")} onClick={handleTriageSubmit} className="inline-flex h-[42px] items-center gap-2 rounded-[10px] bg-[#27AE6E] px-5 text-[14px] font-medium text-white transition hover:bg-[#219A5F] disabled:opacity-50">
                   {triageSubmitMutation.isPending ? "Enviando..." : "Submeter para análise"}
                   <ArrowRight className="h-4 w-4" />
                 </button>

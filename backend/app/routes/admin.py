@@ -43,6 +43,7 @@ from app.services.bootstrap_admin import (
     DEFAULT_MASTER_PASSWORD,
     ROLE_MATRIX,
 )
+from app.services.permission_catalog import PROFILE_PERMISSION_CATALOG
 from app.services.operational_reset import (
     build_execution_plan,
     execute_table_cleanup,
@@ -56,34 +57,6 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 REQUIRED_CONFIRMATION = "RESET_OPERATIONAL_DATA"
 
 SYSTEM_PROFILE_NAMES = {"administrador_master"}
-
-PROFILE_PERMISSION_CATALOG: dict[str, str] = {
-    "clients.dashboard.view": "Visualizar dashboard de clientes.",
-    "clients.portfolio.view": "Visualizar carteira de clientes.",
-    "clients.portfolio.evolution.view": "Visualizar evolucao da carteira.",
-    "clients.dossier.view": "Abrir detalhe do cliente.",
-    "clients.aging.import": "Importar AR Aging.",
-    "clients.imports.history.view": "Visualizar historico de importacoes.",
-    "credit.dashboard.view": "Visualizar dashboard de credito.",
-    "credit.request.create": "Criar solicitacao de credito.",
-    "credit.requests.view": "Visualizar solicitacoes de credito.",
-    "credit.analysis.execute": "Executar analise de credito.",
-    "credit.dossier.edit": "Editar dossie de credito.",
-    "credit.request.submit": "Submeter solicitacao para aprovacao.",
-    "credit.approval.approve": "Aprovar credito.",
-    "credit.approval.reject": "Reprovar credito.",
-    "credit.policy.view": "Visualizar politica de credito.",
-    "credit.policy.manage": "Gerenciar politica de credito.",
-    "company:view": "Visualizar empresa.",
-    "company:manage": "Gerenciar empresa.",
-    "bu:manage": "Gerenciar unidades de negocio.",
-    "users:view": "Visualizar usuarios.",
-    "users:manage": "Gerenciar usuarios.",
-    "profiles:view": "Visualizar perfis.",
-    "profiles:manage": "Gerenciar perfis.",
-    "audit:view": "Visualizar auditoria.",
-    "scope:all_bu": "Acesso total as unidades de negocio.",
-}
 
 
 class ResetOperationalDataRequest(BaseModel):
@@ -518,7 +491,10 @@ def invite_user(
 
 
 @router.get("/users", response_model=list[UserRead])
-def list_users(db: Session = Depends(get_db), current: CurrentUser = Depends(get_current_user)) -> list[UserRead]:
+def list_users(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["users:view"])),
+) -> list[UserRead]:
     users = list(db.scalars(select(User).where(User.company_id == current.user.company_id).order_by(User.full_name.asc())).all())
     return [_user_to_read(db, user) for user in users]
 

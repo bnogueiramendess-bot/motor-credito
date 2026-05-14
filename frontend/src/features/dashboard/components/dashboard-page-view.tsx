@@ -15,6 +15,8 @@ import { usePortfolioSnapshotsQuery } from "@/features/portfolio/hooks/use-portf
 import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { PermissionDeniedState } from "@/shared/components/states/permission-denied-state";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 import { openAgingImportDrawer } from "@/shared/lib/events";
 import { cn } from "@/shared/lib/utils";
 
@@ -268,7 +270,13 @@ function movementReadableMessage(movement: PortfolioMovementDto) {
   return `${subject} ${action} ${valueLabel} em risco alto provável.`;
 }
 
-export function DashboardPageView(_: DashboardPageViewProps) {
+export function DashboardPageView({ context = "clientes" }: DashboardPageViewProps) {
+  const [permissions] = useState<string[]>(() => getEffectivePermissions());
+  const canViewDashboard = context === "motor-credito"
+    ? hasPermission("credit.dashboard.view", permissions)
+    : hasPermission("clients.dashboard.view", permissions);
+  const canImportAging = hasPermission("clients.aging.import", permissions);
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const businessUnitContext = searchParams.get("business_unit_context") ?? "";
@@ -330,6 +338,10 @@ export function DashboardPageView(_: DashboardPageViewProps) {
     () => resolveBuSeriesOrder(agingQuery.data?.aging_buckets_by_bu?.not_due, agingQuery.data?.aging_buckets_by_bu?.overdue),
     [agingQuery.data?.aging_buckets_by_bu?.not_due, agingQuery.data?.aging_buckets_by_bu?.overdue]
   );
+
+  if (!canViewDashboard) {
+    return <PermissionDeniedState />;
+  }
 
   const hasNoImport =
     kpis.customersCount === 0 &&
@@ -457,8 +469,8 @@ export function DashboardPageView(_: DashboardPageViewProps) {
         <EmptyState
           title="Ambiente pronto para a primeira importação AR Aging"
           description="Importe o relatório AR Aging para iniciar a gestão da carteira de clientes, acompanhar exposição, inadimplência, limites e snapshots históricos."
-          actionLabel="Importar AR Aging"
-          onActionClick={openAgingImportDrawer}
+          actionLabel={canImportAging ? "Importar AR Aging" : undefined}
+          onActionClick={canImportAging ? openAgingImportDrawer : undefined}
         />
       ) : null}
 

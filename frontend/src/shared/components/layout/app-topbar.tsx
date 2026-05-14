@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -7,6 +7,7 @@ import { Building2, ChevronDown, FileUp, Settings, Users } from "lucide-react";
 
 import { OperationalResetDialog } from "@/features/admin/components/operational-reset-dialog";
 import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 import { OPEN_AGING_IMPORT_DRAWER_EVENT } from "@/shared/lib/events";
 import { getCurrentUserDisplayName, getCurrentUserLoginName } from "@/shared/lib/auth/current-user";
 import { cn } from "@/shared/lib/utils";
@@ -15,6 +16,7 @@ type NavItem = {
   type?: "link" | "divider";
   href?: string;
   label?: string;
+  permission?: string;
 };
 
 type NavGroup = {
@@ -30,9 +32,9 @@ const navGroups: NavGroup[] = [
     label: "Clientes",
     activePrefix: "/clientes",
     items: [
-      { type: "link", href: "/clientes/dashboard", label: "Dashboard" },
-      { type: "link", href: "/clientes/carteira", label: "Carteira de Clientes" },
-      { type: "link", href: "/clientes/evolucao", label: "Evolução da Carteira" }
+      { type: "link", href: "/clientes/dashboard", label: "Dashboard", permission: "clients.dashboard.view" },
+      { type: "link", href: "/clientes/carteira", label: "Carteira de Clientes", permission: "clients.portfolio.view" },
+      { type: "link", href: "/clientes/evolucao", label: "Evolução da Carteira", permission: "clients.portfolio.evolution.view" }
     ]
   },
   {
@@ -40,27 +42,18 @@ const navGroups: NavGroup[] = [
     label: "Motor de Crédito",
     activePrefix: "/motor-credito",
     items: [
-      { type: "link", href: "/motor-credito/dashboard", label: "Dashboard" },
-      { type: "link", href: "/motor-credito/regras", label: "Regras" },
+      { type: "link", href: "/motor-credito/dashboard", label: "Dashboard", permission: "credit.dashboard.view" },
+      { type: "link", href: "/motor-credito/regras", label: "Regras", permission: "credit.policy.view" },
       { type: "divider" },
-      { type: "link", href: "/analises/nova", label: "+ Nova análise" },
-      { type: "link", href: "/analises/monitor", label: "Monitor de Solicitações" },
-      { type: "link", href: "/analises", label: "Localizar análise" }
+      { type: "link", href: "/analises/nova", label: "+ Nova análise", permission: "credit.request.create" },
+      { type: "link", href: "/analises/monitor", label: "Monitor de Solicitações", permission: "credit.requests.view" },
+      { type: "link", href: "/analises", label: "Localizar análise", permission: "credit.requests.view" }
     ]
   }
 ];
 
 function getPermissionsFromCookie() {
-  if (typeof document === "undefined") return [] as string[];
-  const cookie = document.cookie.split("; ").find((item) => item.startsWith("gcc_permissions="));
-  if (!cookie) return [];
-  const value = cookie.split("=")[1];
-  if (!value) return [];
-  try {
-    return JSON.parse(decodeURIComponent(value)) as string[];
-  } catch {
-    return [];
-  }
+  return getEffectivePermissions();
 }
 
 function getRoleFromCookie() {
@@ -159,24 +152,35 @@ export function AppTopbar() {
   const router = useRouter();
   const pathname = usePathname();
   const meta = useMemo(() => resolveTopbarMeta(pathname), [pathname]);
-  const [permissions, setPermissions] = useState<string[]>([]);
+  const [permissions] = useState<string[]>(() => getPermissionsFromCookie());
   const [currentUserRole, setCurrentUserRole] = useState("");
   const [currentUserName, setCurrentUserName] = useState("Usuário");
   const [currentLoginName, setCurrentLoginName] = useState("Usuário");
 
   useEffect(() => {
-    setPermissions(getPermissionsFromCookie());
     setCurrentUserRole(getRoleFromCookie());
     setCurrentUserName(toFirstAndSecondName(getCurrentUserDisplayName()));
     setCurrentLoginName(getCurrentUserLoginName());
   }, []);
 
-  const canManageCompany = permissions.includes("company:manage");
-  const canManageBusinessUnits = permissions.includes("bu:manage");
-  const canManageUsers = permissions.includes("users:manage");
-  const canViewProfiles = permissions.includes("profiles:view");
-  const canImportAging = permissions.includes("clients.aging.import");
+  const canManageCompany = hasPermission("company:manage", permissions);
+  const canManageBusinessUnits = hasPermission("bu:manage", permissions);
+  const canManageUsers = hasPermission("users:manage", permissions);
+  const canViewProfiles = hasPermission("profiles:view", permissions);
+  const canImportAging = hasPermission("clients.aging.import", permissions);
+  const canViewImportsHistory = hasPermission("clients.imports.history.view", permissions);
   const canResetBase = currentUserRole === "administrador_master";
+
+  const visibleNavGroups = useMemo(
+    () =>
+      navGroups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => !item.permission || hasPermission(item.permission, permissions))
+        }))
+        .filter((group) => group.items.some((item) => item.type !== "divider")),
+    [permissions]
+  );
 
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
@@ -187,7 +191,7 @@ export function AppTopbar() {
   const [isUsersMenuOpen, setIsUsersMenuOpen] = useState(false);
   const menusRef = useRef<HTMLDivElement | null>(null);
 
-  const openGroup = navGroups.find((group) => group.id === openGroupId) ?? null;
+  const openGroup = visibleNavGroups.find((group) => group.id === openGroupId) ?? null;
 
   function toggleGroup(groupId: string) {
     setOpenGroupId((current) => (current === groupId ? null : groupId));
@@ -249,7 +253,7 @@ export function AppTopbar() {
           <div className="hidden h-8 w-px bg-[#334155] lg:block" aria-hidden="true" />
 
           <nav aria-label="Navegação principal" className="hidden min-w-0 flex-1 items-center gap-3 lg:flex">
-            {navGroups.map((group) => {
+            {visibleNavGroups.map((group) => {
               const menuId = `topbar-submenu-${group.id}`;
               const isOpen = openGroupId === group.id;
               const groupActive = group.id === "motor-credito" ? isMotorCreditoRoute(pathname) : pathname.startsWith(group.activePrefix);
@@ -380,7 +384,7 @@ export function AppTopbar() {
               ) : null}
             </div>
 
-            {canImportAging ? (
+            {(canImportAging || canViewImportsHistory) ? (
               <button
                 type="button"
                 onClick={() => setIsImportDrawerOpen(true)}
@@ -439,7 +443,7 @@ export function AppTopbar() {
           ) : null}
         </div>
       </div>
-      <AgingImportDrawer open={isImportDrawerOpen} onOpenChange={setIsImportDrawerOpen} />
+      <AgingImportDrawer open={isImportDrawerOpen} onOpenChange={setIsImportDrawerOpen} canImport={canImportAging} canViewHistory={canViewImportsHistory} />
       {canResetBase ? (
         <OperationalResetDialog
           open={isOperationalResetDialogOpen}
@@ -450,4 +454,3 @@ export function AppTopbar() {
     </header>
   );
 }
-

@@ -19,7 +19,9 @@ import { useUpdateCreditPolicyRuleMutation } from "@/features/credit-rules/hooks
 import { mapCreditPolicyToViewModel } from "@/features/credit-rules/utils/credit-policy-view-model";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { PermissionDeniedState } from "@/shared/components/states/permission-denied-state";
 import { Alert, AlertDescription, AlertTitle } from "@/shared/components/ui/alert";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 
 type SaveFeedbackType = "success" | "error";
 
@@ -43,6 +45,9 @@ function getContextHeadline(context: CreditPolicyContextMode) {
 }
 
 export function CreditRulesPageView() {
+  const permissions = getEffectivePermissions();
+  const canViewPolicy = hasPermission("credit.policy.view", permissions);
+  const canManagePolicy = hasPermission("credit.policy.manage", permissions);
   const activePolicyQuery = useActiveCreditPolicyQuery();
   const draftPolicyQuery = useDraftCreditPolicyQuery();
 
@@ -60,6 +65,10 @@ export function CreditRulesPageView() {
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [deletingRuleId, setDeletingRuleId] = useState<number | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
+
+  if (!canViewPolicy) {
+    return <PermissionDeniedState />;
+  }
 
   const isPageLoading = activePolicyQuery.isLoading || draftPolicyQuery.isLoading;
   if (isPageLoading) {
@@ -179,7 +188,8 @@ export function CreditRulesPageView() {
           setEditingRuleId(null);
           setIsFormOpen(true);
         }}
-        disableCreateRule={!isDraftContext || isAnyMutationPending}
+        showCreateRule={canManagePolicy}
+        disableCreateRule={!canManagePolicy || !isDraftContext || isAnyMutationPending}
       />
 
       {saveFeedback ? (
@@ -200,12 +210,13 @@ export function CreditRulesPageView() {
         diffSummary={draftPolicy.diffSummary}
         selectedContext={selectedContext}
         onSelectContext={setSelectedContext}
-        onPublishDraft={handlePublishDraft}
-        onResetDraft={handleResetDraft}
+        onPublishDraft={canManagePolicy ? handlePublishDraft : async () => {}}
+        onResetDraft={canManagePolicy ? handleResetDraft : async () => {}}
         isPublishing={publishDraftMutation.isPending}
         isResetting={resetDraftMutation.isPending}
-        publishDisabled={draftPolicy.diffSummary.total === 0 || isAnyMutationPending}
-        resetDisabled={isAnyMutationPending}
+        publishDisabled={!canManagePolicy || draftPolicy.diffSummary.total === 0 || isAnyMutationPending}
+        resetDisabled={!canManagePolicy || isAnyMutationPending}
+        showManageActions={canManagePolicy}
       />
 
       <div className="rounded-xl border border-[#e5e9f2] bg-white px-4 py-3">
@@ -228,17 +239,17 @@ export function CreditRulesPageView() {
         rules={filteredRules}
         totalCount={currentPolicy.rules.length}
         contextLabel={isDraftContext ? "Rascunho em edição" : "Política ativa"}
-        canEdit={isDraftContext}
+        canEdit={canManagePolicy && isDraftContext}
         deletingRuleId={deletingRuleId}
         onEditRule={(rule) => {
-          if (!isDraftContext) {
+          if (!canManagePolicy || !isDraftContext) {
             return;
           }
           setSaveFeedback(null);
           setEditingRuleId(rule.id);
           setIsFormOpen(true);
         }}
-        onDeleteRule={(rule) => (isDraftContext ? handleDeleteRule(rule.id) : Promise.resolve())}
+        onDeleteRule={(rule) => (canManagePolicy && isDraftContext ? handleDeleteRule(rule.id) : Promise.resolve())}
       />
 
       <CreditRulesOverview overview={activePolicy.overview} />
@@ -250,7 +261,7 @@ export function CreditRulesPageView() {
           setIsFormOpen(false);
           setEditingRuleId(null);
         }}
-        onSubmit={handleFormSubmit}
+        onSubmit={canManagePolicy ? handleFormSubmit : async () => {}}
         submitError={createRuleMutation.error?.message ?? updateRuleMutation.error?.message}
         isSubmitting={createRuleMutation.isPending || updateRuleMutation.isPending}
       />

@@ -12,6 +12,8 @@ import { PortfolioCustomerDto } from "@/features/portfolio/api/contracts";
 import { usePortfolioAgingLatestQuery } from "@/features/portfolio/hooks/use-portfolio-aging-latest-query";
 import { usePortfolioCustomersQuery } from "@/features/portfolio/hooks/use-portfolio-customers-query";
 import { ErrorState } from "@/shared/components/states/error-state";
+import { PermissionDeniedState } from "@/shared/components/states/permission-denied-state";
+import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 
 type StatusFilter = "all" | "created" | "in_progress" | "completed";
 
@@ -81,6 +83,7 @@ const statusFilters: Array<{ value: StatusFilter; label: string }> = [
 ];
 
 export function DashboardPageViewLegacy() {
+  const permissions = getEffectivePermissions();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const normalizedSearch = search.trim().toLowerCase();
@@ -151,6 +154,10 @@ export function DashboardPageViewLegacy() {
       latestProtocol: "-"
     };
   }, [customers]);
+
+  if (!hasPermission("credit.dashboard.view", permissions)) {
+    return <PermissionDeniedState />;
+  }
 
   if (agingQuery.isLoading || customersQuery.isLoading) {
     return (

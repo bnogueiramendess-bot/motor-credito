@@ -22,6 +22,7 @@ type CreditRulesPolicyStateProps = {
   resetDisabled?: boolean;
   isPublishing?: boolean;
   isResetting?: boolean;
+  showManageActions?: boolean;
 };
 
 type ConfirmAction = "publish" | "reset" | null;
@@ -48,7 +49,8 @@ export function CreditRulesPolicyState({
   publishDisabled,
   resetDisabled,
   isPublishing,
-  isResetting
+  isResetting,
+  showManageActions = true
 }: CreditRulesPolicyStateProps) {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const isActionBusy = Boolean(isPublishing || isResetting);
@@ -114,7 +116,7 @@ export function CreditRulesPolicyState({
         </p>
       </div>
 
-      {isDraftContext ? (
+      {isDraftContext && showManageActions ? (
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
