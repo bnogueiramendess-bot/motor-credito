@@ -1,5 +1,8 @@
 ﻿from app.db.session import Base
 from app.models import (
+    AnalysisDocument,
+    AnalysisCommercialReference,
+    AnalysisRequestMetadata,
     AuditLog,
     ArAgingDataTotalRow,
     ArAgingGroupConsolidatedRow,
@@ -50,4 +53,7 @@ __all__ = [
     "UserInvitation",
     "RefreshToken",
     "AuditLog",
+    "AnalysisRequestMetadata",
+    "AnalysisDocument",
+    "AnalysisCommercialReference",
 ]

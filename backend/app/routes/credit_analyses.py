@@ -1,7 +1,9 @@
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy import Numeric, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -19,10 +21,16 @@ from app.models.decision_event import DecisionEvent
 from app.models.enums import ActorType, AnalysisStatus, FinalDecision
 from app.models.external_data_entry import ExternalDataEntry
 from app.models.external_data_file import ExternalDataFile
+from app.models.analysis_request_metadata import AnalysisRequestMetadata
+from app.models.analysis_document import AnalysisDocument
+from app.models.analysis_commercial_reference import AnalysisCommercialReference
 from app.models.score_result import ScoreResult
 from app.models.user_business_unit_scope import UserBusinessUnitScope
 from app.schemas.credit_analysis import (
     CreditAnalysisCreate,
+    CreditAnalysisDraftCreateRequest,
+    CreditAnalysisDraftCreateResponse,
+    CreditAnalysisExistingCheckResponse,
     CreditAnalysisQueueItem,
     CreditAnalysisQueueKpis,
     CreditAnalysisMonitorItem,
@@ -48,6 +56,13 @@ from app.schemas.external_data import (
 )
 from app.schemas.final_decision import FinalDecisionApplyRequest, FinalDecisionResponse
 from app.schemas.score import ScoreCalculationResponse, ScoreResultResponse
+from app.schemas.analysis_request import (
+    AnalysisCommercialReferenceCreate,
+    AnalysisCommercialReferenceRead,
+    AnalysisDocumentRead,
+    AnalysisRequestMetadataRead,
+    AnalysisRequestMetadataUpsert,
+)
 from app.services.final_decision import FinalDecisionError, apply_final_decision
 from app.services.protocol import generate_protocol_number
 from app.services.decision import DecisionCalculationError, calculate_and_apply_decision
@@ -351,6 +366,26 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
         )
 
 
+def _analysis_documents_storage_root() -> Path:
+    root = Path(__file__).resolve().parents[2] / "data" / "analysis_documents"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _normalize_document_status(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in {"pendente", "enviado", "aprovado", "rejeitado"}:
+        return normalized
+    return "enviado"
+
+
+def _is_valid_email(value: str) -> bool:
+    normalized = value.strip()
+    if not normalized:
+        return False
+    return "@" in normalized and "." in normalized.split("@")[-1]
+
+
 @router.post("/triage", response_model=CreditAnalysisTriageResponse, status_code=status.HTTP_200_OK)
 def triage_credit_analysis(
     payload: CreditAnalysisTriageRequest,
@@ -439,6 +474,231 @@ def triage_credit_analysis(
         requires_business_unit_selection=len(scoped_bus) > 1,
         available_business_units=bu_options,
         message="Cliente não localizado na carteira atual. Os dados cadastrais foram preenchidos com base na consulta externa.",
+    )
+
+
+@router.get("/check-existing", response_model=CreditAnalysisExistingCheckResponse, status_code=status.HTTP_200_OK)
+def check_existing_credit_analysis(
+    cnpj: str,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
+) -> CreditAnalysisExistingCheckResponse:
+    normalized_cnpj = _normalize_cnpj_or_400(cnpj)
+    customer = db.scalar(select(Customer).where(Customer.document_number == normalized_cnpj))
+    if customer is None:
+        return CreditAnalysisExistingCheckResponse(
+            cnpj=normalized_cnpj,
+            has_existing_analysis=False,
+            state="none",
+            message="Nenhuma análise anterior encontrada para este cliente.",
+        )
+
+    latest_analysis = db.scalar(
+        select(CreditAnalysis)
+        .where(CreditAnalysis.customer_id == customer.id)
+        .order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
+        .limit(1)
+    )
+    if latest_analysis is None:
+        return CreditAnalysisExistingCheckResponse(
+            cnpj=normalized_cnpj,
+            has_existing_analysis=False,
+            state="none",
+            message="Nenhuma análise anterior encontrada para este cliente.",
+        )
+
+    if latest_analysis.analysis_status in {AnalysisStatus.CREATED, AnalysisStatus.IN_PROGRESS}:
+        return CreditAnalysisExistingCheckResponse(
+            cnpj=normalized_cnpj,
+            has_existing_analysis=True,
+            state="in_progress",
+            analysis_id=latest_analysis.id,
+            analysis_status=latest_analysis.analysis_status.value,
+            message="Já existe uma solicitação de crédito em andamento para este cliente. Acompanhe a análise pelo Monitor de Solicitações.",
+        )
+
+    if latest_analysis.final_decision in {FinalDecision.APPROVED, FinalDecision.REJECTED}:
+        decision_date = _resolve_decision_date(latest_analysis)
+        if decision_date is not None:
+            now_utc = datetime.now(timezone.utc)
+            days_since_decision = (now_utc.date() - decision_date.date()).days
+            next_allowed = decision_date + timedelta(days=REANALYSIS_COOLDOWN_DAYS)
+            if days_since_decision < REANALYSIS_COOLDOWN_DAYS:
+                return CreditAnalysisExistingCheckResponse(
+                    cnpj=normalized_cnpj,
+                    has_existing_analysis=True,
+                    state="recently_completed",
+                    analysis_id=latest_analysis.id,
+                    analysis_status=latest_analysis.final_decision.value,
+                    decision_date=decision_date,
+                    days_since_decision=days_since_decision,
+                    next_allowed_date=next_allowed,
+                    message="Este cliente já possui uma análise concluída nos últimos 90 dias. Uma nova solicitação não pode ser aberta neste período.",
+                )
+            return CreditAnalysisExistingCheckResponse(
+                cnpj=normalized_cnpj,
+                has_existing_analysis=True,
+                state="completed_expired",
+                analysis_id=latest_analysis.id,
+                analysis_status=latest_analysis.final_decision.value,
+                decision_date=decision_date,
+                days_since_decision=days_since_decision,
+                next_allowed_date=next_allowed,
+                message="Última análise concluída há mais de 90 dias.",
+            )
+
+    return CreditAnalysisExistingCheckResponse(
+        cnpj=normalized_cnpj,
+        has_existing_analysis=True,
+        state="none",
+        analysis_id=latest_analysis.id,
+        analysis_status=latest_analysis.analysis_status.value,
+        message="Nenhum bloqueio de governança identificado para este cliente.",
+    )
+
+
+@router.post("/draft", response_model=CreditAnalysisDraftCreateResponse, status_code=status.HTTP_201_CREATED)
+def create_credit_analysis_draft(
+    payload: CreditAnalysisDraftCreateRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
+) -> CreditAnalysisDraftCreateResponse:
+    normalized_cnpj = _normalize_cnpj_or_400(payload.cnpj)
+    source = (payload.source or "").strip().lower()
+    if source not in {"portfolio", "external", "manual"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Origem da solicitação inválida.")
+
+    customer = db.scalar(select(Customer).where(Customer.document_number == normalized_cnpj))
+    if customer is not None:
+        latest_analysis = db.scalar(
+            select(CreditAnalysis)
+            .where(CreditAnalysis.customer_id == customer.id)
+            .order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
+            .limit(1)
+        )
+        if latest_analysis and latest_analysis.analysis_status in {AnalysisStatus.CREATED, AnalysisStatus.IN_PROGRESS}:
+            recent_draft_audit = db.scalar(
+                select(AuditLog)
+                .where(
+                    AuditLog.resource == "credit_analysis",
+                    AuditLog.resource_id == str(latest_analysis.id),
+                    AuditLog.action == "credit_request_draft_create",
+                    AuditLog.actor_user_id == current.user.id,
+                )
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+            )
+            if recent_draft_audit is not None and latest_analysis.analysis_status == AnalysisStatus.CREATED:
+                return CreditAnalysisDraftCreateResponse(
+                    analysis_id=latest_analysis.id,
+                    customer_id=customer.id,
+                    status=latest_analysis.analysis_status.value,
+                    cnpj=normalized_cnpj,
+                    reused_existing=True,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Já existe uma solicitação de crédito em andamento para este cliente.",
+            )
+        if latest_analysis and latest_analysis.final_decision in {FinalDecision.APPROVED, FinalDecision.REJECTED}:
+            decision_date = _resolve_decision_date(latest_analysis)
+            if decision_date is not None:
+                days_since_decision = (datetime.now(timezone.utc).date() - decision_date.date()).days
+                if days_since_decision < REANALYSIS_COOLDOWN_DAYS:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Este cliente já possui uma análise concluída nos últimos 90 dias.",
+                    )
+
+    if customer is None:
+        customer = Customer(
+            company_name=(payload.customer_name or "Cliente sem razão social").strip(),
+            document_number=normalized_cnpj,
+            segment="nao_informado",
+            region="nao_informado",
+            relationship_start_date=None,
+        )
+        db.add(customer)
+        db.flush()
+    elif payload.customer_name and not customer.company_name:
+        customer.company_name = payload.customer_name.strip()
+
+    selected_bu_name = (payload.business_unit or "").strip() or None
+    if selected_bu_name:
+        allowed_bu_names = get_user_allowed_business_units(db, current)
+        has_all_scope = user_has_all_bu_scope(current)
+        assert_bu_in_scope(allowed_bu_names, selected_bu_name, has_all_scope=has_all_scope)
+
+    now_utc = datetime.now(timezone.utc)
+    analysis = CreditAnalysis(
+        customer_id=customer.id,
+        protocol_number=generate_protocol_number(db),
+        requested_limit=Decimal("0"),
+        current_limit=Decimal("0"),
+        exposure_amount=Decimal("0"),
+        annual_revenue_estimated=Decimal("0"),
+        suggested_limit=Decimal("0"),
+        analysis_status=AnalysisStatus.CREATED,
+        assigned_analyst_name=None,
+        current_owner_user_id=None,
+        current_owner_role="comercial_solicitante",
+        last_owner_user_id=current.user.id,
+        last_owner_role="comercial_solicitante",
+        assigned_at=now_utc,
+        current_stage_started_at=now_utc,
+        decision_memory_json={
+            "triage_submission": {
+                "source": source,
+                "business_unit": selected_bu_name,
+                "economic_group": payload.economic_group,
+                "draft_created_from_step1": True,
+            }
+        },
+    )
+    db.add(analysis)
+    db.flush()
+    db.add(
+        DecisionEvent(
+            credit_analysis_id=analysis.id,
+            event_type="analysis_created",
+            actor_type=ActorType.USER,
+            actor_name=current.user.full_name,
+            description="Rascunho da solicitação criado a partir da consulta de CNPJ.",
+            event_payload_json=_build_event_payload(
+                analysis=analysis,
+                previous_status=None,
+                new_status="pending",
+                current=current,
+                bu_name=selected_bu_name,
+                stage="commercial_draft",
+                extra={"cnpj": normalized_cnpj, "source": source},
+            ),
+        )
+    )
+    db.add(
+        AuditLog(
+            actor_user_id=current.user.id,
+            action="credit_request_draft_create",
+            resource="credit_analysis",
+            resource_id=str(analysis.id),
+            metadata_json={
+                "requested_by": current.user.email,
+                "cnpj": normalized_cnpj,
+                "source": source,
+                "business_unit": selected_bu_name,
+                "analysis_id": analysis.id,
+            },
+            notes="Rascunho criado automaticamente na Etapa 1.",
+        )
+    )
+    db.commit()
+    db.refresh(analysis)
+    return CreditAnalysisDraftCreateResponse(
+        analysis_id=analysis.id,
+        customer_id=customer.id,
+        status=analysis.analysis_status.value,
+        cnpj=normalized_cnpj,
+        reused_existing=False,
     )
 
 
@@ -605,6 +865,15 @@ def submit_credit_analysis_from_triage(
             ),
         )
     )
+
+
+def _resolve_decision_date(analysis: CreditAnalysis) -> datetime | None:
+    return (
+        analysis.approved_at
+        or analysis.rejected_at
+        or analysis.completed_at
+        or analysis.created_at
+    )
     db.add(
         AuditLog(
             actor_user_id=current.user.id,
@@ -647,6 +916,251 @@ def submit_credit_analysis_from_triage(
         status=analysis.analysis_status,
         reused_existing=False,
     )
+
+
+@router.get("/{analysis_id}/request-metadata", response_model=AnalysisRequestMetadataRead)
+def get_analysis_request_metadata(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> AnalysisRequestMetadataRead:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    metadata = db.scalar(select(AnalysisRequestMetadata).where(AnalysisRequestMetadata.credit_analysis_id == analysis_id))
+    return AnalysisRequestMetadataRead(
+        credit_analysis_id=analysis_id,
+        requested_limit=float(analysis.requested_limit) if analysis.requested_limit is not None else None,
+        requested_term_days=metadata.requested_term_days if metadata else None,
+        business_unit=metadata.business_unit if metadata else None,
+        customer_type=metadata.customer_type if metadata else None,
+        operation_modality=metadata.operation_modality if metadata else None,
+        contact_name=metadata.contact_name if metadata else None,
+        contact_phone=metadata.contact_phone if metadata else None,
+        contact_email=metadata.contact_email if metadata else None,
+        updated_at=metadata.updated_at if metadata else None,
+    )
+
+
+@router.put("/{analysis_id}/request-metadata", response_model=AnalysisRequestMetadataRead)
+def upsert_analysis_request_metadata(
+    analysis_id: int,
+    payload: AnalysisRequestMetadataUpsert,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> AnalysisRequestMetadataRead:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    metadata = db.scalar(select(AnalysisRequestMetadata).where(AnalysisRequestMetadata.credit_analysis_id == analysis_id))
+    if metadata is None:
+        metadata = AnalysisRequestMetadata(credit_analysis_id=analysis_id)
+        db.add(metadata)
+        db.flush()
+
+    if payload.requested_limit is not None:
+        analysis.requested_limit = Decimal(str(payload.requested_limit))
+    metadata.requested_term_days = payload.requested_term_days
+    metadata.business_unit = payload.business_unit
+    metadata.customer_type = payload.customer_type
+    metadata.operation_modality = payload.operation_modality
+    metadata.contact_name = payload.contact_name
+    metadata.contact_phone = payload.contact_phone
+    metadata.contact_email = payload.contact_email
+    metadata.updated_by_user_id = current.user.id
+
+    db.commit()
+    db.refresh(analysis)
+    db.refresh(metadata)
+    return AnalysisRequestMetadataRead(
+        credit_analysis_id=analysis_id,
+        requested_limit=float(analysis.requested_limit) if analysis.requested_limit is not None else None,
+        requested_term_days=metadata.requested_term_days,
+        business_unit=metadata.business_unit,
+        customer_type=metadata.customer_type,
+        operation_modality=metadata.operation_modality,
+        contact_name=metadata.contact_name,
+        contact_phone=metadata.contact_phone,
+        contact_email=metadata.contact_email,
+        updated_at=metadata.updated_at,
+    )
+
+
+@router.get("/{analysis_id}/documents", response_model=list[AnalysisDocumentRead])
+def list_analysis_documents(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> list[AnalysisDocument]:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+    return list(
+        db.scalars(
+            select(AnalysisDocument)
+            .where(AnalysisDocument.credit_analysis_id == analysis_id)
+            .order_by(AnalysisDocument.uploaded_at.desc(), AnalysisDocument.id.desc())
+        ).all()
+    )
+
+
+@router.post("/{analysis_id}/documents", response_model=AnalysisDocumentRead, status_code=status.HTTP_201_CREATED)
+async def upload_analysis_document(
+    analysis_id: int,
+    document_type: str = Form(...),
+    status_value: str = Form("enviado"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> AnalysisDocument:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    original_name = (file.filename or "").strip()
+    if not original_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo obrigatorio.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo vazio.")
+
+    safe_type = (document_type or "").strip().lower()
+    if not safe_type:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de documento obrigatorio.")
+    file_ext = Path(original_name).suffix
+    stored_name = f"{uuid4().hex}{file_ext}"
+    storage_dir = _analysis_documents_storage_root() / str(analysis_id)
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    (storage_dir / stored_name).write_bytes(content)
+
+    document = AnalysisDocument(
+        credit_analysis_id=analysis_id,
+        document_type=safe_type,
+        original_filename=original_name,
+        stored_filename=stored_name,
+        mime_type=file.content_type or "application/octet-stream",
+        file_size=len(content),
+        status=_normalize_document_status(status_value),
+        uploaded_by_user_id=current.user.id,
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return document
+
+
+@router.delete("/{analysis_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_analysis_document(
+    analysis_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> Response:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    document = db.get(AnalysisDocument, document_id)
+    if document is None or document.credit_analysis_id != analysis_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+
+    storage_path = _analysis_documents_storage_root() / str(analysis_id) / document.stored_filename
+    if storage_path.exists():
+        storage_path.unlink(missing_ok=True)
+
+    db.delete(document)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{analysis_id}/commercial-references", response_model=list[AnalysisCommercialReferenceRead])
+def list_analysis_commercial_references(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> list[AnalysisCommercialReference]:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+    return list(
+        db.scalars(
+            select(AnalysisCommercialReference)
+            .where(AnalysisCommercialReference.credit_analysis_id == analysis_id)
+            .order_by(AnalysisCommercialReference.created_at.desc(), AnalysisCommercialReference.id.desc())
+        ).all()
+    )
+
+
+@router.post(
+    "/{analysis_id}/commercial-references",
+    response_model=AnalysisCommercialReferenceRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_analysis_commercial_reference(
+    analysis_id: int,
+    payload: AnalysisCommercialReferenceCreate,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> AnalysisCommercialReference:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    name = payload.name.strip()
+    phone = payload.phone.strip() if payload.phone else None
+    email = payload.email.strip() if payload.email else None
+
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome da referência é obrigatório.")
+    if not phone and not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Informe ao menos telefone ou e-mail da referência.",
+        )
+    if email and not _is_valid_email(email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail da referência é inválido.")
+
+    reference = AnalysisCommercialReference(
+        credit_analysis_id=analysis_id,
+        name=name,
+        phone=phone,
+        email=email,
+        created_by_user_id=current.user.id,
+    )
+    db.add(reference)
+    db.commit()
+    db.refresh(reference)
+    return reference
+
+
+@router.delete("/{analysis_id}/commercial-references/{reference_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_analysis_commercial_reference(
+    analysis_id: int,
+    reference_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> Response:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    reference = db.get(AnalysisCommercialReference, reference_id)
+    if reference is None or reference.credit_analysis_id != analysis_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Commercial reference not found.")
+
+    db.delete(reference)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("", response_model=CreditAnalysisRead, status_code=status.HTTP_201_CREATED)

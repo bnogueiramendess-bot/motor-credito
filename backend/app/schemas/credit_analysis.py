@@ -116,6 +116,34 @@ class CreditAnalysisTriageSubmitResponse(BaseModel):
     reused_existing: bool = False
 
 
+class CreditAnalysisExistingCheckResponse(BaseModel):
+    cnpj: str
+    has_existing_analysis: bool
+    state: str
+    analysis_id: int | None = None
+    analysis_status: str | None = None
+    decision_date: datetime | None = None
+    days_since_decision: int | None = None
+    next_allowed_date: datetime | None = None
+    message: str | None = None
+
+
+class CreditAnalysisDraftCreateRequest(BaseModel):
+    cnpj: str
+    customer_name: str | None = None
+    economic_group: str | None = None
+    business_unit: str | None = None
+    source: str
+
+
+class CreditAnalysisDraftCreateResponse(BaseModel):
+    analysis_id: int
+    customer_id: int
+    status: str
+    cnpj: str
+    reused_existing: bool = False
+
+
 class CreditAnalysisQueueItem(BaseModel):
     analysis_id: int
     analysis_code: str

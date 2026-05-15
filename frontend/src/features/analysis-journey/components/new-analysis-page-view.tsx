@@ -1,13 +1,13 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowRight, Building2, Check, ChevronLeft, ChevronRight, CreditCard, Info, Lock, Search, Upload, X } from "lucide-react";
+import { Building2, Check, ChevronLeft, ChevronRight, CreditCard, Info, Lock, Search, Upload, X } from "lucide-react";
 
-import { listCustomers, lookupExternalCnpj, readAgriskReport, readCofaceReport, submitAnalysisJourney, submitTriageCreditRequest, triageCreditRequest } from "@/features/analysis-journey/api/analysis-journey.api";
-import { AgriskImportStatus, AgriskReportReadResponse, AnalysisJourneySubmitRequest, CofaceReportReadResponse, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import { checkExistingCreditAnalysis, createCommercialReference, createCreditAnalysisDraft, deleteAnalysisDocument, deleteCommercialReference, getAnalysisRequestMetadata, listAnalysisDocuments, listCommercialReferences, lookupExternalCnpj, readAgriskReport, readCofaceReport, saveAnalysisRequestMetadata, submitAnalysisJourney, triageCreditRequest, uploadAnalysisDocument } from "@/features/analysis-journey/api/analysis-journey.api";
+import { AgriskImportStatus, AgriskReportReadResponse, AnalysisDocumentDto, AnalysisJourneySubmitRequest, CofaceReportReadResponse, CommercialReference, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
 import { getCreditAnalysisDetail } from "@/features/credit-analyses/api/credit-analyses.api";
 import { getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
 import {
@@ -47,6 +47,14 @@ type OcrState = {
   importedAt: string | null;
   errorMessage: string | null;
 };
+
+type Step1DocumentType =
+  | "ficha_cadastral"
+  | "contrato_social"
+  | "ecd_ecf"
+  | "autorizacao_bacen"
+  | "outros_documentos"
+  | "financial_statements_and_trial_balances";
 
 function RequiredMark() {
   return <span className="ml-1 text-[#dc2626]">*</span>;
@@ -239,6 +247,15 @@ function removeActionLabel(_: ImportSource) {
   return "Remover relatório";
 }
 
+const step1DocumentDefinitions: Array<{ key: Step1DocumentType; label: string }> = [
+  { key: "ficha_cadastral", label: "Ficha Cadastral" },
+  { key: "contrato_social", label: "Contrato Social / Última Alteração" },
+  { key: "ecd_ecf", label: "ECD / ECF" },
+  { key: "autorizacao_bacen", label: "Autorização consulta BACEN" },
+  { key: "outros_documentos", label: "Outros documentos" },
+  { key: "financial_statements_and_trial_balances", label: "Demonstrações Financeiras e Balancetes" }
+];
+
 type NewAnalysisPageViewProps = {
   mode?: "create" | "workspace";
   analysisId?: number;
@@ -247,8 +264,10 @@ type NewAnalysisPageViewProps = {
 export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysisPageViewProps) {
   const router = useRouter();
   const isWorkspaceMode = mode === "workspace";
-  const customersQuery = useQuery({ queryKey: ["customers"], queryFn: listCustomers });
-
+  const [draftAnalysisId, setDraftAnalysisId] = useState<number | null>(null);
+  const [draftCnpj, setDraftCnpj] = useState<string | null>(null);
+  const activeAnalysisId = analysisId ?? draftAnalysisId;
+  const hasStep1Workspace = Number.isFinite(activeAnalysisId) && (activeAnalysisId ?? 0) > 0;
   const [step, setStep] = useState(1);
   const [stepError, setStepError] = useState<string | null>(null);
   const [existingCustomerId, setExistingCustomerId] = useState<number | null>(null);
@@ -256,14 +275,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   const [customer, setCustomer] = useState({
     companyName: "",
-    cnpj: "",
-    segment: "",
-    region: "",
-    relationshipStartDate: "",
-    address: "",
-    phone: "",
-    email: ""
+    cnpj: ""
   });
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
 
   const [analysis, setAnalysis] = useState({
     requestedLimit: "R$ 0,00",
@@ -317,14 +333,26 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const [triageModalOpen, setTriageModalOpen] = useState(!isWorkspaceMode);
   const [triageState, setTriageState] = useState<"idle" | "loading" | "found_existing_customer" | "new_customer_external_data" | "recent_analysis_found" | "error" | "submitting" | "submitted">("idle");
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
-  const [triageSuggestedLimit, setTriageSuggestedLimit] = useState("R$ 0,00");
   const [triageResult, setTriageResult] = useState<CreditAnalysisTriageResponse | null>(null);
+  const [governanceStatus, setGovernanceStatus] = useState<CreditAnalysisExistingCheckResponse | null>(null);
   const [triageSelectedBusinessUnit, setTriageSelectedBusinessUnit] = useState("");
   const [canCreateRequest, setCanCreateRequest] = useState(false);
   const [isEarlyReviewRequest, setIsEarlyReviewRequest] = useState(false);
   const [earlyReviewJustification, setEarlyReviewJustification] = useState("");
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [requestTermDays, setRequestTermDays] = useState("");
+  const [requestBusinessUnit, setRequestBusinessUnit] = useState("");
+  const [requestCustomerType, setRequestCustomerType] = useState("");
+  const [requestOperationModality, setRequestOperationModality] = useState("");
+  const isRequestedLimitFocusedRef = useRef(false);
+  const [commercialReferenceForm, setCommercialReferenceForm] = useState({
+    name: "",
+    phone: "",
+    email: "",
+    error: ""
+  });
+  const [documentUploadFeedback, setDocumentUploadFeedback] = useState<{ type: "error" | "success"; message: string } | null>(null);
 
   const workspaceDetailQuery = useQuery({
     queryKey: ["workspace-analysis-detail", analysisId],
@@ -336,12 +364,23 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     queryFn: () => getExternalDataDashboard(analysisId as number),
     enabled: isWorkspaceMode && Number.isFinite(analysisId) && (analysisId ?? 0) > 0
   });
+  const step1MetadataQuery = useQuery({
+    queryKey: ["analysis-step1-metadata", activeAnalysisId],
+    queryFn: () => getAnalysisRequestMetadata(activeAnalysisId as number),
+    enabled: hasStep1Workspace
+  });
+  const step1DocumentsQuery = useQuery({
+    queryKey: ["analysis-step1-documents", activeAnalysisId],
+    queryFn: () => listAnalysisDocuments(activeAnalysisId as number),
+    enabled: hasStep1Workspace
+  });
+  const commercialReferencesQuery = useQuery({
+    queryKey: ["analysis-commercial-references", activeAnalysisId],
+    queryFn: () => listCommercialReferences(activeAnalysisId as number),
+    enabled: hasStep1Workspace
+  });
 
   const normalizedCnpj = sanitizeDigits(customer.cnpj);
-  const matchedCustomers = useMemo(() => {
-    if (!customersQuery.data || normalizedCnpj.length !== 14) return [];
-    return customersQuery.data.filter((item) => sanitizeDigits(item.document_number) === normalizedCnpj);
-  }, [customersQuery.data, normalizedCnpj]);
 
   const totalLimitCalculated = useMemo(() => {
     return toNumberInput(analysis.requestedLimit) + toNumberInput(analysis.currentLimit) + toNumberInput(analysis.usedLimit);
@@ -427,17 +466,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         return;
       }
 
-      const addr = response.data.address;
-      const parts = [addr.logradouro, addr.numero, addr.complemento, addr.bairro, addr.municipio, addr.uf].filter(Boolean);
-      const address = [parts.join(", "), addr.cep].filter(Boolean).join(" - ");
-
       setCustomer((prev) => ({
         ...prev,
-        companyName: response.data?.razao_social || prev.companyName,
-        phone: response.data?.telefone || prev.phone,
-        email: response.data?.email || prev.email,
-        address: address || prev.address
+        companyName: response.data?.razao_social || prev.companyName
       }));
+      setContactPhone((prev) => prev || response.data?.telefone || "");
+      setContactEmail((prev) => prev || response.data?.email || "");
       setExternalLookupMessage("Dados cadastrais localizados automaticamente. Você poderá revisar e editar na próxima etapa.");
     },
     onError: (error: Error) =>
@@ -487,7 +521,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       return;
     }
 
-    const toCurrency = (value: number | string | null | undefined) => formatCurrencyInputBRL(String(value ?? 0));
+    const toCurrency = (value: number | string | null | undefined) => formatCurrencyBRL(String(value ?? 0));
     const entries = external.entries ?? [];
     const byNewest = [...entries].sort((a, b) => (new Date(b.created_at).getTime() || 0) - (new Date(a.created_at).getTime() || 0));
     const agriskEntry = byNewest.find((entry) => entry.source_type === "agrisk");
@@ -511,9 +545,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       ...prev,
       companyName: customerRecord.company_name,
       cnpj: formatCnpj(customerRecord.document_number),
-      segment: customerRecord.segment ?? "",
-      region: customerRecord.region ?? "",
-      relationshipStartDate: customerRecord.relationship_start_date ?? "",
     }));
     setAnalysis((prev) => ({
       ...prev,
@@ -524,7 +555,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       assignedAnalystName: analysisRecord.assigned_analyst_name ?? prev.assignedAnalystName,
       comment: analysisRecord.analyst_notes ?? prev.comment,
     }));
-    setTriageSuggestedLimit(toCurrency(analysisRecord.suggested_limit));
+    setAnalysis((prev) => ({
+      ...prev,
+      requestedLimit: toCurrency(analysisRecord.suggested_limit)
+    }));
     setManualPanel((prev) => ({
       ...prev,
       scoreValue: detail.score?.final_score ?? prev.scoreValue,
@@ -567,7 +601,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setTriageState("loading");
       setTriageMessage(null);
     },
-    onSuccess: (response) => {
+    onSuccess: async (response) => {
       setTriageResult(response);
       setTriageSelectedBusinessUnit(response.customer_data.business_unit ?? "");
       const isExisting = response.found_in_portfolio;
@@ -583,8 +617,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setCustomer((prev) => ({
         ...prev,
         cnpj: formatCnpj(response.customer_data.cnpj),
-        companyName: response.customer_data.company_name ?? prev.companyName,
-        region: response.customer_data.uf ?? prev.region
+        companyName: response.customer_data.company_name ?? prev.companyName
       }));
       if (response.economic_position) {
         setAnalysis((prev) => ({
@@ -593,61 +626,109 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           usedLimit: formatCurrencyInputBRL(String(response.economic_position?.open_amount ?? 0))
         }));
       }
+      try {
+        const existing = await checkExistingCreditAnalysis(response.customer_data.cnpj);
+        setGovernanceStatus(existing);
+        const isBlocked = existing.state === "in_progress" || existing.state === "recently_completed";
+        if (isBlocked) {
+          setTriageModalOpen(false);
+          return;
+        }
+      } catch {
+        setGovernanceStatus(null);
+      }
+      const responseCnpj = sanitizeDigits(response.customer_data.cnpj);
+      if (!activeAnalysisId || (draftCnpj !== responseCnpj && !isWorkspaceMode)) {
+        setTriageMessage("Preparando solicitação...");
+        try {
+          await createDraftMutation.mutateAsync(response);
+        } catch {
+          setTriageState("error");
+          setTriageMessage("Não foi possível iniciar a solicitação. Tente novamente.");
+          return;
+        }
+      }
+      setTriageModalOpen(false);
     },
     onError: (error) => {
       setTriageState("error");
       setTriageMessage(error instanceof Error ? error.message : "Falha ao consultar CNPJ.");
     }
   });
-
-  const triageSubmitMutation = useMutation({
-    mutationFn: (payload: {
-      cnpj: string;
-      suggested_limit: number;
-      source: "cliente_existente_carteira" | "cliente_novo_consulta_externa";
-      customer_id?: number | null;
-      company_name?: string | null;
-      business_unit?: string | null;
-      is_early_review_request?: boolean;
-      early_review_justification?: string | null;
-      previous_analysis_id?: number | null;
-    }) =>
-      submitTriageCreditRequest(payload),
-    onMutate: () => setTriageState("submitting"),
-    onSuccess: (response) => {
-      setTriageState("submitted");
-      setTriageMessage(
-        isEarlyReviewRequest
-          ? "Solicitação de revisão antecipada enviada para análise financeira."
-          : "Solicitação enviada para análise financeira."
-      );
-      setTriageModalOpen(false);
-      router.push(`/analises/monitor?analysis_id=${response.analysis_id}`);
-    },
-    onError: (error) => {
-      setTriageState("error");
-      setTriageMessage(error instanceof Error ? error.message : "Falha ao enviar solicitação.");
+  const createDraftMutation = useMutation({
+    mutationFn: (response: CreditAnalysisTriageResponse) =>
+      createCreditAnalysisDraft({
+        cnpj: response.customer_data.cnpj,
+        customer_name: response.customer_data.company_name ?? null,
+        economic_group: response.customer_data.economic_group ?? null,
+        business_unit: (response.customer_data.business_unit ?? triageSelectedBusinessUnit) || null,
+        source: response.found_in_portfolio ? "portfolio" : "external"
+      }),
+    onSuccess: (draft) => {
+      setDraftAnalysisId(draft.analysis_id);
+      setDraftCnpj(draft.cnpj);
+      setExistingCustomerId(draft.customer_id);
     }
   });
+  const saveStep1MetadataMutation = useMutation({
+    mutationFn: (payload: { requested_limit: number | null; requested_term_days: number | null; business_unit: string | null; customer_type: string | null; operation_modality: string | null; contact_name: string | null; contact_phone: string | null; contact_email: string | null }) =>
+      saveAnalysisRequestMetadata(activeAnalysisId as number, payload),
+    onSuccess: () => {
+      step1MetadataQuery.refetch();
+    }
+  });
+  const uploadStep1DocumentMutation = useMutation({
+    mutationFn: (payload: { documentType: Step1DocumentType; file: File }) => uploadAnalysisDocument(activeAnalysisId as number, payload.documentType, payload.file),
+    onSuccess: async () => {
+      await step1DocumentsQuery.refetch();
+      setDocumentUploadFeedback({ type: "success", message: "Arquivo enviado com sucesso." });
+    },
+    onError: () => {
+      setDocumentUploadFeedback({ type: "error", message: "Não foi possível enviar o arquivo. Tente novamente." });
+    }
+  });
+  const deleteStep1DocumentMutation = useMutation({
+    mutationFn: (documentId: number) => deleteAnalysisDocument(activeAnalysisId as number, documentId),
+    onSuccess: async () => {
+      await step1DocumentsQuery.refetch();
+    },
+    onError: () => {
+      setDocumentUploadFeedback({ type: "error", message: "Não foi possível remover o arquivo. Tente novamente." });
+    }
+  });
+  const createCommercialReferenceMutation = useMutation({
+    mutationFn: (payload: { name: string; phone: string | null; email: string | null }) =>
+      createCommercialReference(activeAnalysisId as number, payload),
+    onSuccess: () => {
+      commercialReferencesQuery.refetch();
+    }
+  });
+  const deleteCommercialReferenceMutation = useMutation({
+    mutationFn: (referenceId: number) => deleteCommercialReference(activeAnalysisId as number, referenceId),
+    onSuccess: () => {
+      commercialReferencesQuery.refetch();
+    }
+  });
+
+  useEffect(() => {
+    if (!step1MetadataQuery.data) return;
+    const payload = step1MetadataQuery.data;
+    if (payload.requested_limit !== null && !isRequestedLimitFocusedRef.current) {
+      setAnalysis((prev) => ({ ...prev, requestedLimit: formatCurrencyBRL(String(payload.requested_limit)) }));
+    }
+    setRequestTermDays(payload.requested_term_days !== null ? String(payload.requested_term_days) : "");
+    setRequestBusinessUnit(payload.business_unit ?? "");
+    setRequestCustomerType(payload.customer_type ?? "");
+    setRequestOperationModality(payload.operation_modality ?? "");
+    setContactName(payload.contact_name ?? "");
+    setContactPhone(payload.contact_phone ?? "");
+    setContactEmail(payload.contact_email ?? "");
+  }, [step1MetadataQuery.data]);
 
   const manualStatus = resolveManualStatus({ ...manual, enabled: manualConfigured });
   const ocrStatus = resolveUploadStatus(ocr);
   const agriskStatus = resolveUploadStatus({ enabled: agriskImport.files.length > 0, files: agriskImport.files });
   const cofaceStatus = resolveUploadStatus({ enabled: cofaceImport.files.length > 0, files: cofaceImport.files });
-
-  function reuseCustomer(customerId: number) {
-    const target = customersQuery.data?.find((item) => item.id === customerId);
-    if (!target) return;
-    setExistingCustomerId(target.id);
-    setCustomer((prev) => ({
-      ...prev,
-      companyName: target.company_name,
-      cnpj: formatCnpj(target.document_number),
-      segment: target.segment,
-      region: target.region,
-      relationshipStartDate: target.relationship_start_date ?? ""
-    }));
-  }
 
   function handleCnpjBlur() {
     if (existingCustomerId || normalizedCnpj.length !== 14) return;
@@ -677,6 +758,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   function navigateToStep(targetStep: number) {
     if (targetStep === step) return;
+    if (isGovernanceBlocked && targetStep > 1) {
+      setStepError("Não é possível avançar enquanto existir bloqueio de governança para este CNPJ.");
+      return;
+    }
     if (targetStep < step) {
       setStepError(null);
       setStep(targetStep);
@@ -883,16 +968,20 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   function submit() {
+    if (isGovernanceBlocked) {
+      setStepError("A abertura de nova solicitação está bloqueada para este cliente neste momento.");
+      return;
+    }
     const payload: AnalysisJourneySubmitRequest = {
       existing_customer_id: existingCustomerId,
       customer: {
         company_name: customer.companyName,
         document_number: sanitizeDigits(customer.cnpj),
-        segment: customer.segment,
-        region: customer.region,
-        relationship_start_date: customer.relationshipStartDate || null,
-        address: customer.address,
-        phone: customer.phone
+        segment: "",
+        region: "",
+        relationship_start_date: null,
+        address: "",
+        phone: ""
       },
       analysis: {
         requested_limit: toNumberInput(analysis.requestedLimit),
@@ -982,49 +1071,20 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     triageLookupMutation.mutate(digits);
   }
 
-  function handleTriageSubmit() {
-    const suggested = toNumberInput(triageSuggestedLimit);
-    if (suggested <= 0) {
-      setTriageState("error");
-      setTriageMessage("Informe o limite sugerido para submeter a solicitação.");
-      return;
-    }
-    if (triageResult?.has_recent_analysis && !isEarlyReviewRequest) {
-      setTriageState("error");
-      setTriageMessage("Já existe uma análise recente para este cliente. Use a opção de revisão antecipada.");
-      return;
-    }
-    if (isEarlyReviewRequest && !earlyReviewJustification.trim()) {
-      setTriageState("error");
-      setTriageMessage("Informe a justificativa para solicitar a revisão antecipada.");
-      return;
-    }
-    if (!triageResult?.found_in_portfolio && triageResult?.requires_business_unit_selection && !triageSelectedBusinessUnit) {
-      setTriageState("error");
-      setTriageMessage("Selecione a Unidade de Negócio (BU) para continuar.");
-      return;
-    }
-    const digits = sanitizeDigits(customer.cnpj);
-    triageSubmitMutation.mutate({
-      cnpj: digits,
-      suggested_limit: suggested,
-      source: triageResult?.found_in_portfolio ? "cliente_existente_carteira" : "cliente_novo_consulta_externa",
-      customer_id: triageResult?.customer_data.customer_id ?? null,
-      company_name: triageResult?.customer_data.company_name ?? customer.companyName,
-      business_unit: triageResult?.found_in_portfolio ? (triageResult?.customer_data.business_unit ?? null) : (triageSelectedBusinessUnit || triageResult?.customer_data.business_unit || null),
-      is_early_review_request: isEarlyReviewRequest,
-      early_review_justification: isEarlyReviewRequest ? earlyReviewJustification.trim() : null,
-      previous_analysis_id: triageResult?.last_analysis?.analysis_id ?? null
-    });
-  }
+  const isGovernanceBlocked =
+    governanceStatus?.state === "in_progress" || governanceStatus?.state === "recently_completed";
+  const isGovernanceInProgress = governanceStatus?.state === "in_progress";
+  const isGovernanceRecentlyCompleted = governanceStatus?.state === "recently_completed";
+  const governanceDecisionDateLabel = governanceStatus?.decision_date
+    ? new Date(governanceStatus.decision_date).toLocaleDateString("pt-BR")
+    : null;
+  const governanceNextAllowedDateLabel = governanceStatus?.next_allowed_date
+    ? new Date(governanceStatus.next_allowed_date).toLocaleDateString("pt-BR")
+    : null;
 
-  if (customersQuery.isError) {
-    return <ErrorState title="Não foi possível carregar clientes" description={customersQuery.error.message} onRetry={() => customersQuery.refetch()} />;
-  }
-
-  const canContinue = step === 1 ?normalizedCnpj.length === 14 && Boolean(customer.companyName) : step === 2 ?hasStep2Source : step === 3 ?toNumberInput(analysis.requestedLimit) > 0 : true;
+  const canContinue = step === 1 ?normalizedCnpj.length === 14 && Boolean(customer.companyName) && !isGovernanceBlocked : step === 2 ?hasStep2Source : step === 3 ?toNumberInput(analysis.requestedLimit) > 0 : true;
   const submitBlockingError = validateStep(1) ?? validateStep(2) ?? validateStep(3);
-  const canSubmitJourney = !submitBlockingError && !submitMutation.isPending;
+  const canSubmitJourney = !submitBlockingError && !submitMutation.isPending && !isGovernanceBlocked;
   const guaranteeOriginText = hasCofaceCoverageImported
     ? "COFACE (valor de cobertura)"
     : toNumberInput(analysis.guaranteeLimit) > 0
@@ -1079,6 +1139,142 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const consolidatedSourcesSentCount = consolidatedSources.filter((source) => source.isSent).length;
   const customerReady = normalizedCnpj.length === 14 && Boolean(customer.companyName.trim());
   const requestedLimitReady = toNumberInput(analysis.requestedLimit) > 0;
+  const uploadedStep1Documents = step1DocumentsQuery.data ?? [];
+  const commercialReferences: CommercialReference[] = commercialReferencesQuery.data ?? [];
+  const financialDocumentType: Step1DocumentType = "financial_statements_and_trial_balances";
+  const checklistDocumentDefinitions = step1DocumentDefinitions.filter((definition) => definition.key !== financialDocumentType);
+  const financialDocuments = uploadedStep1Documents.filter((item) => item.document_type === financialDocumentType);
+  const documentsByType = new Map<Step1DocumentType, AnalysisDocumentDto>();
+  for (const item of uploadedStep1Documents) {
+    if (item.document_type === financialDocumentType) continue;
+    if (!documentsByType.has(item.document_type as Step1DocumentType)) {
+      documentsByType.set(item.document_type as Step1DocumentType, item);
+    }
+  }
+  const sentDocumentsCount = checklistDocumentDefinitions.filter((definition) => documentsByType.has(definition.key)).length + (financialDocuments.length > 0 ? 1 : 0);
+  const totalDocumentsCount = step1DocumentDefinitions.length;
+  const documentalRatio = totalDocumentsCount > 0 ? sentDocumentsCount / totalDocumentsCount : 0;
+  const documentalBadge = sentDocumentsCount === totalDocumentsCount ? "Completo" : documentalRatio > 0.5 ? "Parcial" : "Crítico";
+
+  function saveStep1MetadataPatch(patch: Partial<{ requestedLimit: string; termDays: string; businessUnit: string; customerType: string; operationModality: string; contactName: string; contactPhone: string; contactEmail: string }>) {
+    if (!hasStep1Workspace) return;
+    const nextRequested = patch.requestedLimit ?? analysis.requestedLimit;
+    const nextTerm = patch.termDays ?? requestTermDays;
+    const nextBu = patch.businessUnit ?? requestBusinessUnit;
+    const nextType = patch.customerType ?? requestCustomerType;
+    const nextModality = patch.operationModality ?? requestOperationModality;
+    const nextContactName = patch.contactName ?? contactName;
+    const nextContactPhone = patch.contactPhone ?? contactPhone;
+    const nextContactEmail = patch.contactEmail ?? contactEmail;
+    saveStep1MetadataMutation.mutate({
+      requested_limit: toNumberInput(nextRequested),
+      requested_term_days: nextTerm.trim() ? Number(nextTerm) : null,
+      business_unit: nextBu.trim() || null,
+      customer_type: nextType.trim() || null,
+      operation_modality: nextModality.trim() || null,
+      contact_name: nextContactName.trim() || null,
+      contact_phone: nextContactPhone.trim() || null,
+      contact_email: nextContactEmail.trim() || null
+    });
+  }
+
+  function labelDocumentStatus(status: string) {
+    if (status === "aprovado") return "Aprovado";
+    if (status === "rejeitado") return "Rejeitado";
+    if (status === "enviado") return "Enviado";
+    return "Pendente";
+  }
+
+  function formatPhoneInput(value: string) {
+    const digits = value.replace(/\D/g, "").slice(0, 11);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+    if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  }
+
+  function normalizeRequestedLimitDraft(value: string) {
+    return value.replace(/[^\d.,]/g, "");
+  }
+
+  function commitRequestedLimit(value: string) {
+    const numericValue = toNumberInput(value);
+    const formattedValue = formatCurrencyBRL(String(numericValue));
+    setAnalysis((prev) => ({ ...prev, requestedLimit: formattedValue }));
+    saveStep1MetadataPatch({ requestedLimit: formattedValue });
+  }
+
+  async function handleStep1DocumentUpload(documentType: Step1DocumentType, file: File | null | undefined) {
+    if (!file) {
+      setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
+      return;
+    }
+    if (!hasStep1Workspace) {
+      setDocumentUploadFeedback({ type: "error", message: "Não foi possível preparar a solicitação para upload. Consulte o CNPJ novamente." });
+      return;
+    }
+    setDocumentUploadFeedback(null);
+    await uploadStep1DocumentMutation.mutateAsync({ documentType, file });
+  }
+
+  async function handleFinancialDocumentsUpload(files: File[]) {
+    if (files.length === 0) {
+      setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
+      return;
+    }
+    if (!hasStep1Workspace) {
+      setDocumentUploadFeedback({ type: "error", message: "Não foi possível preparar a solicitação para upload. Consulte o CNPJ novamente." });
+      return;
+    }
+    setDocumentUploadFeedback(null);
+    for (const file of files) {
+      await uploadStep1DocumentMutation.mutateAsync({ documentType: financialDocumentType, file });
+    }
+  }
+
+  function isBasicEmailValid(value: string) {
+    const normalized = value.trim();
+    if (!normalized) return true;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
+  }
+
+  function handleAddCommercialReference() {
+    if (!hasStep1Workspace) {
+      setCommercialReferenceForm((prev) => ({ ...prev, error: "Consulte o CNPJ novamente para iniciar a solicitação." }));
+      return;
+    }
+    const name = commercialReferenceForm.name.trim();
+    const phone = commercialReferenceForm.phone.trim();
+    const email = commercialReferenceForm.email.trim();
+
+    if (!name) {
+      setCommercialReferenceForm((prev) => ({ ...prev, error: "Informe o nome da referência." }));
+      return;
+    }
+    if (!phone && !email) {
+      setCommercialReferenceForm((prev) => ({ ...prev, error: "Informe ao menos telefone ou e-mail." }));
+      return;
+    }
+    if (email && !isBasicEmailValid(email)) {
+      setCommercialReferenceForm((prev) => ({ ...prev, error: "Informe um e-mail válido." }));
+      return;
+    }
+
+    createCommercialReferenceMutation.mutate(
+      { name, phone: phone || null, email: email || null },
+      {
+        onSuccess: () => {
+          setCommercialReferenceForm({ name: "", phone: "", email: "", error: "" });
+        },
+        onError: (error) => {
+          setCommercialReferenceForm((prev) => ({
+            ...prev,
+            error: error instanceof Error ? error.message : "Falha ao adicionar referência comercial."
+          }));
+        }
+      }
+    );
+  }
 
   if (isWorkspaceMode && (workspaceDetailQuery.isLoading || workspaceExternalDataQuery.isLoading || !workspaceHydrated)) {
     if (!workspaceError) {
@@ -1145,6 +1341,113 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
       {step === 1 ?(
         <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
+          {triageResult ? (
+            <div className="space-y-3 rounded-[12px] border border-[#D7E1EC] bg-[#FCFDFE] p-4">
+              <p className="text-[13px] font-semibold text-[#102033]">Resultado da Consulta do Cliente</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className={`inline-flex items-center gap-2 rounded-[999px] border px-2.5 py-1 text-[11px] font-medium ${triageResult.found_in_portfolio ? "border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]" : "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]"}`}>
+                  <Building2 className="h-3.5 w-3.5" />
+                  {triageResult.found_in_portfolio ? "Cliente localizado na carteira" : "Cliente localizado em base externa"}
+                </div>
+                <button type="button" onClick={() => setTriageModalOpen(true)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] hover:bg-[#F2F6FB]">
+                  Consultar outro CNPJ
+                </button>
+              </div>
+
+              <div className="overflow-hidden rounded-[12px] border border-[#D7E1EC] bg-white">
+                <div className="grid grid-cols-1 md:grid-cols-2">
+                  <div className="flex flex-col gap-2 border-b border-[#D7E1EC] p-4 md:border-b-0 md:border-r">
+                    <span className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${triageResult.found_in_portfolio ? "bg-[#EAF3DE] text-[#3B6D11]" : "bg-[#FFF7E8] text-[#92400E]"}`}>
+                      <Building2 className="h-3 w-3" />
+                      {triageResult.found_in_portfolio ? "Cliente da carteira" : "Novo cliente"}
+                    </span>
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Razão social</p>
+                      <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.company_name ?? "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">CNPJ</p>
+                      <p className="font-mono text-[13px] font-medium text-[#102033]">{formatCnpj(triageResult.customer_data.cnpj)}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 p-4">
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Grupo econômico</p>
+                      <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.economic_group ?? "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Unidade de negócio / BU</p>
+                      <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.business_unit ?? "-"}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {triageResult.found_in_portfolio ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div className="rounded-[12px] border border-[#E5EAF1] bg-white px-4 py-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Valor em aberto</p>
+                    <p className="text-[16px] font-medium text-[#7A4D10]">{formatCurrencyBRL(String(triageResult.economic_position?.open_amount ?? 0))}</p>
+                  </div>
+                  <div className="rounded-[12px] border border-[#E5EAF1] bg-white px-4 py-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Limite total</p>
+                    <p className="text-[16px] font-medium text-[#102033]">{formatCurrencyBRL(String(triageResult.economic_position?.total_limit ?? 0))}</p>
+                  </div>
+                  <div className="rounded-[12px] border border-[#E5EAF1] bg-white px-4 py-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Disponível</p>
+                    <p className="text-[16px] font-medium text-[#1A6644]">{formatCurrencyBRL(String(triageResult.economic_position?.available_limit ?? 0))}</p>
+                  </div>
+                </div>
+              ) : null}
+
+              {!triageResult.found_in_portfolio && triageResult.requires_business_unit_selection ? (
+                <label className="block text-[12px] text-[#374151]">
+                  Unidade de Negócio / BU<RequiredMark />
+                  <select value={triageSelectedBusinessUnit} onChange={(event) => setTriageSelectedBusinessUnit(event.target.value)} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]">
+                    <option value="">Selecione a BU</option>
+                    {(triageResult.available_business_units ?? []).map((option) => (
+                      <option key={option.id} value={option.name}>{option.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
+          ) : (
+            <div className="rounded-[10px] border border-dashed border-[#D7E1EC] bg-[#F9FBFD] px-4 py-3 text-[12px] text-[#4F647A]">
+              Abra o popup de nova solicitação, informe o CNPJ e clique em Consultar para carregar os dados do cliente nesta etapa.
+            </div>
+          )}
+
+          {triageResult && governanceStatus ? (
+            <div
+              className={`rounded-[10px] border px-4 py-3 text-[12px] ${
+                isGovernanceRecentlyCompleted
+                  ? "border-[#F5B5B5] bg-[#FEF2F2] text-[#B91C1C]"
+                  : isGovernanceInProgress
+                    ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]"
+                    : governanceStatus.state === "completed_expired"
+                      ? "border-[#D7E1EC] bg-white text-[#334155]"
+                      : "border-[#D7E1EC] bg-white text-[#334155]"
+              }`}
+            >
+              <p className="font-medium">{governanceStatus.message}</p>
+              {governanceDecisionDateLabel ? <p className="mt-1">Última decisão em: {governanceDecisionDateLabel}.</p> : null}
+              {governanceNextAllowedDateLabel && isGovernanceRecentlyCompleted ? (
+                <p className="mt-1">Nova análise disponível a partir de: {governanceNextAllowedDateLabel}.</p>
+              ) : null}
+              {isGovernanceInProgress ? (
+                <div className="mt-2">
+                  <Link
+                    href={governanceStatus.analysis_id ? `/analises/monitor?analysisId=${governanceStatus.analysis_id}` : `/analises/monitor?cnpj=${triageResult.customer_data.cnpj}`}
+                    className="inline-flex items-center rounded-[8px] border border-[#93C5FD] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1E40AF] hover:bg-[#EFF6FF]"
+                  >
+                    Abrir andamento da análise
+                  </Link>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <p className="text-[13px] font-medium text-[#111827]">Informe o CNPJ para identificar o cliente</p>
           <label className="block text-[12px] text-[#374151]">
             CNPJ<RequiredMark />
@@ -1152,6 +1455,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               value={customer.cnpj}
               onChange={(event) => {
                 setExistingCustomerId(null);
+                setGovernanceStatus(null);
+                setDraftAnalysisId(null);
+                setDraftCnpj(null);
                 setCustomer((prev) => ({ ...prev, cnpj: formatCnpj(event.target.value) }));
               }}
               onBlur={handleCnpjBlur}
@@ -1163,30 +1469,318 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             {lookupMutation.isPending ?"Consultando dados cadastrais..." : externalLookupMessage ?? "A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente."}
           </p>
 
-          {matchedCustomers.map((item) => (
-            <div key={item.id} className="flex items-center justify-between rounded-[8px] border border-[#bbf7d0] bg-[#f0fdf4] p-3 text-[12px]">
-              <span>{item.company_name}</span>
-              <button type="button" onClick={() => reuseCustomer(item.id)} className="rounded-[6px] bg-[#166534] px-3 py-1 text-[11px] text-white">
-                Reaproveitar cadastro
-              </button>
-            </div>
-          ))}
-
+          <fieldset disabled={isGovernanceBlocked} className="contents">
           <div className="rounded-[8px] border border-[#e2e5eb] bg-[#f9fafb] p-3">
-            <p className="mb-2 text-[12px] font-medium text-[#111827]">Dados do cliente</p>
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="text-[11px] text-[#374151]">
+            <p className="mb-2 text-[12px] font-medium text-[#111827]">Contato do Cliente</p>
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="text-[11px] text-[#374151] md:col-span-3">
                 Razão social<RequiredMark />
-                <input value={customer.companyName} onChange={(event) => setCustomer((prev) => ({ ...prev, companyName: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" />
+                <input
+                  value={customer.companyName}
+                  onChange={(event) => setCustomer((prev) => ({ ...prev, companyName: event.target.value }))}
+                  readOnly={Boolean(triageResult?.found_in_portfolio)}
+                  className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px] read-only:bg-[#F3F4F6] read-only:text-[#6B7280]"
+                />
               </label>
-              <label className="text-[11px] text-[#374151]">Segmento<input value={customer.segment} onChange={(event) => setCustomer((prev) => ({ ...prev, segment: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151]">Região<input value={customer.region} onChange={(event) => setCustomer((prev) => ({ ...prev, region: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151]">Data de relacionamento<input type="date" value={customer.relationshipStartDate} onChange={(event) => setCustomer((prev) => ({ ...prev, relationshipStartDate: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151]">Endereço<input value={customer.address} onChange={(event) => setCustomer((prev) => ({ ...prev, address: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151]">Telefone<input value={customer.phone} onChange={(event) => setCustomer((prev) => ({ ...prev, phone: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151] md:col-span-2">E-mail<input value={customer.email} onChange={(event) => setCustomer((prev) => ({ ...prev, email: event.target.value }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
+              <label className="text-[11px] text-[#374151]">
+                Pessoa de Contato
+                <input
+                  value={contactName}
+                  onChange={(event) => setContactName(event.target.value)}
+                  onBlur={() => saveStep1MetadataPatch({ contactName })}
+                  className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]"
+                />
+              </label>
+              <label className="text-[11px] text-[#374151]">
+                Telefone do Contato
+                <input
+                  value={contactPhone}
+                  onChange={(event) => setContactPhone(formatPhoneInput(event.target.value))}
+                  onBlur={() => saveStep1MetadataPatch({ contactPhone })}
+                  className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]"
+                />
+              </label>
+              <label className="text-[11px] text-[#374151]">
+                E-mail do Contato
+                <input
+                  value={contactEmail}
+                  onChange={(event) => setContactEmail(event.target.value)}
+                  onBlur={() => saveStep1MetadataPatch({ contactEmail })}
+                  className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]"
+                />
+              </label>
             </div>
           </div>
+
+          <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            <p className="text-[13px] font-semibold text-[#102033]">Dados da Solicitação</p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <label className="text-[11px] text-[#374151]">Limite solicitado / sugerido (BRL)
+                <input
+                  value={analysis.requestedLimit}
+                  onFocus={() => {
+                    isRequestedLimitFocusedRef.current = true;
+                    const numericValue = toNumberInput(analysis.requestedLimit);
+                    setAnalysis((prev) => ({
+                      ...prev,
+                      requestedLimit: numericValue > 0 ? String(numericValue).replace(".", ",") : ""
+                    }));
+                  }}
+                  onChange={(event) => {
+                    setAnalysis((prev) => ({ ...prev, requestedLimit: normalizeRequestedLimitDraft(event.target.value) }));
+                  }}
+                  onBlur={(event) => {
+                    isRequestedLimitFocusedRef.current = false;
+                    commitRequestedLimit(event.currentTarget.value);
+                  }}
+                  className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
+                />
+              </label>
+              <label className="text-[11px] text-[#374151]">Prazo solicitado (dias)
+                <input value={requestTermDays} onChange={(event) => { setRequestTermDays(event.target.value.replace(/\D/g, "")); }} onBlur={() => saveStep1MetadataPatch({ termDays: requestTermDays })} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" />
+              </label>
+              <label className="text-[11px] text-[#374151]">Business Unit
+                <select value={requestBusinessUnit} onChange={(event) => { setRequestBusinessUnit(event.target.value); saveStep1MetadataPatch({ businessUnit: event.target.value }); }} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]">
+                  <option value="">Selecione</option>
+                  <option value="Fertilizantes">Fertilizantes</option>
+                  <option value="Aditivos Nacional">Aditivos Nacional</option>
+                  <option value="Aditivos Internacional">Aditivos Internacional</option>
+                </select>
+              </label>
+              <label className="text-[11px] text-[#374151]">Tipo de Cliente
+                <select value={requestCustomerType} onChange={(event) => { setRequestCustomerType(event.target.value); saveStep1MetadataPatch({ customerType: event.target.value }); }} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]">
+                  <option value="">Selecione</option>
+                  <option value="Produtor">Produtor</option>
+                  <option value="Revenda">Revenda</option>
+                  <option value="Indústria">Indústria</option>
+                  <option value="Trading">Trading</option>
+                </select>
+              </label>
+              <label className="text-[11px] text-[#374151] md:col-span-2 xl:col-span-2">Modalidade da Operação
+                <select value={requestOperationModality} onChange={(event) => { setRequestOperationModality(event.target.value); saveStep1MetadataPatch({ operationModality: event.target.value }); }} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]">
+                  <option value="">Selecione</option>
+                  <option value="À vista">À vista</option>
+                  <option value="Prazo safra">Prazo safra</option>
+                  <option value="Barter">Barter</option>
+                  <option value="Antecipado">Antecipado</option>
+                  <option value="Prazo padrão">Prazo padrão</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
+              <p className="text-[13px] font-semibold text-[#102033]">Documentação Inicial</p>
+              <p className="mt-1 text-[11px] text-[#4F647A]">Documentação incompleta gera alerta visual nesta etapa, sem bloqueio automático.</p>
+              {documentUploadFeedback ? (
+                <div className={`mt-3 rounded-[8px] border px-3 py-2 text-[11px] ${documentUploadFeedback.type === "error" ? "border-[#F5B5B5] bg-[#FEF2F2] text-[#B91C1C]" : "border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]"}`}>
+                  {documentUploadFeedback.message}
+                </div>
+              ) : null}
+              <div className="mt-3 grid gap-2">
+                {checklistDocumentDefinitions.map((doc) => {
+                  const item = documentsByType.get(doc.key);
+                  return (
+                    <div key={doc.key} className="flex flex-wrap items-center gap-2 rounded-[10px] border border-[#E5EAF1] bg-[#FAFCFF] p-2.5 text-[11px]">
+                      <div className="min-w-[190px] flex-1 font-medium text-[#102033]">{doc.label}</div>
+                      <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">{labelDocumentStatus(item?.status ?? "pendente")}</span>
+                      <span className="max-w-[190px] truncate text-[#4F647A]">{item?.original_filename ?? "Sem arquivo"}</span>
+                      <span className="text-[#8FA3B4]">{item?.uploaded_at ? new Date(item.uploaded_at).toLocaleDateString("pt-BR") : "-"}</span>
+                      <label className={`rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 py-1 text-[10px] font-medium text-[#102033] hover:bg-[#F2F6FB] ${uploadStep1DocumentMutation.isPending ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                        Upload
+                        <input
+                          type="file"
+                          className="hidden"
+                          disabled={uploadStep1DocumentMutation.isPending}
+                          onChange={async (event) => {
+                            const input = event.currentTarget;
+                            const file = event.target.files?.[0];
+                            await handleStep1DocumentUpload(doc.key, file);
+                            input.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4 rounded-[12px] border border-[#D7E1EC] bg-[#FCFDFE] p-4">
+                <p className="text-[13px] font-semibold text-[#102033]">Demonstrações Financeiras e Balancetes</p>
+                <p className="mt-1 text-[11px] text-[#4F647A]">
+                  Envie balanços, DREs, balancetes atualizados e demais documentos financeiros utilizados na análise.
+                </p>
+
+                <div className="mt-3">
+                  <label className={`inline-flex items-center rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] hover:bg-[#F2F6FB] ${uploadStep1DocumentMutation.isPending ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                    Adicionar arquivos
+                    <input
+                      type="file"
+                      multiple
+                      className="hidden"
+                      disabled={uploadStep1DocumentMutation.isPending}
+                      onChange={async (event) => {
+                        const input = event.currentTarget;
+                        const files = Array.from(event.target.files ?? []);
+                        await handleFinancialDocumentsUpload(files);
+                        input.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {financialDocuments.length === 0 ? (
+                    <div className="rounded-[10px] border border-dashed border-[#D7E1EC] bg-white px-3 py-2 text-[11px] text-[#6B7280]">
+                      Nenhum documento financeiro enviado ainda.
+                    </div>
+                  ) : (
+                    financialDocuments.map((doc) => (
+                      <div key={doc.id} className="flex flex-wrap items-center gap-2 rounded-[10px] border border-[#E5EAF1] bg-white p-2.5 text-[11px]">
+                        <div className="min-w-[220px] flex-1 font-medium text-[#102033]">{doc.original_filename}</div>
+                        <span className="rounded-full border border-[#D7E1EC] bg-[#F7F9FC] px-2 py-0.5 text-[10px] text-[#4F647A]">
+                          Demonstrações Financeiras e Balancetes
+                        </span>
+                        <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">
+                          {labelDocumentStatus(doc.status)}
+                        </span>
+                        <span className="text-[#8FA3B4]">{new Date(doc.uploaded_at).toLocaleDateString("pt-BR")}</span>
+                        <button
+                          type="button"
+                          onClick={() => deleteStep1DocumentMutation.mutate(doc.id)}
+                          className="rounded-[8px] border border-[#F2D4D4] bg-white px-2.5 py-1 text-[10px] font-medium text-[#B91C1C] hover:bg-[#FEF2F2]"
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-[12px] border border-[#D7E1EC] bg-[#FCFDFE] p-4">
+                <p className="text-[13px] font-semibold text-[#102033]">Referências Comerciais</p>
+                <p className="mt-1 text-[11px] text-[#4F647A]">
+                  Informe contatos comerciais que possam contribuir para a avaliação do relacionamento e histórico do cliente.
+                </p>
+
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <label className="text-[11px] text-[#374151]">
+                    Nome da referência
+                    <input
+                      value={commercialReferenceForm.name}
+                      onChange={(event) =>
+                        setCommercialReferenceForm((prev) => ({ ...prev, name: event.target.value, error: "" }))
+                      }
+                      className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
+                      placeholder="Ex.: Fornecedor Alfa"
+                    />
+                  </label>
+                  <label className="text-[11px] text-[#374151]">
+                    Telefone
+                    <input
+                      value={commercialReferenceForm.phone}
+                      onChange={(event) =>
+                        setCommercialReferenceForm((prev) => ({
+                          ...prev,
+                          phone: formatPhoneInput(event.target.value),
+                          error: ""
+                        }))
+                      }
+                      className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
+                      placeholder="(11) 99999-9999"
+                    />
+                  </label>
+                  <label className="text-[11px] text-[#374151]">
+                    E-mail
+                    <input
+                      value={commercialReferenceForm.email}
+                      onChange={(event) =>
+                        setCommercialReferenceForm((prev) => ({ ...prev, email: event.target.value, error: "" }))
+                      }
+                      className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
+                      placeholder="contato@empresa.com"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAddCommercialReference}
+                    disabled={!hasStep1Workspace || createCommercialReferenceMutation.isPending}
+                    className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] hover:bg-[#F2F6FB] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {createCommercialReferenceMutation.isPending ? "Adicionando..." : "Adicionar referência"}
+                  </button>
+                  {commercialReferenceForm.error ? <span className="text-[11px] text-[#B91C1C]">{commercialReferenceForm.error}</span> : null}
+                </div>
+
+                <div className="mt-3">
+                  {commercialReferences.length === 0 ? (
+                    <div className="rounded-[10px] border border-dashed border-[#D7E1EC] bg-white px-3 py-2 text-[11px] text-[#6B7280]">
+                      Nenhuma referência comercial adicionada ainda.
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-[10px] border border-[#E5EAF1] bg-white">
+                      <div className="hidden grid-cols-[1.3fr_1fr_1.3fr_0.8fr_auto] gap-3 border-b border-[#E5EAF1] bg-[#F7F9FC] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.04em] text-[#6B7280] md:grid">
+                        <span>Referência</span>
+                        <span>Telefone</span>
+                        <span>E-mail</span>
+                        <span>Inclusão</span>
+                        <span className="text-right">Ação</span>
+                      </div>
+                      <div className="divide-y divide-[#EEF2F6]">
+                        {commercialReferences.map((reference) => (
+                          <div
+                            key={reference.id}
+                            className="grid gap-2 px-3 py-3 text-[11px] md:grid-cols-[1.3fr_1fr_1.3fr_0.8fr_auto] md:items-center md:gap-3"
+                          >
+                            <div>
+                              <span className="block text-[10px] font-semibold uppercase tracking-[0.04em] text-[#8FA3B4] md:hidden">Referência</span>
+                              <span className="font-medium text-[#102033]">{reference.name}</span>
+                            </div>
+                            <div className="text-[#4F647A]">
+                              <span className="block text-[10px] font-semibold uppercase tracking-[0.04em] text-[#8FA3B4] md:hidden">Telefone</span>
+                              {reference.phone || "-"}
+                            </div>
+                            <div className="break-words text-[#4F647A]">
+                              <span className="block text-[10px] font-semibold uppercase tracking-[0.04em] text-[#8FA3B4] md:hidden">E-mail</span>
+                              {reference.email || "-"}
+                            </div>
+                            <div className="text-[#8FA3B4]">
+                              <span className="block text-[10px] font-semibold uppercase tracking-[0.04em] text-[#8FA3B4] md:hidden">Inclusão</span>
+                              {new Date(reference.created_at).toLocaleDateString("pt-BR")}
+                            </div>
+                            <div className="flex justify-start md:justify-end">
+                              <button
+                                type="button"
+                                onClick={() => deleteCommercialReferenceMutation.mutate(reference.id)}
+                                className="rounded-[8px] border border-[#F2D4D4] bg-white px-2.5 py-1 text-[10px] font-medium text-[#B91C1C] hover:bg-[#FEF2F2]"
+                              >
+                                Remover
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <aside className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
+              <p className="text-[13px] font-semibold text-[#102033]">Status Documental</p>
+              <p className="mt-2 text-[22px] font-semibold text-[#1B3A6B]">{sentDocumentsCount} de {totalDocumentsCount}</p>
+              <p className="text-[11px] text-[#4F647A]">documentos enviados</p>
+              <span className={`mt-3 inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold ${documentalBadge === "Completo" ? "bg-[#EAF7EE] text-[#166534]" : documentalBadge === "Parcial" ? "bg-[#FFF7E8] text-[#92400E]" : "bg-[#FEF2F2] text-[#B91C1C]"}`}>
+                {documentalBadge}
+              </span>
+            </aside>
+          </div>
+          </fieldset>
         </article>
       ) : null}
 
@@ -1985,7 +2579,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
             <p className="text-[13px] font-medium text-[#111827]">Solicita??o atual</p>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <label className="text-[11px] text-[#374151]">Limite solicitado<RequiredMark /><input value={analysis.requestedLimit} onChange={(event) => setAnalysis((prev) => ({ ...prev, requestedLimit: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
+              <label className="text-[11px] text-[#374151]">Limite solicitado<RequiredMark /><input value={analysis.requestedLimit} onFocus={() => { isRequestedLimitFocusedRef.current = true; const numericValue = toNumberInput(analysis.requestedLimit); setAnalysis((prev) => ({ ...prev, requestedLimit: numericValue > 0 ? String(numericValue).replace(".", ",") : "" })); }} onChange={(event) => setAnalysis((prev) => ({ ...prev, requestedLimit: normalizeRequestedLimitDraft(event.target.value) }))} onBlur={(event) => { isRequestedLimitFocusedRef.current = false; commitRequestedLimit(event.currentTarget.value); }} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
               <label className="text-[11px] text-[#374151]">Analista respons?vel
                 <input value={analysis.assignedAnalystName} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
               </label>
@@ -2100,15 +2694,15 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             <div className="space-y-4">
               <article className="rounded-[14px] border border-[#D7E1EC] bg-white p-5">
                 <div className="mb-4 flex items-center justify-between">
-                  <p className="text-[12px] font-semibold text-[#102033]">Dados do cliente</p>
+                  <p className="text-[12px] font-semibold text-[#102033]">Contato do cliente</p>
                   <span className="rounded-[5px] border border-[#B5D4F4] bg-[#EEF3F8] px-2 py-0.5 text-[10px] font-medium text-[#295B9A]">Cadastro verificado</span>
                 </div>
                 <div className="grid grid-cols-1 gap-3 text-[12px] sm:grid-cols-2">
                   <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">Razão social</p><p className="text-[13px] font-medium text-[#102033]">{customer.companyName || "Não informado"}</p></div>
                   <div><p className="text-[10px] uppercase text-[#8FA3B4]">CNPJ</p><p className="text-[13px] font-medium text-[#102033]">{customer.cnpj || "Não informado"}</p></div>
-                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Telefone</p><p className="text-[13px] font-medium text-[#102033]">{customer.phone || "Não informado"}</p></div>
-                  <div className="sm:col-span-2"><p className="text-[10px] uppercase text-[#8FA3B4]">Endereço</p><p className="text-[13px] text-[#4F647A]">{customer.address || "Não informado"}</p></div>
-                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">E-mail</p><p className="text-[13px] text-[#4F647A]">{customer.email || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Pessoa de contato</p><p className="text-[13px] font-medium text-[#102033]">{contactName || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Telefone do contato</p><p className="text-[13px] text-[#4F647A]">{contactPhone || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">E-mail do contato</p><p className="text-[13px] text-[#4F647A]">{contactEmail || "Não informado"}</p></div>
                   <div><p className="text-[10px] uppercase text-[#8FA3B4]">Analista responsável</p><p className="text-[13px] font-medium text-[#102033]">{analysis.assignedAnalystName || "Não informado"}</p></div>
                 </div>
               </article>
@@ -2247,7 +2841,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       </div>
       {triageModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-md [animation:overlayFadeIn_.18s_ease-out]">
-          <div className="flex max-h-[90vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-[20px] border border-[#D7E1EC] bg-white shadow-[0_22px_60px_rgba(2,6,23,0.28)] [animation:modalIn_.2s_ease-out]">
+          <div className="flex max-h-[90vh] w-full max-w-[620px] flex-col overflow-hidden rounded-[20px] border border-[#D7E1EC] bg-white shadow-[0_22px_60px_rgba(2,6,23,0.28)] [animation:modalIn_.2s_ease-out]">
             <div className="flex items-start justify-between border-b border-[#D7E1EC] px-8 pb-6 pt-7">
               <div className="flex items-center gap-3.5">
                 <div className="flex h-[42px] w-[42px] items-center justify-center rounded-[12px] bg-[#1B3A6B]">
@@ -2269,10 +2863,19 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               <div className="flex flex-col gap-1.5">
                 <span className="text-[12px] font-medium uppercase tracking-[0.05em] text-[#4F647A]">CNPJ</span>
                 <div className="flex gap-2.5">
-                  <input value={customer.cnpj} onChange={(event) => setCustomer((prev) => ({ ...prev, cnpj: formatCnpj(event.target.value) }))} onBlur={handleTriageLookup} className="h-11 flex-1 rounded-[10px] border border-[#D7E1EC] px-3.5 font-mono text-[15px] tracking-[0.03em] text-[#102033] focus:border-[#1B3A6B] focus:outline-none" placeholder="00.000.000/0000-00" />
-                  <button type="button" disabled={!canCreateRequest || triageLookupMutation.isPending} onClick={handleTriageLookup} className="inline-flex h-11 items-center gap-2 rounded-[10px] bg-[#1B3A6B] px-5 text-[14px] font-medium text-white transition hover:bg-[#152E56] disabled:opacity-50">
+                  <input value={customer.cnpj} onChange={(event) => {
+                    setTriageState("idle");
+                    setTriageMessage(null);
+                    setTriageResult(null);
+                    setGovernanceStatus(null);
+                    setDraftAnalysisId(null);
+                    setDraftCnpj(null);
+                    setTriageSelectedBusinessUnit("");
+                    setCustomer((prev) => ({ ...prev, cnpj: formatCnpj(event.target.value) }));
+                  }} className="h-11 flex-1 rounded-[10px] border border-[#D7E1EC] px-3.5 font-mono text-[15px] tracking-[0.03em] text-[#102033] focus:border-[#1B3A6B] focus:outline-none" placeholder="00.000.000/0000-00" />
+                  <button type="button" disabled={!canCreateRequest || triageLookupMutation.isPending || createDraftMutation.isPending} onClick={handleTriageLookup} className="inline-flex h-11 items-center gap-2 rounded-[10px] bg-[#1B3A6B] px-5 text-[14px] font-medium text-white transition hover:bg-[#152E56] disabled:opacity-50">
                     <Search className="h-4 w-4" />
-                    {triageLookupMutation.isPending ? "Consultando..." : "Consultar"}
+                    {triageLookupMutation.isPending || createDraftMutation.isPending ? "Preparando..." : "Consultar"}
                   </button>
                 </div>
               </div>
@@ -2281,103 +2884,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 <div className={`flex items-center gap-2 rounded-[10px] border px-3.5 py-2.5 text-[13px] ${triageState === "error" ? "border-[#F5B5B5] bg-[#FEF2F2] text-[#B91C1C]" : "border-[#34A873] bg-[#F0FAF5] text-[#1A6644]"}`}>
                   <span className={`h-[7px] w-[7px] rounded-full ${triageState === "error" ? "bg-[#B91C1C]" : "bg-[#34A873]"}`} />
                   <span>{triageMessage}</span>
-                </div>
-              ) : null}
-
-              {triageResult ? (
-                <div className="overflow-hidden rounded-[12px] border border-[#D7E1EC]">
-                  <div className="grid grid-cols-1 md:grid-cols-2">
-                    <div className="flex flex-col gap-2 border-b border-[#D7E1EC] p-4 md:border-b-0 md:border-r">
-                      <span className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${triageResult.found_in_portfolio ? "bg-[#EAF3DE] text-[#3B6D11]" : "bg-[#FFF7E8] text-[#92400E]"}`}>
-                        <Building2 className="h-3 w-3" />
-                        {triageResult.found_in_portfolio ? "Cliente da carteira" : "Novo cliente"}
-                      </span>
-                      <div>
-                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Razão social</p>
-                        <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.company_name ?? "-"}</p>
-                      </div>
-                      <div>
-                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">CNPJ</p>
-                        <p className="font-mono text-[13px] font-medium text-[#102033]">{formatCnpj(triageResult.customer_data.cnpj)}</p>
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-2 p-4">
-                      <div>
-                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Grupo econômico</p>
-                        <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.economic_group ?? "-"}</p>
-                      </div>
-                      <div>
-                        <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#8FA3B4]">Unidade de negócio / BU</p>
-                        <p className="text-[13px] font-medium text-[#102033]">{triageResult.customer_data.business_unit ?? "-"}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {triageResult?.found_in_portfolio ? (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <div className="rounded-[12px] bg-[#F7F9FC] px-4 py-3">
-                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Valor em aberto</p>
-                    <p className="text-[16px] font-medium text-[#7A4D10]">{formatCurrencyBRL(String(triageResult.economic_position?.open_amount ?? 0))}</p>
-                    <p className="text-[11px] text-[#8FA3B4]">de {formatCurrencyBRL(String(triageResult.economic_position?.total_limit ?? 0))} total</p>
-                  </div>
-                  <div className="rounded-[12px] bg-[#F7F9FC] px-4 py-3">
-                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Limite total</p>
-                    <p className="text-[16px] font-medium text-[#102033]">{formatCurrencyBRL(String(triageResult.economic_position?.total_limit ?? 0))}</p>
-                    <p className="text-[11px] text-[#8FA3B4]">aprovado</p>
-                  </div>
-                  <div className="rounded-[12px] bg-[#F7F9FC] px-4 py-3">
-                    <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-[#4F647A]">Disponível</p>
-                    <p className="text-[16px] font-medium text-[#1A6644]">{formatCurrencyBRL(String(triageResult.economic_position?.available_limit ?? 0))}</p>
-                    <p className="text-[11px] text-[#8FA3B4]">
-                      {(() => {
-                        const total = Number(triageResult.economic_position?.total_limit ?? 0);
-                        const available = Number(triageResult.economic_position?.available_limit ?? 0);
-                        if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(available)) return "limite livre";
-                        return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format((available / total) * 100)}% livre`;
-                      })()}
-                    </p>
-                  </div>
-                </div>
-              ) : null}
-
-              {(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found") ? (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {!triageResult?.found_in_portfolio && triageResult?.requires_business_unit_selection ? (
-                    <label className="block text-[12px] text-[#374151]">Unidade de Negócio / BU<RequiredMark />
-                      <select value={triageSelectedBusinessUnit} onChange={(event) => setTriageSelectedBusinessUnit(event.target.value)} className="mt-1 h-10 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]">
-                        <option value="">Selecione a BU</option>
-                        {(triageResult?.available_business_units ?? []).map((option) => (
-                          <option key={option.id} value={option.name}>{option.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-
-                  {triageResult?.has_recent_analysis ? (
-                    <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F8FAFC] p-3">
-                      <p className="text-[12px] font-medium text-[#102033]">Solicitar revisão antecipada</p>
-                      <p className="mb-2 text-[11px] text-[#4F647A]">Use esta opção apenas quando houver fato novo ou necessidade comercial relevante para antecipar a revisão do limite.</p>
-                      <button type="button" onClick={() => setIsEarlyReviewRequest(true)} className="rounded-[8px] border border-[#1E3A8A] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1E3A8A]">
-                        Solicitar revisão antecipada
-                      </button>
-                      {isEarlyReviewRequest ? (
-                        <label className="mt-3 block text-[12px] text-[#374151]">Justificativa da revisão antecipada<RequiredMark />
-                          <textarea value={earlyReviewJustification} onChange={(event) => setEarlyReviewJustification(event.target.value)} rows={3} className="mt-1 w-full rounded-[8px] border border-[#D7E1EC] px-3 py-2 text-[12px]" />
-                        </label>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  <div className="flex items-center gap-1.5 md:col-span-2">
-                    <span className="text-[12px] font-medium uppercase tracking-[0.05em] text-[#4F647A]">Limite sugerido</span>
-                    <span className="text-[11px] font-medium text-[#C84B2F]">obrigatório</span>
-                  </div>
-                  <div className="relative md:col-span-2">
-                    <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[14px] font-medium text-[#4F647A]">R$</span>
-                    <input value={triageSuggestedLimit} onChange={(event) => setTriageSuggestedLimit(formatCurrencyInputBRL(event.target.value))} className="h-12 w-full rounded-[10px] border border-[#D7E1EC] pl-11 pr-3 font-mono text-[18px] text-[#102033]" placeholder="0,00" />
-                  </div>
                 </div>
               ) : null}
             </div>
@@ -2394,9 +2900,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </span>
               <div className="flex gap-2.5">
                 <Link href="/analises" className="inline-flex h-[42px] items-center rounded-[10px] border border-[#D7E1EC] px-5 text-[14px] font-medium text-[#4F647A] hover:bg-[#F7F9FC]">Cancelar</Link>
-                <button type="button" disabled={!canCreateRequest || !(triageState === "found_existing_customer" || triageState === "new_customer_external_data" || triageState === "recent_analysis_found")} onClick={handleTriageSubmit} className="inline-flex h-[42px] items-center gap-2 rounded-[10px] bg-[#27AE6E] px-5 text-[14px] font-medium text-white transition hover:bg-[#219A5F] disabled:opacity-50">
-                  {triageSubmitMutation.isPending ? "Enviando..." : "Submeter para análise"}
-                  <ArrowRight className="h-4 w-4" />
+                <button type="button" onClick={() => setTriageModalOpen(false)} className="inline-flex h-[42px] items-center gap-2 rounded-[10px] bg-[#1B3A6B] px-5 text-[14px] font-medium text-white transition hover:bg-[#152E56]">
+                  Fechar
                 </button>
               </div>
             </div>
@@ -2422,6 +2927,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     </section>
   );
 }
+
 
 
 

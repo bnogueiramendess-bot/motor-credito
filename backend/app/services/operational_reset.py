@@ -13,6 +13,9 @@ RESET_DOMAIN_REGISTRY: dict[str, dict[str, object]] = {
         "label": "Analises de Credito",
         "description": "Limpa workflow, scores e eventos da analise.",
         "tables": [
+            "analysis_commercial_references",
+            "analysis_documents",
+            "analysis_request_metadata",
             "decision_events",
             "score_results",
             "credit_analyses",
@@ -92,6 +95,9 @@ TOTAL_OPERATIONAL_DOMAINS: tuple[str, ...] = (
 # Global child-to-parent ordering. Selected domain tables are projected onto this order.
 GLOBAL_DELETE_ORDER: tuple[str, ...] = (
     "external_data_files",
+    "analysis_commercial_references",
+    "analysis_documents",
+    "analysis_request_metadata",
     "decision_events",
     "score_results",
     "external_data_entries",

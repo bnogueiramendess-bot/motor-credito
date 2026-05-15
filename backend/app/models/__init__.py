@@ -34,6 +34,9 @@ from app.models.user_business_unit_scope import UserBusinessUnitScope
 from app.models.user_invitation import UserInvitation
 from app.models.refresh_token import RefreshToken
 from app.models.audit_log import AuditLog
+from app.models.analysis_request_metadata import AnalysisRequestMetadata
+from app.models.analysis_document import AnalysisDocument
+from app.models.analysis_commercial_reference import AnalysisCommercialReference
 
 __all__ = [
     "ActorType",
@@ -69,4 +72,7 @@ __all__ = [
     "UserInvitation",
     "RefreshToken",
     "AuditLog",
+    "AnalysisRequestMetadata",
+    "AnalysisDocument",
+    "AnalysisCommercialReference",
 ]

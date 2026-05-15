@@ -263,6 +263,36 @@ export type CreditAnalysisTriageResponse = {
   message?: string | null;
 };
 
+export type ExistingAnalysisCheckState = "in_progress" | "recently_completed" | "completed_expired" | "none";
+
+export type CreditAnalysisExistingCheckResponse = {
+  cnpj: string;
+  has_existing_analysis: boolean;
+  state: ExistingAnalysisCheckState;
+  analysis_id: number | null;
+  analysis_status: string | null;
+  decision_date: string | null;
+  days_since_decision: number | null;
+  next_allowed_date: string | null;
+  message: string | null;
+};
+
+export type CreditAnalysisDraftCreateRequest = {
+  cnpj: string;
+  customer_name: string | null;
+  economic_group: string | null;
+  business_unit: string | null;
+  source: "portfolio" | "external" | "manual";
+};
+
+export type CreditAnalysisDraftCreateResponse = {
+  analysis_id: number;
+  customer_id: number;
+  status: string;
+  cnpj: string;
+  reused_existing: boolean;
+};
+
 export type CreditAnalysisTriageSubmitRequest = {
   cnpj: string;
   suggested_limit: number;
@@ -280,4 +310,57 @@ export type CreditAnalysisTriageSubmitResponse = {
   customer_id: number;
   status: string;
   reused_existing?: boolean;
+};
+
+export type AnalysisRequestMetadataDto = {
+  credit_analysis_id: number;
+  requested_limit: number | null;
+  requested_term_days: number | null;
+  business_unit: string | null;
+  customer_type: string | null;
+  operation_modality: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
+  updated_at: string | null;
+};
+
+export type AnalysisRequestMetadataUpsertRequest = {
+  requested_limit: number | null;
+  requested_term_days: number | null;
+  business_unit: string | null;
+  customer_type: string | null;
+  operation_modality: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
+};
+
+export type AnalysisDocumentDto = {
+  id: number;
+  credit_analysis_id: number;
+  document_type: string;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  status: "pendente" | "enviado" | "aprovado" | "rejeitado" | string;
+  uploaded_by_user_id: number | null;
+  uploaded_at: string;
+};
+
+export type CommercialReference = {
+  id: number;
+  credit_analysis_id: number;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  created_by_user_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateCommercialReferencePayload = {
+  name: string;
+  phone: string | null;
+  email: string | null;
 };
