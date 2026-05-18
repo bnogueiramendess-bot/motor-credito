@@ -244,8 +244,11 @@ export type CreditAnalysisTriageResponse = {
   };
   economic_position?: {
     open_amount: number | string;
+    overdue_amount?: number | string | null;
+    not_due_amount?: number | string | null;
     total_limit: number | string;
     available_limit: number | string;
+    base_date?: string | null;
   } | null;
   external_lookup_data?: Record<string, unknown> | null;
   has_recent_analysis?: boolean;
@@ -346,6 +349,7 @@ export type AnalysisDocumentDto = {
   status: "pendente" | "enviado" | "aprovado" | "rejeitado" | string;
   uploaded_by_user_id: number | null;
   uploaded_at: string;
+  download_url?: string | null;
 };
 
 export type CommercialReference = {

@@ -40,5 +40,4 @@ REQUIRED_FIELDS: tuple[str, ...] = (
     "coface.decision_amount",
     "coface.decision_currency",
     "coface.decision_effective_date",
-    "coface.notation",
 )

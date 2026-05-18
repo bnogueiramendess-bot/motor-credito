@@ -123,6 +123,17 @@ export type CreditAnalysisDto = {
   decision_memory_json: Record<string, unknown> | null;
   decision_calculated_at: string | null;
   assigned_analyst_name: string | null;
+  current_owner_user_id?: number | null;
+  current_owner_role?: string | null;
+  last_owner_user_id?: number | null;
+  last_owner_role?: string | null;
+  assigned_at?: string | null;
+  claimed_at?: string | null;
+  analysis_started_at?: string | null;
+  current_stage_started_at?: string | null;
+  submitted_for_approval_at?: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
   created_at: string;
   completed_at: string | null;
 };

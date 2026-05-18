@@ -2,8 +2,10 @@ from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import Numeric, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -80,6 +82,7 @@ from app.services.bu_scope import (
 )
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
+logger = logging.getLogger(__name__)
 
 LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
     "credit.request.create": ("credit.request.create",),
@@ -124,9 +127,30 @@ def _list_user_business_units(db: Session, current: CurrentUser) -> list[Busines
     return list(db.scalars(query.order_by(BusinessUnit.name.asc(), BusinessUnit.id.asc())).all())
 
 
+def _derive_open_amount(open_amount: Decimal | None, overdue_amount: Decimal | None, not_due_amount: Decimal | None) -> Decimal:
+    normalized_open = open_amount or Decimal("0")
+    normalized_overdue = overdue_amount or Decimal("0")
+    normalized_not_due = not_due_amount or Decimal("0")
+    if normalized_open == Decimal("0") and (normalized_overdue != Decimal("0") or normalized_not_due != Decimal("0")):
+        return normalized_overdue + normalized_not_due
+    return normalized_open
+
+
 def _build_customer_from_portfolio_row(cnpj: str, row: tuple) -> dict:
-    customer_name, bu_name, group_name, open_amount, approved_credit, exposure = row
-    open_value = open_amount or Decimal("0")
+    customer_name, bu_name, group_name, open_amount, overdue_amount, not_due_amount, approved_credit, base_date = row
+    open_value = _derive_open_amount(open_amount, overdue_amount, not_due_amount)
+    overdue_value = overdue_amount or Decimal("0")
+    not_due_value = not_due_amount or Decimal("0")
+    composition_delta = abs(open_value - (overdue_value + not_due_value))
+    if composition_delta > Decimal("1.00"):
+        logger.warning(
+            "Triagem carteira com composição inconsistente para CNPJ %s: open=%s overdue=%s not_due=%s delta=%s",
+            cnpj,
+            open_value,
+            overdue_value,
+            not_due_value,
+            composition_delta,
+        )
     total_limit = approved_credit or Decimal("0")
     # Regra da triagem: Limite Disponivel = Limite Total - Valor em Aberto.
     available = total_limit - open_value
@@ -136,8 +160,11 @@ def _build_customer_from_portfolio_row(cnpj: str, row: tuple) -> dict:
         "business_unit": bu_name,
         "economic_group": group_name,
         "open_amount": open_value,
+        "overdue_amount": overdue_value,
+        "not_due_amount": not_due_value,
         "total_limit": total_limit,
         "available_limit": available,
+        "base_date": base_date,
     }
 
 
@@ -150,7 +177,26 @@ def _latest_valid_import_run_id(db: Session) -> int | None:
     )
 
 
-def _build_portfolio_row_for_cnpj(db: Session, *, normalized_cnpj: str) -> tuple:
+def _parse_overdue_days(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(normalized)
+    except Exception:
+        return None
+
+
+def _build_portfolio_row_for_cnpj(
+    db: Session,
+    *,
+    normalized_cnpj: str,
+    allowed_bu_names: set[str] | None = None,
+    has_all_scope: bool = True,
+) -> tuple:
     latest_run_id = db.scalar(
         select(ArAgingDataTotalRow.import_run_id)
         .join(ArAgingImportRun, ArAgingImportRun.id == ArAgingDataTotalRow.import_run_id)
@@ -162,21 +208,50 @@ def _build_portfolio_row_for_cnpj(db: Session, *, normalized_cnpj: str) -> tuple
         .limit(1)
     )
     if latest_run_id is None:
-        latest_run_id = _latest_valid_import_run_id(db)
-    if latest_run_id is None:
-        return (None, None, None, Decimal("0"), Decimal("0"), Decimal("0"))
+        return (None, None, None, Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), None)
 
-    data_total_agg = db.execute(
-        select(
-            func.max(ArAgingDataTotalRow.customer_name),
-            func.max(ArAgingDataTotalRow.bu_normalized),
-            func.max(ArAgingDataTotalRow.economic_group_normalized),
-            func.coalesce(func.sum(ArAgingDataTotalRow.open_amount), 0),
-        ).where(
-            ArAgingDataTotalRow.import_run_id == latest_run_id,
-            ArAgingDataTotalRow.cnpj_normalized == normalized_cnpj,
-        )
-    ).one()
+    rows_query = select(
+        ArAgingDataTotalRow.customer_name,
+        ArAgingDataTotalRow.bu_normalized,
+        ArAgingDataTotalRow.economic_group_normalized,
+        ArAgingDataTotalRow.open_amount,
+        ArAgingDataTotalRow.raw_payload_json,
+    ).where(
+        ArAgingDataTotalRow.import_run_id == latest_run_id,
+        ArAgingDataTotalRow.cnpj_normalized == normalized_cnpj,
+    )
+    if not has_all_scope and allowed_bu_names:
+        rows_query = rows_query.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    elif not has_all_scope and not allowed_bu_names:
+        return (None, None, None, Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), None)
+    scoped_rows = db.execute(rows_query).all()
+    if not scoped_rows:
+        return (None, None, None, Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), None)
+
+    customer_name: str | None = None
+    bu_name: str | None = None
+    group_name: str | None = None
+    open_total = Decimal("0")
+    overdue_total = Decimal("0")
+    not_due_total = Decimal("0")
+    for row_customer, row_bu, row_group, row_open, row_payload in scoped_rows:
+        if customer_name is None and row_customer:
+            customer_name = row_customer
+        if bu_name is None and row_bu:
+            bu_name = row_bu
+        if group_name is None and row_group:
+            group_name = row_group
+
+        open_value = row_open or Decimal("0")
+        open_total += open_value
+
+        raw_payload = row_payload if isinstance(row_payload, dict) else {}
+        overdue_days = _parse_overdue_days(raw_payload.get("col_17"))
+        # Regra oficial Data Total: dias vencidos <= 0 eh a vencer; > 0 eh vencido.
+        if overdue_days is not None and overdue_days > 0:
+            overdue_total += open_value
+        else:
+            not_due_total += open_value
 
     group_keys_subquery = (
         select(ArAgingDataTotalRow.economic_group_normalized)
@@ -185,22 +260,27 @@ def _build_portfolio_row_for_cnpj(db: Session, *, normalized_cnpj: str) -> tuple
             ArAgingDataTotalRow.cnpj_normalized == normalized_cnpj,
             ArAgingDataTotalRow.economic_group_normalized.is_not(None),
         )
-        .distinct()
     )
+    if not has_all_scope and allowed_bu_names:
+        group_keys_subquery = group_keys_subquery.where(ArAgingDataTotalRow.bu_normalized.in_(allowed_bu_names))
+    group_keys_subquery = group_keys_subquery.distinct()
     approved_credit_total = db.scalar(
         select(func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0)).where(
             ArAgingGroupConsolidatedRow.import_run_id == latest_run_id,
             ArAgingGroupConsolidatedRow.economic_group_normalized.in_(group_keys_subquery),
         )
     )
+    base_date = db.scalar(select(ArAgingImportRun.base_date).where(ArAgingImportRun.id == latest_run_id))
 
     return (
-        data_total_agg[0],
-        data_total_agg[1],
-        data_total_agg[2],
-        data_total_agg[3] or Decimal("0"),
+        customer_name,
+        bu_name,
+        group_name,
+        open_total,
+        overdue_total,
+        not_due_total,
         approved_credit_total or Decimal("0"),
-        Decimal("0"),
+        base_date,
     )
 
 
@@ -372,6 +452,19 @@ def _analysis_documents_storage_root() -> Path:
     return root
 
 
+def _is_step1_editable(analysis: CreditAnalysis) -> bool:
+    return analysis.analysis_status == AnalysisStatus.CREATED and analysis.current_owner_role == "comercial_solicitante"
+
+
+def _enforce_step1_editable_or_409(analysis: CreditAnalysis) -> None:
+    if _is_step1_editable(analysis):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Esta solicitação já foi submetida para análise e não pode ser alterada nesta etapa.",
+    )
+
+
 def _normalize_document_status(value: str | None) -> str:
     normalized = (value or "").strip().lower()
     if normalized in {"pendente", "enviado", "aprovado", "rejeitado"}:
@@ -393,8 +486,14 @@ def triage_credit_analysis(
     current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
 ) -> CreditAnalysisTriageResponse:
     normalized_cnpj = _normalize_cnpj_or_400(payload.cnpj)
+    bu_context = resolve_business_unit_context(db, current, None)
 
-    portfolio_row = _build_portfolio_row_for_cnpj(db, normalized_cnpj=normalized_cnpj)
+    portfolio_row = _build_portfolio_row_for_cnpj(
+        db,
+        normalized_cnpj=normalized_cnpj,
+        allowed_bu_names=bu_context.effective_bu_names,
+        has_all_scope=bu_context.has_all_scope,
+    )
 
     resolved_bu_name = _resolve_scoped_bu_name(db, current, portfolio_row[1])
     found_in_portfolio = bool(portfolio_row[0] and resolved_bu_name)
@@ -429,8 +528,11 @@ def triage_credit_analysis(
             },
             economic_position={
                 "open_amount": mapped["open_amount"],
+                "overdue_amount": mapped["overdue_amount"],
+                "not_due_amount": mapped["not_due_amount"],
                 "total_limit": mapped["total_limit"],
                 "available_limit": mapped["available_limit"],
+                "base_date": mapped["base_date"],
             },
             has_recent_analysis=has_recent_analysis,
             last_analysis=last_analysis_payload,
@@ -955,6 +1057,7 @@ def upsert_analysis_request_metadata(
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
     _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_editable_or_409(analysis)
 
     metadata = db.scalar(select(AnalysisRequestMetadata).where(AnalysisRequestMetadata.credit_analysis_id == analysis_id))
     if metadata is None:
@@ -1022,6 +1125,7 @@ async def upload_analysis_document(
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
     _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_editable_or_409(analysis)
 
     original_name = (file.filename or "").strip()
     if not original_name:
@@ -1066,6 +1170,7 @@ def delete_analysis_document(
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
     _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_editable_or_409(analysis)
 
     document = db.get(AnalysisDocument, document_id)
     if document is None or document.credit_analysis_id != analysis_id:
@@ -1078,6 +1183,41 @@ def delete_analysis_document(
     db.delete(document)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{analysis_id}/documents/{document_id}/download")
+def download_analysis_document(
+    analysis_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    document = db.get(AnalysisDocument, document_id)
+    if document is None or document.credit_analysis_id != analysis_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+
+    storage_path = _analysis_documents_storage_root() / str(analysis_id) / document.stored_filename
+    if not storage_path.exists() or not storage_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Arquivo indisponivel no momento.",
+        )
+
+    media_type = (document.mime_type or "application/octet-stream").strip() or "application/octet-stream"
+    is_inline = media_type == "application/pdf" or media_type.startswith("image/")
+    content_disposition = "inline" if is_inline else "attachment"
+
+    return FileResponse(
+        path=storage_path,
+        media_type=media_type,
+        filename=document.original_filename,
+        content_disposition_type=content_disposition,
+    )
 
 
 @router.get("/{analysis_id}/commercial-references", response_model=list[AnalysisCommercialReferenceRead])
@@ -1114,6 +1254,7 @@ def create_analysis_commercial_reference(
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
     _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_editable_or_409(analysis)
 
     name = payload.name.strip()
     phone = payload.phone.strip() if payload.phone else None
@@ -1153,6 +1294,7 @@ def delete_analysis_commercial_reference(
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
     _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_editable_or_409(analysis)
 
     reference = db.get(AnalysisCommercialReference, reference_id)
     if reference is None or reference.credit_analysis_id != analysis_id:

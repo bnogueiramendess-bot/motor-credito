@@ -188,7 +188,15 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             bu_ids = set(db.scalars(select(UserBusinessUnitScope.business_unit_id).where(UserBusinessUnitScope.user_id == user.id)).all())
             return CurrentUser(user=user, permissions=permissions, bu_ids=bu_ids)
 
-    def _create_portfolio_row(self, *, cnpj: str, bu_name: str, customer_name: str = "Cliente Carteira") -> None:
+    def _create_portfolio_row(
+        self,
+        *,
+        cnpj: str,
+        bu_name: str,
+        customer_name: str = "Cliente Carteira",
+        open_amount: Decimal = Decimal("30000.00"),
+        aging_days: str = "15",
+    ) -> None:
         with SessionLocal() as db:
             run = ArAgingImportRun(
                 base_date=date(2026, 5, 9),
@@ -213,11 +221,11 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
                 bu_normalized=bu_name,
                 economic_group_raw="GRUPO TESTE",
                 economic_group_normalized="GRUPO TESTE",
-                open_amount=Decimal("30000.00"),
+                open_amount=open_amount,
                 due_amount=Decimal("20000.00"),
                 overdue_amount=Decimal("10000.00"),
                 aging_label="31-60",
-                raw_payload_json={"approved_credit_amount": "90000.00", "exposure_amount": "35000.00"},
+                raw_payload_json={"approved_credit_amount": "90000.00", "exposure_amount": "35000.00", "col_17": aging_days},
             )
             db.add(row)
             db.flush()
@@ -231,6 +239,67 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
                 overdue_amount=Decimal("10000.00"),
                 not_due_amount=Decimal("20000.00"),
                 aging_amount=Decimal("30000.00"),
+                insured_limit_amount=Decimal("100000.00"),
+                approved_credit_amount=Decimal("90000.00"),
+                exposure_amount=Decimal("35000.00"),
+                raw_payload_json={},
+            )
+            db.add(consolidated)
+            db.flush()
+            self.created_ids["consolidated_rows"].append(consolidated.id)
+            db.commit()
+
+    def _create_portfolio_rows_same_run(
+        self,
+        *,
+        cnpj: str,
+        bu_name: str,
+        rows: list[tuple[Decimal, str]],
+        customer_name: str = "Cliente Carteira",
+    ) -> None:
+        with SessionLocal() as db:
+            run = ArAgingImportRun(
+                base_date=date(2026, 5, 9),
+                status="valid",
+                original_filename="teste_triagem_lote.xlsx",
+                mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_size=1024,
+                warnings_json=[],
+                totals_json={},
+            )
+            db.add(run)
+            db.flush()
+            self.created_ids["runs"].append(run.id)
+
+            for index, (amount, aging_days) in enumerate(rows, start=1):
+                row = ArAgingDataTotalRow(
+                    import_run_id=run.id,
+                    row_number=index,
+                    cnpj_raw=cnpj,
+                    cnpj_normalized=cnpj,
+                    customer_name=customer_name,
+                    bu_raw=bu_name,
+                    bu_normalized=bu_name,
+                    economic_group_raw="GRUPO TESTE",
+                    economic_group_normalized="GRUPO TESTE",
+                    open_amount=amount,
+                    due_amount=None,
+                    overdue_amount=None,
+                    aging_label=None,
+                    raw_payload_json={"approved_credit_amount": "90000.00", "exposure_amount": "35000.00", "col_17": aging_days},
+                )
+                db.add(row)
+                db.flush()
+                self.created_ids["rows"].append(row.id)
+
+            consolidated = ArAgingGroupConsolidatedRow(
+                import_run_id=run.id,
+                row_number=1,
+                economic_group_raw="GRUPO TESTE",
+                economic_group_normalized="GRUPO TESTE",
+                overdue_amount=Decimal("0"),
+                not_due_amount=Decimal("0"),
+                aging_amount=Decimal("0"),
                 insured_limit_amount=Decimal("100000.00"),
                 approved_credit_amount=Decimal("90000.00"),
                 exposure_amount=Decimal("35000.00"),
@@ -378,6 +447,30 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 triage_credit_analysis(CreditAnalysisTriageRequest(cnpj="11111111111111"), db=db, current=current)
         self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_triage_economic_position_classifies_by_data_total_days(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        self._create_portfolio_rows_same_run(
+            cnpj="87249561000107",
+            bu_name="Fertilizer",
+            rows=[
+                (Decimal("100.00"), "-5"),
+                (Decimal("200.00"), "10"),
+                (Decimal("300.00"), "0"),
+            ],
+        )
+        user_id = self._create_user(
+            email="triage.days@indorama.com",
+            permission_keys=["credit.request.create"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+        with SessionLocal() as db:
+            response = triage_credit_analysis(CreditAnalysisTriageRequest(cnpj="87.249.561/0001-07"), db=db, current=current)
+        assert response.economic_position is not None
+        self.assertEqual(str(response.economic_position.open_amount), "600.00")
+        self.assertEqual(str(response.economic_position.overdue_amount), "200.00")
+        self.assertEqual(str(response.economic_position.not_due_amount), "400.00")
         self.assertIn("CNPJ valido", ctx.exception.detail)
 
     def test_submit_existing_customer_creates_analysis_event_and_audit(self) -> None:

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -79,8 +79,11 @@ class CreditAnalysisTriageCustomerData(BaseModel):
 
 class CreditAnalysisTriageEconomicPosition(BaseModel):
     open_amount: Decimal
+    overdue_amount: Decimal | None = None
+    not_due_amount: Decimal | None = None
     total_limit: Decimal
     available_limit: Decimal
+    base_date: date | None = None
 
 
 class CreditAnalysisTriageResponse(BaseModel):

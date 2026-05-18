@@ -1,4 +1,4 @@
-import { apiClient } from "@/shared/lib/http/http-client";
+﻿import { apiClient } from "@/shared/lib/http/http-client";
 
 import {
   AgriskReportReadResponse,
@@ -71,10 +71,11 @@ export async function uploadAnalysisDocument(analysisId: number, documentType: s
     body: data
   });
   if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { detail?: string };
     if (response.status === 400) {
-      throw new Error("Arquivo inválido ou ausente.");
+      throw new Error(payload.detail ?? "Arquivo inválido ou ausente.");
     }
-    throw new Error("Não foi possível enviar o arquivo. Tente novamente.");
+    throw new Error(payload.detail ?? "Não foi possível enviar o arquivo. Tente novamente.");
   }
   return (await response.json()) as AnalysisDocumentDto;
 }
@@ -87,6 +88,17 @@ export async function deleteAnalysisDocument(analysisId: number, documentId: num
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
     throw new Error(payload.detail ?? "Falha ao remover documento.");
   }
+}
+
+export async function downloadAnalysisDocument(analysisId: number, documentId: number) {
+  const response = await fetch(`/api/credit-analyses/${analysisId}/documents/${documentId}/download`, {
+    method: "GET"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(payload.detail ?? "Arquivo indisponÃ­vel no momento.");
+  }
+  return response;
 }
 
 export async function listCommercialReferences(analysisId: number) {
@@ -106,7 +118,7 @@ export async function deleteCommercialReference(analysisId: number, referenceId:
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(payload.detail ?? "Falha ao remover referência comercial.");
+    throw new Error(payload.detail ?? "Falha ao remover referÃªncia comercial.");
   }
 }
 
@@ -116,13 +128,13 @@ function toBase64(file: File) {
     reader.onload = () => {
       const result = reader.result;
       if (typeof result !== "string") {
-        reject(new Error("Não foi possível ler o arquivo em base64."));
+        reject(new Error("NÃ£o foi possÃ­vel ler o arquivo em base64."));
         return;
       }
       const commaIndex = result.indexOf(",");
       resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
     };
-    reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
+    reader.onerror = () => reject(new Error("NÃ£o foi possÃ­vel ler o arquivo."));
     reader.readAsDataURL(file);
   });
 }
@@ -143,7 +155,7 @@ export async function readAgriskReport(file: File, customerDocumentNumber: strin
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(payload.detail ?? "Falha ao processar o relatório AgRisk.");
+    throw new Error(payload.detail ?? "Falha ao processar o relatÃ³rio AgRisk.");
   }
 
   return (await response.json()) as AgriskReportReadResponse;
@@ -165,8 +177,10 @@ export async function readCofaceReport(file: File, customerDocumentNumber: strin
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(payload.detail ?? "Falha ao processar o relatório COFACE.");
+    throw new Error(payload.detail ?? "Falha ao processar o relatÃ³rio COFACE.");
   }
 
   return (await response.json()) as CofaceReportReadResponse;
 }
+
+

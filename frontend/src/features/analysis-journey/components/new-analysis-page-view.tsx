@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Building2, Check, ChevronLeft, ChevronRight, CreditCard, Info, Lock, Search, Upload, X } from "lucide-react";
+import { AlertTriangle, Building2, Check, ChevronLeft, ChevronRight, CircleAlert, CreditCard, FileText, FolderOpen, Info, Lock, Search, ShieldCheck, Upload, X } from "lucide-react";
 
-import { checkExistingCreditAnalysis, createCommercialReference, createCreditAnalysisDraft, deleteAnalysisDocument, deleteCommercialReference, getAnalysisRequestMetadata, listAnalysisDocuments, listCommercialReferences, lookupExternalCnpj, readAgriskReport, readCofaceReport, saveAnalysisRequestMetadata, submitAnalysisJourney, triageCreditRequest, uploadAnalysisDocument } from "@/features/analysis-journey/api/analysis-journey.api";
+import { checkExistingCreditAnalysis, createCommercialReference, createCreditAnalysisDraft, deleteAnalysisDocument, deleteCommercialReference, downloadAnalysisDocument, getAnalysisRequestMetadata, listAnalysisDocuments, listCommercialReferences, lookupExternalCnpj, readAgriskReport, readCofaceReport, saveAnalysisRequestMetadata, submitAnalysisJourney, triageCreditRequest, uploadAnalysisDocument } from "@/features/analysis-journey/api/analysis-journey.api";
 import { AgriskImportStatus, AgriskReportReadResponse, AnalysisDocumentDto, AnalysisJourneySubmitRequest, CofaceReportReadResponse, CommercialReference, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
 import { getCreditAnalysisDetail } from "@/features/credit-analyses/api/credit-analyses.api";
 import { getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
@@ -20,8 +20,9 @@ import {
 import { formatCurrencyBRL, resolveManualStatus, resolveUploadStatus } from "@/features/analysis-journey/utils/view-models";
 import { ErrorState } from "@/shared/components/states/error-state";
 import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
+import { getCurrentUserDisplayName } from "@/shared/lib/auth/current-user";
 
-const steps = ["Identificação do cliente", "Informações para análise", "Dados da solicitação", "Revisão e envio"];
+const steps = ["Identificação do cliente", "Coleta de informações", "Mesa de análise", "Revisão e envio"];
 type ImportSource = "agrisk" | "coface";
 type ImportStatus = "empty" | AgriskImportStatus | "success";
 
@@ -55,6 +56,42 @@ type Step1DocumentType =
   | "autorizacao_bacen"
   | "outros_documentos"
   | "financial_statements_and_trial_balances";
+
+type TechnicalInsight = {
+  kind: "positivo" | "alerta" | "critico";
+  text: string;
+};
+
+type PolicyPillarStatus = "Forte" | "Adequado" | "Atenção" | "Crítico" | "Informações insuficientes";
+
+type PolicyPillar = {
+  key: string;
+  title: string;
+  weight: number;
+  score: number | null;
+  status: PolicyPillarStatus;
+  summary: string;
+  sources: string[];
+  criteria: string[];
+  explanation: string;
+};
+
+type InstitutionalScoreBreakdownItem = {
+  key: string;
+  title: string;
+  weight: number;
+  score: number;
+  weighted: number;
+};
+
+type InternalEconomicPosition = {
+  open_amount: number | string;
+  total_limit: number | string;
+  available_limit: number | string;
+  overdue_amount?: number | string | null;
+  not_due_amount?: number | string | null;
+  base_date?: string | null;
+};
 
 function RequiredMark() {
   return <span className="ml-1 text-[#dc2626]">*</span>;
@@ -223,6 +260,68 @@ function formatCnpjForDisplay(value: string | null | undefined) {
   return formatCnpj(digits);
 }
 
+function formatCurrencyBRLNoCents(value: number) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  }).format(Math.round(value));
+}
+
+function toNullableNumeric(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const normalized = raw.includes(",") ? raw.replace(/\./g, "").replace(",", ".") : raw;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function pickNumberFromSources(
+  sources: Array<Record<string, unknown> | null | undefined>,
+  keys: string[]
+): number | null {
+  for (const source of sources) {
+    if (!source) continue;
+    for (const key of keys) {
+      const parsed = toNullableNumeric(source[key]);
+      if (parsed !== null) return parsed;
+    }
+  }
+  return null;
+}
+
+function toScoreBand(score: number | null) {
+  if (score === null || Number.isNaN(score)) return "Informações insuficientes";
+  if (score >= 9) return "AA";
+  if (score >= 8) return "A";
+  if (score >= 6) return "B";
+  if (score >= 4) return "C";
+  if (score >= 1) return "D";
+  return "Informações insuficientes";
+}
+
+function toScoreBandClass(scoreBand: string) {
+  if (scoreBand === "AA") return "bg-[#EAF7EE] text-[#166534] border-[#BBF7D0]";
+  if (scoreBand === "A") return "bg-[#EDF6FF] text-[#1D4ED8] border-[#BFDBFE]";
+  if (scoreBand === "B") return "bg-[#FFF7E8] text-[#92400E] border-[#FDE68A]";
+  if (scoreBand === "C") return "bg-[#FEF3C7] text-[#92400E] border-[#FCD34D]";
+  if (scoreBand === "D") return "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]";
+  return "bg-[#EEF3F8] text-[#4F647A] border-[#D7E1EC]";
+}
+
+function policyPillarStatusClass(status: PolicyPillarStatus) {
+  if (status === "Forte") return "bg-[#EAF7EE] text-[#166534] border-[#BBF7D0]";
+  if (status === "Adequado") return "bg-[#EDF6FF] text-[#1D4ED8] border-[#BFDBFE]";
+  if (status === "Atenção") return "bg-[#FFF7E8] text-[#92400E] border-[#FDE68A]";
+  if (status === "Crítico") return "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]";
+  return "bg-[#EEF3F8] text-[#4F647A] border-[#D7E1EC]";
+}
+
 const agriskWarningLabelMap: Record<string, string> = {
   INFORMACOES_BASICAS: "Informações básicas",
   INFORMACOES_CADASTRAIS: "Informações cadastrais",
@@ -254,6 +353,21 @@ const step1DocumentDefinitions: Array<{ key: Step1DocumentType; label: string }>
   { key: "autorizacao_bacen", label: "Autorização consulta BACEN" },
   { key: "outros_documentos", label: "Outros documentos" },
   { key: "financial_statements_and_trial_balances", label: "Demonstrações Financeiras e Balancetes" }
+];
+
+const documentLibraryGroups: Array<{ title: string; types: Step1DocumentType[] }> = [
+  {
+    title: "Documentação Inicial",
+    types: ["ficha_cadastral", "contrato_social", "ecd_ecf", "autorizacao_bacen"]
+  },
+  {
+    title: "Demonstrações Financeiras e Balancetes",
+    types: ["financial_statements_and_trial_balances"]
+  },
+  {
+    title: "Outros documentos",
+    types: ["outros_documentos"]
+  }
 ];
 
 type NewAnalysisPageViewProps = {
@@ -305,7 +419,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     effectiveAvgTermDays: ""
   });
   const [manualConfigured, setManualConfigured] = useState(false);
-  const [ocr, setOcr] = useState<OcrState>(buildDefaultOcrState());
+  const [ocr] = useState<OcrState>(buildDefaultOcrState());
   const [agriskImport, setAgriskImport] = useState<ImportState>(buildDefaultImportState());
   const [cofaceImport, setCofaceImport] = useState<ImportState>(buildDefaultImportState());
 
@@ -329,7 +443,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   });
 
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const ocrInputRef = useRef<HTMLInputElement | null>(null);
   const [triageModalOpen, setTriageModalOpen] = useState(!isWorkspaceMode);
   const [triageState, setTriageState] = useState<"idle" | "loading" | "found_existing_customer" | "new_customer_external_data" | "recent_analysis_found" | "error" | "submitting" | "submitted">("idle");
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
@@ -353,6 +466,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     error: ""
   });
   const [documentUploadFeedback, setDocumentUploadFeedback] = useState<{ type: "error" | "success"; message: string } | null>(null);
+  const [documentLibraryFeedback, setDocumentLibraryFeedback] = useState<string | null>(null);
+  const [expandedPolicyPillarKey, setExpandedPolicyPillarKey] = useState<string | null>(null);
+  const [isInstitutionalScoreExpanded, setIsInstitutionalScoreExpanded] = useState(false);
+  const [isPreliminaryRecommendationExpanded, setIsPreliminaryRecommendationExpanded] = useState(false);
+  const [isTechnicalDetailsOpen, setIsTechnicalDetailsOpen] = useState(false);
+  const [isDocumentLibraryOpen, setIsDocumentLibraryOpen] = useState(false);
+  const [workspaceInternalPosition, setWorkspaceInternalPosition] = useState<InternalEconomicPosition | null>(null);
 
   const workspaceDetailQuery = useQuery({
     queryKey: ["workspace-analysis-detail", analysisId],
@@ -419,6 +539,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const internalOperationalStatus = workspaceDetailQuery.data?.analysis?.analysis_status ?? null;
   const internalBehaviorLabel = triageResult?.has_recent_analysis ? "cliente com histórico recente" : "histórico estável";
   const hasInternalFinancialSnapshot = hasInternalFinancialData;
+  const analysisLifecycleStatus = workspaceDetailQuery.data?.analysis?.analysis_status ?? null;
+  const analysisOwnerRole = workspaceDetailQuery.data?.analysis?.current_owner_role ?? null;
+  const isStep1ReadOnly =
+    isWorkspaceMode &&
+    Boolean(
+      analysisLifecycleStatus &&
+      (analysisLifecycleStatus !== "created" || analysisOwnerRole !== "comercial_solicitante")
+    );
 
   useEffect(() => {
     if (!hasAgriskImported) return;
@@ -555,10 +683,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       assignedAnalystName: analysisRecord.assigned_analyst_name ?? prev.assignedAnalystName,
       comment: analysisRecord.analyst_notes ?? prev.comment,
     }));
-    setAnalysis((prev) => ({
-      ...prev,
-      requestedLimit: toCurrency(analysisRecord.suggested_limit)
-    }));
     setManualPanel((prev) => ({
       ...prev,
       scoreValue: detail.score?.final_score ?? prev.scoreValue,
@@ -683,8 +807,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       await step1DocumentsQuery.refetch();
       setDocumentUploadFeedback({ type: "success", message: "Arquivo enviado com sucesso." });
     },
-    onError: () => {
-      setDocumentUploadFeedback({ type: "error", message: "Não foi possível enviar o arquivo. Tente novamente." });
+    onError: (error) => {
+      setDocumentUploadFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "Não foi possível enviar o arquivo. Tente novamente."
+      });
     }
   });
   const deleteStep1DocumentMutation = useMutation({
@@ -692,8 +819,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     onSuccess: async () => {
       await step1DocumentsQuery.refetch();
     },
-    onError: () => {
-      setDocumentUploadFeedback({ type: "error", message: "Não foi possível remover o arquivo. Tente novamente." });
+    onError: (error) => {
+      setDocumentUploadFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "Não foi possível remover o arquivo. Tente novamente."
+      });
     }
   });
   const createCommercialReferenceMutation = useMutation({
@@ -701,12 +831,24 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       createCommercialReference(activeAnalysisId as number, payload),
     onSuccess: () => {
       commercialReferencesQuery.refetch();
+    },
+    onError: (error) => {
+      setCommercialReferenceForm((prev) => ({
+        ...prev,
+        error: error instanceof Error ? error.message : "Falha ao adicionar referência comercial."
+      }));
     }
   });
   const deleteCommercialReferenceMutation = useMutation({
     mutationFn: (referenceId: number) => deleteCommercialReference(activeAnalysisId as number, referenceId),
     onSuccess: () => {
       commercialReferencesQuery.refetch();
+    },
+    onError: (error) => {
+      setCommercialReferenceForm((prev) => ({
+        ...prev,
+        error: error instanceof Error ? error.message : "Falha ao remover referência comercial."
+      }));
     }
   });
 
@@ -726,7 +868,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }, [step1MetadataQuery.data]);
 
   const manualStatus = resolveManualStatus({ ...manual, enabled: manualConfigured });
-  const ocrStatus = resolveUploadStatus(ocr);
   const agriskStatus = resolveUploadStatus({ enabled: agriskImport.files.length > 0, files: agriskImport.files });
   const cofaceStatus = resolveUploadStatus({ enabled: cofaceImport.files.length > 0, files: cofaceImport.files });
 
@@ -917,43 +1058,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }
   }
 
-  function handleOcrFileChange(files: FileList | null) {
-    const parsed = mapFiles(files);
-    const selected = parsed[0] ?? null;
-    if (!selected) return;
-
-    if (selected.file_size > 10 * 1024 * 1024) {
-      setOcr((prev) => ({
-        ...prev,
-        enabled: false,
-        files: [],
-        status: "error",
-        importedAt: null,
-        errorMessage: "Falha na leitura do arquivo (tamanho excedido)."
-      }));
-      return;
-    }
-
-    const importedAt = new Date().toISOString();
-    setOcr((prev) => ({
-      ...prev,
-      enabled: true,
-      files: [selected],
-      status: "processing",
-      importedAt,
-      errorMessage: null
-    }));
-    setTimeout(() => {
-      setOcr((prev) => (prev.files.length > 0 ?{ ...prev, status: "success" } : prev));
-    }, 900);
-  }
-
-  function removeOcrImport() {
-    const shouldRemove = window.confirm("Deseja remover o demonstrativo importado?");
-    if (!shouldRemove) return;
-    setOcr(buildDefaultOcrState());
-  }
-
   function saveManualDrawer() {
     const scoreIsFromImportedAgrisk = hasAgriskImported && manualPanel.scoreSource === "Agrisk";
     const cofaceIsFromImportedReport = hasCofaceImported;
@@ -1120,14 +1224,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       detail: manualStatus === "preenchido" ?"Dados manuais preenchidos" : "Não preenchido"
     },
     {
-      key: "ocr",
-      name: "OCR DRE / Balanço",
-      isSent: ocr.files.length > 0,
-      detail: ocr.files.length > 0
-        ?`${ocr.files[0]?.original_filename ?? "Demonstrativo anexado"} · ${formatFileSize(ocr.files[0]?.file_size ?? 0)} · enviado`
-        : "Nenhum demonstrativo anexado"
-    },
-    {
       key: "internal",
       name: "Dados internos da carteira",
       isSent: hasInternalDataAvailable,
@@ -1155,9 +1251,492 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const totalDocumentsCount = step1DocumentDefinitions.length;
   const documentalRatio = totalDocumentsCount > 0 ? sentDocumentsCount / totalDocumentsCount : 0;
   const documentalBadge = sentDocumentsCount === totalDocumentsCount ? "Completo" : documentalRatio > 0.5 ? "Parcial" : "Crítico";
+  const step1LibraryDocuments = uploadedStep1Documents
+    .filter((item) =>
+      step1DocumentDefinitions.some(
+        (definition) => definition.key === (item.document_type as Step1DocumentType)
+      )
+    )
+    .sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime());
+  const hasStep1LibraryDocuments = step1LibraryDocuments.length > 0;
+  const documentLibraryPreview = step1LibraryDocuments.slice(0, 5);
+  const hasMoreLibraryDocuments = step1LibraryDocuments.length > documentLibraryPreview.length;
+  const technicalRequestedLimit = toNumberInput(analysis.requestedLimit);
+  const technicalExposureValue = internalExposure > 0 ? internalExposure : technicalRequestedLimit;
+  const technicalCoverageValue = cofaceDecisionAmount;
+  const technicalOverdueValue = internalOverdue;
+  const technicalAgriskScoreRaw = agriskImport.agriskReadPayload?.credit?.score ?? null;
+  const technicalAgriskScore = technicalAgriskScoreRaw !== null ? Number(technicalAgriskScoreRaw) : null;
+  const technicalStatusLabel = !hasAgriskImported && !hasCofaceImported && !hasStep1LibraryDocuments
+    ? "Aguardando documentos"
+    : hasAgriskImported && hasCofaceImported && hasStep1LibraryDocuments && hasInternalFinancialSnapshot
+      ? "Completa"
+      : (hasAgriskImported || hasCofaceImported || hasStep1LibraryDocuments || hasInternalFinancialSnapshot)
+        ? "Análise parcial"
+        : "Em análise";
+  const technicalStatusClass = technicalStatusLabel === "Completa"
+    ? "bg-[#EAF7EE] text-[#166534]"
+    : technicalStatusLabel === "Aguardando documentos"
+      ? "bg-[#FFF7E8] text-[#92400E]"
+      : "bg-[#EEF3F8] text-[#4F647A]";
+  const workspaceTriageSubmission =
+    workspaceDetailQuery.data?.analysis?.decision_memory_json &&
+    typeof workspaceDetailQuery.data.analysis.decision_memory_json === "object" &&
+    workspaceDetailQuery.data.analysis.decision_memory_json.triage_submission &&
+    typeof workspaceDetailQuery.data.analysis.decision_memory_json.triage_submission === "object"
+      ? (workspaceDetailQuery.data.analysis.decision_memory_json.triage_submission as Record<string, unknown>)
+      : null;
+  const workspaceRequesterFromTriageSubmission =
+    (typeof workspaceTriageSubmission?.requester_name === "string" && workspaceTriageSubmission.requester_name.trim()) ||
+    (typeof workspaceTriageSubmission?.created_by === "string" && workspaceTriageSubmission.created_by.trim()) ||
+    (typeof workspaceTriageSubmission?.requested_by === "string" && workspaceTriageSubmission.requested_by.trim()) ||
+    (typeof workspaceTriageSubmission?.solicitante === "string" && workspaceTriageSubmission.solicitante.trim()) ||
+    (typeof workspaceTriageSubmission?.actor_user === "string" && workspaceTriageSubmission.actor_user.trim()) ||
+    null;
+  const requesterFromEvents =
+    workspaceDetailQuery.data?.events?.find((event) => event.event_type === "analysis_created" && event.actor_name?.trim())?.actor_name?.trim() ??
+    null;
+  const currentUserName = getCurrentUserDisplayName();
+  const requesterLabel =
+    requesterFromEvents ??
+    workspaceRequesterFromTriageSubmission ??
+    (currentUserName !== "Usuário não identificado" ? currentUserName : null) ??
+    "Não informado";
+  const isPortfolioCustomer =
+    Boolean(triageResult?.found_in_portfolio) ||
+    (typeof workspaceTriageSubmission?.source === "string" && workspaceTriageSubmission.source === "portfolio") ||
+    (typeof workspaceTriageSubmission?.found_in_portfolio === "boolean" && workspaceTriageSubmission.found_in_portfolio);
+  const triageEconomicPositionSource =
+    triageResult?.economic_position && typeof triageResult.economic_position === "object"
+      ? (triageResult.economic_position as unknown as Record<string, unknown>)
+      : null;
+  const workspaceInternalPositionSource =
+    workspaceInternalPosition && typeof workspaceInternalPosition === "object"
+      ? (workspaceInternalPosition as unknown as Record<string, unknown>)
+      : null;
+  const workspacePortfolioDataSource =
+    workspaceTriageSubmission?.portfolio_data && typeof workspaceTriageSubmission.portfolio_data === "object"
+      ? (workspaceTriageSubmission.portfolio_data as Record<string, unknown>)
+      : null;
+  const internalValueSources: Array<Record<string, unknown> | null> = [
+    triageEconomicPositionSource,
+    workspaceInternalPositionSource,
+    workspacePortfolioDataSource
+  ];
+  const mappedInternalOpenAmount = pickNumberFromSources(internalValueSources, [
+    "open_amount",
+    "total_open_amount"
+  ]);
+  const mappedInternalTotalLimit = pickNumberFromSources(internalValueSources, [
+    "total_limit",
+    "credit_limit"
+  ]);
+  const mappedInternalAvailableLimit = pickNumberFromSources(internalValueSources, [
+    "available_limit",
+    "limit_available"
+  ]);
+  const strongCompositionSources: Array<Record<string, unknown> | null> = [
+    triageEconomicPositionSource,
+    workspaceInternalPositionSource,
+    workspacePortfolioDataSource
+  ];
+  const mappedInternalOverdue = pickNumberFromSources(strongCompositionSources, ["overdue_amount"]);
+  const mappedInternalNotDue = pickNumberFromSources(strongCompositionSources, ["not_due_amount"]);
+  const hasAnyMappedFinancialValue =
+    mappedInternalOpenAmount !== null || mappedInternalTotalLimit !== null || mappedInternalAvailableLimit !== null;
+  const hasInternalPositionData = hasAnyMappedFinancialValue;
+  const internalLastUpdatedLabel =
+    (typeof triageEconomicPositionSource?.base_date === "string" && triageEconomicPositionSource.base_date.trim()
+      ? new Date(triageEconomicPositionSource.base_date).toLocaleDateString("pt-BR")
+      : null) ||
+    (typeof workspaceInternalPositionSource?.base_date === "string" && workspaceInternalPositionSource.base_date.trim()
+      ? new Date(workspaceInternalPositionSource.base_date).toLocaleDateString("pt-BR")
+      : null);
+
+  useEffect(() => {
+    if (mappedInternalOpenAmount === null || mappedInternalOverdue === null || mappedInternalNotDue === null) return;
+    const delta = Math.abs(mappedInternalOpenAmount - (mappedInternalOverdue + mappedInternalNotDue));
+    if (delta > 1) {
+      console.warn("Inconsistência na composição da carteira interna", {
+        open_amount: mappedInternalOpenAmount,
+        overdue_amount: mappedInternalOverdue,
+        not_due_amount: mappedInternalNotDue,
+        delta
+      });
+    }
+  }, [mappedInternalNotDue, mappedInternalOpenAmount, mappedInternalOverdue]);
+
+  useEffect(() => {
+    const isWorkspaceEligible = isWorkspaceMode && workspaceHydrated;
+    const digits = sanitizeDigits(customer.cnpj);
+    const hasValidCnpj = digits.length === 14;
+    const portfolioByWorkspace =
+      (typeof workspaceTriageSubmission?.source === "string" && workspaceTriageSubmission.source === "portfolio") ||
+      (typeof workspaceTriageSubmission?.found_in_portfolio === "boolean" && workspaceTriageSubmission.found_in_portfolio);
+    const hasPortfolioFlag = Boolean(triageResult?.found_in_portfolio) || portfolioByWorkspace;
+    const hasEconomicPosition = Boolean(triageResult?.economic_position || workspaceInternalPosition);
+
+    if (!isWorkspaceEligible || !hasValidCnpj || !hasPortfolioFlag || hasEconomicPosition) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await triageCreditRequest({ cnpj: digits });
+        if (cancelled || !response.found_in_portfolio || !response.economic_position) return;
+
+        setWorkspaceInternalPosition({
+          open_amount: response.economic_position.open_amount,
+          total_limit: response.economic_position.total_limit,
+          available_limit: response.economic_position.available_limit,
+          overdue_amount: response.economic_position.overdue_amount ?? null,
+          not_due_amount: response.economic_position.not_due_amount ?? null,
+          base_date: response.economic_position.base_date ?? null
+        });
+        setTriageResult((prev) =>
+          prev
+            ? { ...prev, found_in_portfolio: response.found_in_portfolio, customer_data: response.customer_data, economic_position: response.economic_position }
+            : response
+        );
+      } catch {
+        // Keep silent: card will continue using available fallbacks.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [customer.cnpj, isWorkspaceMode, triageResult, workspaceHydrated, workspaceInternalPosition, workspaceTriageSubmission]);
+
+  const economicGroupLabel =
+    triageResult?.customer_data.economic_group?.trim() ||
+    (typeof workspaceTriageSubmission?.economic_group === "string" ? workspaceTriageSubmission.economic_group.trim() : "") ||
+    "Não informado";
+  const technicalCards = [
+    {
+      key: "exposure",
+      label: "Exposição Atual",
+      value: technicalExposureValue > 0 ? formatCurrencyBRL(String(technicalExposureValue)) : "Não disponível",
+      subtitle: "Carteira interna"
+    },
+    {
+      key: "coverage",
+      label: "Cobertura Segurada",
+      value: technicalCoverageValue !== null ? formatCurrencyBRL(String(technicalCoverageValue)) : "Não disponível",
+      subtitle: "COFACE"
+    },
+    {
+      key: "relationship",
+      label: "Histórico de Relacionamento",
+      value: hasInternalFinancialSnapshot ? "Histórico positivo" : "Informações insuficientes",
+      subtitle: "Base interna"
+    },
+    {
+      key: "agrisk",
+      label: "Risco Agrisk",
+      value: technicalAgriskScore !== null ? `${technicalAgriskScore.toFixed(0)}/10` : "Informações insuficientes",
+      subtitle: "Agrisk"
+    },
+    {
+      key: "docs",
+      label: "Documentação",
+      value: `${step1LibraryDocuments.length} anexado${step1LibraryDocuments.length === 1 ? "" : "s"}`,
+      subtitle: "Etapa de identificação"
+    },
+    {
+      key: "overdue",
+      label: "Overdue Interno",
+      value: technicalOverdueValue !== null ? formatCurrencyBRL(String(technicalOverdueValue)) : "Não disponível",
+      subtitle: "Carteira"
+    }
+  ];
+  const hasFinancialDocuments = financialDocuments.length > 0;
+  const financialPillarScore = !hasFinancialDocuments
+    ? null
+    : technicalAgriskScore !== null
+      ? Math.max(0, Math.min(10, technicalAgriskScore))
+      : 6;
+  const financialPillarStatus: PolicyPillarStatus = !hasFinancialDocuments
+    ? "Informações insuficientes"
+    : financialPillarScore !== null && financialPillarScore >= 8
+      ? "Forte"
+      : financialPillarScore !== null && financialPillarScore >= 6
+        ? "Adequado"
+        : financialPillarScore !== null && financialPillarScore >= 4
+          ? "Atenção"
+          : "Crítico";
+  const guaranteePillarScore = technicalCoverageValue === null || technicalRequestedLimit <= 0
+    ? null
+    : Math.max(0, Math.min(10, (technicalCoverageValue / technicalRequestedLimit) * 10));
+  const guaranteePillarStatus: PolicyPillarStatus = technicalCoverageValue === null
+    ? "Crítico"
+    : technicalRequestedLimit <= 0
+      ? "Informações insuficientes"
+      : technicalCoverageValue >= technicalRequestedLimit
+        ? "Forte"
+        : technicalCoverageValue >= technicalRequestedLimit * 0.6
+          ? "Atenção"
+          : "Crítico";
+  const marketPillarScore = technicalAgriskScore !== null ? Math.max(0, Math.min(10, technicalAgriskScore)) : null;
+  const marketPillarStatus: PolicyPillarStatus = technicalAgriskScore === null
+    ? "Informações insuficientes"
+    : technicalAgriskScore >= 8
+      ? "Forte"
+      : technicalAgriskScore >= 6
+        ? "Adequado"
+        : technicalAgriskScore >= 4
+          ? "Atenção"
+          : "Crítico";
+  const paymentPillarScore = technicalOverdueValue === null
+    ? null
+    : technicalOverdueValue <= 0
+      ? 9
+      : technicalRequestedLimit > 0
+        ? Math.max(0, Math.min(10, 10 - (technicalOverdueValue / technicalRequestedLimit) * 10))
+        : 4;
+  const paymentPillarStatus: PolicyPillarStatus = technicalOverdueValue === null
+    ? "Informações insuficientes"
+    : technicalOverdueValue <= 0
+      ? "Forte"
+      : technicalRequestedLimit > 0 && technicalOverdueValue <= technicalRequestedLimit * 0.25
+        ? "Atenção"
+        : "Crítico";
+  const relationshipPillarScore = hasInternalFinancialSnapshot ? (technicalOverdueValue !== null && technicalOverdueValue > 0 ? 5 : 8) : hasInternalDataAvailable ? 6 : null;
+  const relationshipPillarStatus: PolicyPillarStatus = hasInternalFinancialSnapshot
+    ? technicalOverdueValue !== null && technicalOverdueValue > 0
+      ? "Atenção"
+      : "Forte"
+    : hasInternalDataAvailable
+      ? "Adequado"
+      : "Informações insuficientes";
+  const policyPillars: PolicyPillar[] = [
+    {
+      key: "financial_liquidity",
+      title: "Estabilidade Financeira e Liquidez",
+      weight: 55,
+      score: financialPillarScore,
+      status: financialPillarStatus,
+      summary: !hasFinancialDocuments
+        ? "Documentação financeira incompleta para leitura técnica."
+        : financialPillarStatus === "Forte"
+          ? "Documentação financeira completa e score consistente."
+          : financialPillarStatus === "Adequado"
+            ? "Liquidez em faixa adequada para continuidade da análise."
+            : financialPillarStatus === "Atenção"
+              ? "Sinais de atenção na liquidez e consistência financeira."
+              : "Indicativos críticos de risco financeiro preliminar.",
+      sources: ["Documentação financeira", "Agrisk"],
+      criteria: [
+        hasFinancialDocuments ? "Presença de documentação financeira" : "Ausência de documentação financeira",
+        technicalAgriskScore !== null ? `Score preliminar Agrisk: ${technicalAgriskScore.toFixed(0)}/10` : "Score Agrisk indisponível"
+      ],
+      explanation: !hasFinancialDocuments
+        ? "A avaliação foi limitada pela ausência de documentação financeira."
+        : "A avaliação considerou documentação financeira e consistência do score preliminar disponível."
+    },
+    {
+      key: "guarantees",
+      title: "Garantias / Seguro de Crédito",
+      weight: 20,
+      score: guaranteePillarScore,
+      status: guaranteePillarStatus,
+      summary: technicalCoverageValue === null
+        ? "Sem cobertura COFACE disponível no momento."
+        : guaranteePillarStatus === "Forte"
+          ? "Cobertura segurada compatível com o limite solicitado."
+          : guaranteePillarStatus === "Atenção"
+            ? "Cobertura parcial frente ao limite solicitado."
+            : "Cobertura insuficiente para suportar o limite solicitado.",
+      sources: ["COFACE", "Mesa de análise"],
+      criteria: [
+        technicalRequestedLimit > 0 ? `Limite solicitado: ${formatCurrencyBRL(String(technicalRequestedLimit))}` : "Limite solicitado não disponível",
+        technicalCoverageValue !== null ? `Cobertura segurada: ${formatCurrencyBRL(String(technicalCoverageValue))}` : "Cobertura segurada não disponível",
+        technicalCoverageValue === null || technicalRequestedLimit <= 0
+          ? "Critério aplicado: dados insuficientes para comparação completa"
+          : technicalCoverageValue < technicalRequestedLimit
+            ? "Critério aplicado: cobertura < limite solicitado"
+            : "Critério aplicado: cobertura >= limite solicitado"
+      ],
+      explanation: technicalCoverageValue === null
+        ? "Sem dados de cobertura segurada para suportar o limite solicitado."
+        : "A avaliação comparou diretamente cobertura segurada e limite solicitado."
+    },
+    {
+      key: "market_conditions",
+      title: "Condições de Mercado",
+      weight: 15,
+      score: marketPillarScore,
+      status: marketPillarStatus,
+      summary: marketPillarStatus === "Informações insuficientes"
+        ? "Dados de mercado ainda insuficientes para interpretação."
+        : marketPillarStatus === "Forte"
+          ? "Indicadores externos sugerem condição favorável."
+          : marketPillarStatus === "Adequado"
+            ? "Condições externas em faixa estável."
+            : marketPillarStatus === "Atenção"
+              ? "Condições externas exigem atenção adicional."
+              : "Condições externas sinalizam risco elevado.",
+      sources: ["Agrisk", "Dados externos existentes"],
+      criteria: [
+        technicalAgriskScore !== null ? `Score Agrisk considerado: ${technicalAgriskScore.toFixed(0)}/10` : "Sem score Agrisk disponível",
+        "Sinais externos consolidados disponíveis na análise"
+      ],
+      explanation: technicalAgriskScore === null
+        ? "A avaliação não pôde ser concluída por falta de indicador externo principal."
+        : "A avaliação considerou os sinais externos já estruturados no relatório."
+    },
+    {
+      key: "payment_history",
+      title: "Histórico de Pagamento",
+      weight: 5,
+      score: paymentPillarScore,
+      status: paymentPillarStatus,
+      summary: paymentPillarStatus === "Informações insuficientes"
+        ? "Sem base interna suficiente para histórico de pagamento."
+        : paymentPillarStatus === "Forte"
+          ? "Sem overdue relevante identificado na carteira."
+          : paymentPillarStatus === "Atenção"
+            ? "Overdue presente em nível de atenção."
+            : "Overdue relevante impactando o histórico de pagamento.",
+      sources: ["Carteira interna"],
+      criteria: [
+        technicalOverdueValue !== null ? `Overdue interno: ${formatCurrencyBRL(String(technicalOverdueValue))}` : "Overdue interno não disponível",
+        technicalExposureValue > 0 ? `Exposição atual: ${formatCurrencyBRL(String(technicalExposureValue))}` : "Exposição atual não disponível"
+      ],
+      explanation: technicalOverdueValue === null
+        ? "Sem dados suficientes para medir comportamento de pagamento."
+        : "A avaliação comparou overdue e exposição atual para leitura preliminar de risco."
+    },
+    {
+      key: "relationship_history",
+      title: "Histórico de Relacionamento",
+      weight: 5,
+      score: relationshipPillarScore,
+      status: relationshipPillarStatus,
+      summary: relationshipPillarStatus === "Informações insuficientes"
+        ? "Relacionamento interno ainda sem histórico consolidado."
+        : relationshipPillarStatus === "Forte"
+          ? "Cliente com relacionamento recorrente e estável."
+          : relationshipPillarStatus === "Adequado"
+            ? "Cliente em fase de consolidação de relacionamento."
+            : "Relacionamento com pontos de atenção no comportamento recente.",
+      sources: ["Histórico interno", "Carteira interna"],
+      criteria: [
+        hasInternalDataAvailable ? "Cliente localizado na base interna" : "Cliente sem histórico interno consolidado",
+        hasInternalFinancialSnapshot ? "Há movimentação interna disponível" : "Movimentação interna não disponível"
+      ],
+      explanation: hasInternalDataAvailable
+        ? "A avaliação considerou recorrência e qualidade do relacionamento interno existente."
+        : "A avaliação ficou limitada por ausência de histórico interno."
+    }
+  ];
+  const institutionalScoreBreakdown: InstitutionalScoreBreakdownItem[] = policyPillars
+    .filter((pillar): pillar is PolicyPillar & { score: number } => pillar.score !== null)
+    .map((pillar) => ({
+      key: pillar.key,
+      title: pillar.title,
+      weight: pillar.weight,
+      score: pillar.score,
+      weighted: pillar.score * (pillar.weight / 100)
+    }));
+  const hasInstitutionalScoreData = institutionalScoreBreakdown.length === policyPillars.length;
+  const institutionalScore = hasInstitutionalScoreData
+    ? institutionalScoreBreakdown.reduce((acc, item) => acc + item.weighted, 0)
+    : null;
+  const institutionalRiskBand = institutionalScore !== null ? toScoreBand(institutionalScore) : "Informações insuficientes";
+  const institutionalScoreSummary =
+    institutionalScore === null
+      ? "Informações insuficientes para cálculo consolidado."
+      : institutionalScore >= 8
+        ? "Leitura consolidada favorável, com pilares majoritariamente consistentes."
+        : institutionalScore >= 6
+          ? "Avaliação preliminar equilibrada, com pontos de atenção em pilares específicos."
+          : institutionalScore >= 4
+            ? "Leitura consolidada em atenção, com necessidade de reforço técnico."
+            : "Avaliação preliminar crítica, com riscos relevantes na estrutura atual.";
+  const preliminaryRecommendedLimit = (() => {
+    if (institutionalScore === null || technicalRequestedLimit <= 0) return null;
+    const scoreFactor = institutionalScore >= 9 ? 1 : institutionalScore >= 8 ? 0.95 : institutionalScore >= 6 ? 0.8 : institutionalScore >= 4 ? 0.6 : 0.4;
+    const baseByScore = technicalRequestedLimit * scoreFactor;
+    const baseByCoverage = technicalCoverageValue !== null ? Math.min(baseByScore, technicalCoverageValue) : baseByScore * 0.7;
+    return Math.max(0, baseByCoverage);
+  })();
+  const preliminaryMaxTermDays = institutionalRiskBand === "AA"
+    ? 360
+    : institutionalRiskBand === "A"
+      ? 360
+      : institutionalRiskBand === "B"
+        ? 180
+        : institutionalRiskBand === "C"
+          ? 90
+          : institutionalRiskBand === "D"
+            ? null
+            : null;
+  const preliminaryGuaranteeCondition = technicalCoverageValue === null
+    ? "Sem cobertura segurada"
+    : technicalRequestedLimit > 0 && technicalCoverageValue >= technicalRequestedLimit
+      ? "Cobertura COFACE compatível"
+      : technicalRequestedLimit > 0 && technicalCoverageValue < technicalRequestedLimit
+        ? "Necessária garantia complementar"
+        : "Cobertura parcial identificada";
+  const preliminaryRecommendationNotes = [
+    technicalCoverageValue !== null && technicalRequestedLimit > 0 && technicalCoverageValue < technicalRequestedLimit
+      ? "Limite solicitado excede cobertura segurada."
+      : null,
+    technicalOverdueValue !== null && technicalOverdueValue > 0 ? "Overdue interno relevante." : null,
+    financialDocuments.length === 0 ? "Recomendação condicionada à revisão documental." : null,
+    hasInternalFinancialSnapshot && (technicalOverdueValue === null || technicalOverdueValue <= 0) ? "Cliente apresenta histórico positivo." : null,
+    !hasAgriskImported ? "Ausência de Agrisk limita a leitura de mercado." : null
+  ].filter((item): item is string => Boolean(item)).slice(0, 5);
+  const preliminaryInsights: TechnicalInsight[] = [];
+  if (technicalCoverageValue !== null && technicalRequestedLimit > 0 && technicalCoverageValue >= technicalRequestedLimit) {
+    preliminaryInsights.push({ kind: "positivo", text: "Cobertura COFACE compatível com o limite solicitado." });
+  }
+  if (technicalCoverageValue !== null && technicalRequestedLimit > 0 && technicalCoverageValue < technicalRequestedLimit) {
+    preliminaryInsights.push({ kind: "alerta", text: "Limite solicitado excede cobertura segurada." });
+  }
+  if (technicalOverdueValue !== null && technicalOverdueValue > 0) {
+    preliminaryInsights.push({ kind: "critico", text: "Cliente possui overdue relevante na carteira." });
+  }
+  if (hasInternalFinancialSnapshot && (technicalOverdueValue === null || technicalOverdueValue <= 0)) {
+    preliminaryInsights.push({ kind: "positivo", text: "Cliente possui histórico positivo de relacionamento." });
+  }
+  if (!hasAgriskImported) {
+    preliminaryInsights.push({ kind: "alerta", text: "Nenhum relatório Agrisk anexado." });
+  }
+  if (financialDocuments.length === 0) {
+    preliminaryInsights.push({ kind: "alerta", text: "Documentação financeira incompleta." });
+  }
+  if (institutionalScore !== null) {
+    preliminaryInsights.push({ kind: "positivo", text: `Score preliminar compatível com grupo de risco ${institutionalRiskBand}.` });
+  }
+  const guaranteesPillar = policyPillars.find((pillar) => pillar.key === "guarantees");
+  if (guaranteesPillar && (guaranteesPillar.status === "Atenção" || guaranteesPillar.status === "Crítico")) {
+    preliminaryInsights.push({ kind: "alerta", text: "Garantias reduzem a nota consolidada." });
+  }
+  const relationshipPillar = policyPillars.find((pillar) => pillar.key === "relationship_history");
+  if (relationshipPillar && (relationshipPillar.status === "Forte" || relationshipPillar.status === "Adequado")) {
+    preliminaryInsights.push({ kind: "positivo", text: "Histórico de relacionamento contribuiu positivamente." });
+  }
+  const criticalPillars = policyPillars.filter((pillar) => pillar.status === "Crítico");
+  if (criticalPillars.length > 0) {
+    preliminaryInsights.push({ kind: "critico", text: `Pilares críticos identificados: ${criticalPillars.map((pillar) => pillar.title).join("; ")}.` });
+  }
+  const technicalInsights = preliminaryInsights.slice(0, 6);
+  const criticalExecutiveInsights = technicalInsights
+    .filter((insight) => insight.kind === "critico" || insight.kind === "alerta")
+    .slice(0, 3);
+  const executiveInsights = (criticalExecutiveInsights.length > 0 ? criticalExecutiveInsights : technicalInsights).slice(0, 3);
+  const preliminaryEligibility = isGovernanceBlocked
+    ? { label: "Cliente bloqueado", className: "text-[#B91C1C]", tone: "bg-[#FEF2F2] border-[#FECACA]" }
+    : financialDocuments.length === 0
+      ? { label: "Documentação incompleta", className: "text-[#92400E]", tone: "bg-[#FFF7E8] border-[#FDE68A]" }
+      : technicalCoverageValue !== null && technicalRequestedLimit > 0 && technicalCoverageValue < technicalRequestedLimit
+        ? { label: "Cobertura parcial", className: "text-[#92400E]", tone: "bg-[#FFF7E8] border-[#FDE68A]" }
+        : { label: "Elegível para análise", className: "text-[#166534]", tone: "bg-[#EAF7EE] border-[#BBF7D0]" };
 
   function saveStep1MetadataPatch(patch: Partial<{ requestedLimit: string; termDays: string; businessUnit: string; customerType: string; operationModality: string; contactName: string; contactPhone: string; contactEmail: string }>) {
     if (!hasStep1Workspace) return;
+    if (isStep1ReadOnly) return;
     const nextRequested = patch.requestedLimit ?? analysis.requestedLimit;
     const nextTerm = patch.termDays ?? requestTermDays;
     const nextBu = patch.businessUnit ?? requestBusinessUnit;
@@ -1185,6 +1764,50 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     return "Pendente";
   }
 
+  function resolveDocumentTypeLabel(documentType: string) {
+    const match = step1DocumentDefinitions.find((definition) => definition.key === (documentType as Step1DocumentType));
+    return match?.label ?? "Documento";
+  }
+
+  function shouldOpenInline(mimeType: string | null | undefined) {
+    const normalized = (mimeType ?? "").toLowerCase();
+    return normalized === "application/pdf" || normalized.startsWith("image/");
+  }
+
+  async function handleOpenLibraryDocument(document: AnalysisDocumentDto) {
+    if (!activeAnalysisId) {
+      setDocumentLibraryFeedback("Arquivo indisponível no momento.");
+      return;
+    }
+    try {
+      setDocumentLibraryFeedback(null);
+      const isInline = shouldOpenInline(document.mime_type);
+      const downloadUrl = `/api/credit-analyses/${activeAnalysisId}/documents/${document.id}/download`;
+
+      if (isInline) {
+        const opened = window.open(downloadUrl, "_blank", "noopener,noreferrer");
+        if (!opened) {
+          setDocumentLibraryFeedback("Não foi possível abrir uma nova aba. Verifique o bloqueador de pop-up.");
+        }
+        return;
+      }
+
+      const response = await downloadAnalysisDocument(activeAnalysisId, document.id);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = blobUrl;
+      link.download = document.original_filename || "documento";
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Arquivo indisponível no momento.";
+      setDocumentLibraryFeedback(message);
+    }
+  }
+
   function formatPhoneInput(value: string) {
     const digits = value.replace(/\D/g, "").slice(0, 11);
     if (digits.length <= 2) return digits;
@@ -1205,6 +1828,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   async function handleStep1DocumentUpload(documentType: Step1DocumentType, file: File | null | undefined) {
+    if (isStep1ReadOnly) {
+      setDocumentUploadFeedback({ type: "error", message: "Esta solicitação já foi submetida para análise e não pode ser alterada nesta etapa." });
+      return;
+    }
     if (!file) {
       setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
       return;
@@ -1218,6 +1845,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   async function handleFinancialDocumentsUpload(files: File[]) {
+    if (isStep1ReadOnly) {
+      setDocumentUploadFeedback({ type: "error", message: "Esta solicitação já foi submetida para análise e não pode ser alterada nesta etapa." });
+      return;
+    }
     if (files.length === 0) {
       setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
       return;
@@ -1239,6 +1870,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   function handleAddCommercialReference() {
+    if (isStep1ReadOnly) {
+      setCommercialReferenceForm((prev) => ({ ...prev, error: "Esta solicitação já foi submetida para análise e não pode ser alterada nesta etapa." }));
+      return;
+    }
     if (!hasStep1Workspace) {
       setCommercialReferenceForm((prev) => ({ ...prev, error: "Consulte o CNPJ novamente para iniciar a solicitação." }));
       return;
@@ -1349,7 +1984,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   <Building2 className="h-3.5 w-3.5" />
                   {triageResult.found_in_portfolio ? "Cliente localizado na carteira" : "Cliente localizado em base externa"}
                 </div>
-                <button type="button" onClick={() => setTriageModalOpen(true)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] hover:bg-[#F2F6FB]">
+                <button
+                  type="button"
+                  onClick={() => setTriageModalOpen(true)}
+                  disabled={isStep1ReadOnly}
+                  className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] hover:bg-[#F2F6FB] disabled:cursor-not-allowed disabled:opacity-60"
+                >
                   Consultar outro CNPJ
                 </button>
               </div>
@@ -1449,10 +2089,16 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           ) : null}
 
           <p className="text-[13px] font-medium text-[#111827]">Informe o CNPJ para identificar o cliente</p>
+          {isStep1ReadOnly ? (
+            <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-3 text-[12px] text-[#4F647A]">
+              Esta etapa está em modo consulta. A solicitação já foi submetida para análise e os dados de abertura não podem ser alterados.
+            </div>
+          ) : null}
           <label className="block text-[12px] text-[#374151]">
             CNPJ<RequiredMark />
             <input
               value={customer.cnpj}
+              disabled={isStep1ReadOnly}
               onChange={(event) => {
                 setExistingCustomerId(null);
                 setGovernanceStatus(null);
@@ -1469,7 +2115,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             {lookupMutation.isPending ?"Consultando dados cadastrais..." : externalLookupMessage ?? "A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente."}
           </p>
 
-          <fieldset disabled={isGovernanceBlocked} className="contents">
+          <fieldset disabled={isGovernanceBlocked || isStep1ReadOnly} className="contents">
           <div className="rounded-[8px] border border-[#e2e5eb] bg-[#f9fafb] p-3">
             <p className="mb-2 text-[12px] font-medium text-[#111827]">Contato do Cliente</p>
             <div className="grid gap-3 md:grid-cols-3">
@@ -1648,8 +2294,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         <span className="text-[#8FA3B4]">{new Date(doc.uploaded_at).toLocaleDateString("pt-BR")}</span>
                         <button
                           type="button"
+                          disabled={isStep1ReadOnly}
                           onClick={() => deleteStep1DocumentMutation.mutate(doc.id)}
-                          className="rounded-[8px] border border-[#F2D4D4] bg-white px-2.5 py-1 text-[10px] font-medium text-[#B91C1C] hover:bg-[#FEF2F2]"
+                          className="rounded-[8px] border border-[#F2D4D4] bg-white px-2.5 py-1 text-[10px] font-medium text-[#B91C1C] hover:bg-[#FEF2F2] disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Remover
                         </button>
@@ -1709,7 +2356,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   <button
                     type="button"
                     onClick={handleAddCommercialReference}
-                    disabled={!hasStep1Workspace || createCommercialReferenceMutation.isPending}
+                    disabled={!hasStep1Workspace || isStep1ReadOnly || createCommercialReferenceMutation.isPending}
                     className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] hover:bg-[#F2F6FB] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {createCommercialReferenceMutation.isPending ? "Adicionando..." : "Adicionar referência"}
@@ -1756,8 +2403,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                             <div className="flex justify-start md:justify-end">
                               <button
                                 type="button"
+                                disabled={isStep1ReadOnly}
                                 onClick={() => deleteCommercialReferenceMutation.mutate(reference.id)}
-                                className="rounded-[8px] border border-[#F2D4D4] bg-white px-2.5 py-1 text-[10px] font-medium text-[#B91C1C] hover:bg-[#FEF2F2]"
+                                className="rounded-[8px] border border-[#F2D4D4] bg-white px-2.5 py-1 text-[10px] font-medium text-[#B91C1C] hover:bg-[#FEF2F2] disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 Remover
                               </button>
@@ -1796,13 +2444,17 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         </div>
       ) : null}
 
-      {step === 2 ?(
+      {step === 2 || step === 3 ?(
         <>
           <article className="space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-[15px] font-semibold text-[#102033]">Informações para análise</p>
-                <p className="text-[12px] text-[#4F647A]">Escolha como deseja estruturar os dados da análise. Você pode combinar múltiplas fontes.</p>
+                <p className="text-[15px] font-semibold text-[#102033]">{step === 2 ? "Coleta de informações" : "Mesa de análise"}</p>
+                <p className="text-[12px] text-[#4F647A]">
+                  {step === 2
+                    ? "Consolide as fontes operacionais que irão alimentar a mesa de análise."
+                    : "Interpretação técnica consolidada das fontes coletadas para apoio da decisão."}
+                </p>
               </div>
               <div className="space-y-1 text-right">
                 <p className="text-[11px] font-medium text-[#4F647A]">{structuredSourcesCount} de 3 fontes estruturadas preenchidas</p>
@@ -1810,6 +2462,375 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </div>
             </div>
 
+            {step === 2 ? (
+              <section className="rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-4">
+                <div className="mb-1 flex items-center justify-between gap-3">
+                  <p className="text-[14px] font-semibold text-[#102033]">Contexto da solicitação</p>
+                  <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${technicalStatusClass}`}>
+                    {!hasStep2Source ? "Coleta não iniciada" : hasStep2Source && !isStep2Ready ? "Coleta parcial" : "Coleta completa"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#4F647A]">Resumo da abertura feita pelo solicitante.</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Cliente / razão social</p><p className="text-[12px] font-medium text-[#102033]">{customer.companyName || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">CNPJ</p><p className="text-[12px] font-medium text-[#102033]">{formatCnpjForDisplay(customer.cnpj) || "Não informado"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Grupo econômico</p><p className="text-[12px] font-medium text-[#102033]">{economicGroupLabel}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Limite solicitado</p><p className="text-[12px] font-medium text-[#102033]">{toNumberInput(analysis.requestedLimit) > 0 ? formatCurrencyBRL(analysis.requestedLimit) : "Aguardando dados"}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Solicitante</p><p className="text-[12px] font-medium text-[#102033]">{requesterLabel}</p></div>
+                  <div><p className="text-[10px] uppercase text-[#8FA3B4]">Data da solicitação</p><p className="text-[12px] font-medium text-[#102033]">{new Date().toLocaleDateString("pt-BR")}</p></div>
+                </div>
+              </section>
+            ) : null}
+
+            {step === 3 ? (
+            <section className="rounded-[16px] border border-[#D7E1EC] bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.08em] text-[#8FA3B4]">Central técnica</p>
+                  <p className="text-[16px] font-semibold text-[#102033]">Painel Técnico Consolidado</p>
+                  <p className="text-[12px] text-[#4F647A]">Resumo executivo dos dados estruturados para apoio da análise.</p>
+                </div>
+                <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${technicalStatusClass}`}>{technicalStatusLabel}</span>
+              </div>
+
+              <div className="mt-4 rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-[10px] border border-[#D7E1EC] bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Score Institucional Preliminar</p>
+                    <p className="mt-1 text-[18px] font-semibold text-[#102033]">{institutionalScore !== null ? institutionalScore.toFixed(1) : "Sem dados suficientes"}</p>
+                  </div>
+                  <div className="rounded-[10px] border border-[#D7E1EC] bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Grupo de Risco Preliminar</p>
+                    <span className={`mt-1 inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold ${toScoreBandClass(institutionalRiskBand)}`}>{institutionalRiskBand}</span>
+                  </div>
+                  <div className="rounded-[10px] border border-[#D7E1EC] bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Limite Recomendado</p>
+                    <p className="mt-1 text-[14px] font-semibold text-[#102033]">{preliminaryRecommendedLimit !== null ? formatCurrencyBRL(String(preliminaryRecommendedLimit.toFixed(2))) : "Aguardando importação"}</p>
+                  </div>
+                  <div className={`rounded-[10px] border p-3 ${preliminaryEligibility.tone}`}>
+                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Elegibilidade</p>
+                    <p className={`mt-1 text-[12px] font-semibold ${preliminaryEligibility.className}`}>{preliminaryEligibility.label}</p>
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-[#8FA3B4]">Insights críticos</p>
+                  <div className="mt-1 space-y-1.5">
+                    {executiveInsights.length > 0 ? executiveInsights.map((insight, index) => (
+                      <p key={`${insight.text}-${index}`} className="text-[11px] text-[#4F647A]">• {insight.text}</p>
+                    )) : <p className="text-[11px] text-[#4F647A]">Sem dados suficientes para priorização de alertas.</p>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsTechnicalDetailsOpen((prev) => !prev)}
+                  className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
+                >
+                  <Info className="h-3.5 w-3.5" />
+                  {isTechnicalDetailsOpen ? "Ocultar análise técnica detalhada" : "Análise Técnica Detalhada"}
+                </button>
+              </div>
+
+              {isTechnicalDetailsOpen ? (
+              <>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
+                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Cliente</p>
+                  <p className="mt-1 text-[13px] font-semibold text-[#102033]">{customer.companyName || "Não disponível"}</p>
+                  <p className="text-[11px] text-[#4F647A]">{formatCnpjForDisplay(customer.cnpj) || "Não disponível"}</p>
+                  <p className="text-[11px] text-[#8FA3B4]">{economicGroupLabel}</p>
+                </div>
+                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
+                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Limite solicitado</p>
+                  <p className="mt-1 text-[14px] font-semibold text-[#102033]">{technicalRequestedLimit > 0 ? formatCurrencyBRL(String(technicalRequestedLimit)) : "Não disponível"}</p>
+                </div>
+                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
+                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Exposição atual</p>
+                  <p className="mt-1 text-[14px] font-semibold text-[#102033]">{technicalExposureValue > 0 ? formatCurrencyBRL(String(technicalExposureValue)) : "Não disponível"}</p>
+                </div>
+                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
+                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Cobertura COFACE / Overdue</p>
+                  <p className="mt-1 text-[12px] font-semibold text-[#102033]">
+                    {technicalCoverageValue !== null ? formatCurrencyBRL(String(technicalCoverageValue)) : "Não disponível"}
+                  </p>
+                  <p className="text-[11px] text-[#4F647A]">
+                    Overdue: {technicalOverdueValue !== null ? formatCurrencyBRL(String(technicalOverdueValue)) : "Não disponível"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {technicalCards.map((card) => (
+                  <article key={card.key} className="rounded-[12px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
+                    <div className="mb-2 flex items-center gap-2 text-[#8FA3B4]">
+                      <Building2 className="h-3.5 w-3.5" />
+                      <p className="text-[10px] uppercase tracking-[0.05em]">{card.label}</p>
+                    </div>
+                    <p className="text-[14px] font-semibold text-[#102033]">{card.value}</p>
+                    <p className="text-[11px] text-[#4F647A]">{card.subtitle}</p>
+                  </article>
+                ))}
+              </div>
+
+              <div className="mt-4">
+                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Score Institucional Preliminar</p>
+                      <p className="text-[11px] text-[#4F647A]">Leitura consolidada dos pilares da política.</p>
+                    </div>
+                    <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${toScoreBandClass(institutionalRiskBand)}`}>
+                      {institutionalRiskBand}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-end gap-3">
+                    <p className="text-[24px] font-semibold text-[#102033]">
+                      {institutionalScore !== null ? institutionalScore.toFixed(1) : "—"}
+                    </p>
+                    <p className="mb-1 text-[11px] text-[#8FA3B4]">/10</p>
+                  </div>
+                  <p className="text-[11px] text-[#4F647A]">{institutionalScoreSummary}</p>
+                  <p className="mt-1 text-[11px] text-[#8FA3B4]">
+                    Este score representa uma leitura preliminar baseada nos dados disponíveis nesta etapa. A recomendação final será gerada na execução do motor de crédito.
+                  </p>
+
+                  {institutionalScore !== null ? (
+                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                      {institutionalScoreBreakdown.map((item) => (
+                        <div key={item.key} className="rounded-[8px] border border-[#E5EAF1] bg-[#FCFDFE] px-2.5 py-2">
+                          <p className="text-[10px] font-medium text-[#102033]">{item.title}</p>
+                          <p className="text-[10px] text-[#4F647A]">
+                            Nota {item.score.toFixed(1)} · Peso {item.weight}% · Contribuição {item.weighted.toFixed(2)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-[8px] border border-dashed border-[#D7E1EC] bg-[#F8FBFF] px-3 py-2 text-[11px] text-[#4F647A]">
+                      Informações insuficientes para cálculo consolidado.
+                    </div>
+                  )}
+
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsInstitutionalScoreExpanded((prev) => !prev)}
+                      className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2 py-1 text-[10px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
+                    >
+                      <Info className="h-3.5 w-3.5" />
+                      Como foi calculado
+                    </button>
+                  </div>
+                  {isInstitutionalScoreExpanded ? (
+                    <div className="mt-2 rounded-[8px] border border-[#D7E1EC] bg-[#FAFCFF] p-2.5 text-[10px] text-[#4F647A]">
+                      <p className="font-semibold text-[#102033]">Avaliação preliminar</p>
+                      <p>Score calculado pela média ponderada dos pilares da política institucional.</p>
+                      <p className="mt-1 font-semibold text-[#102033]">Pesos utilizados</p>
+                      <p>Financeiro 55% · Garantias 20% · Mercado 15% · Pagamento 5% · Relacionamento 5%.</p>
+                      <p className="mt-1 font-semibold text-[#102033]">Fórmula resumida</p>
+                      <p>Σ(nota do pilar × peso do pilar), normalizado em escala 0–10.</p>
+                    </div>
+                  ) : null}
+                </article>
+              </div>
+
+              <div className="mt-4">
+                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Condições Recomendadas Preliminares</p>
+                      <p className="text-[11px] text-[#4F647A]">Condição sugerida para orientação técnica do analista.</p>
+                    </div>
+                    <span className="rounded-full border border-[#D7E1EC] bg-[#F7F9FC] px-2.5 py-1 text-[10px] font-medium text-[#4F647A]">
+                      Recomendação preliminar
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
+                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Limite recomendado</p>
+                      <p className="mt-1 text-[14px] font-semibold text-[#102033]">
+                        {preliminaryRecommendedLimit !== null ? formatCurrencyBRL(String(preliminaryRecommendedLimit.toFixed(2))) : "Não disponível"}
+                      </p>
+                    </div>
+                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
+                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Prazo máximo recomendado</p>
+                      <p className="mt-1 text-[14px] font-semibold text-[#102033]">
+                        {preliminaryMaxTermDays !== null ? `${preliminaryMaxTermDays} dias` : institutionalRiskBand === "D" ? "Revisão manual obrigatória" : "Não disponível"}
+                      </p>
+                    </div>
+                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
+                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Cobertura / garantia</p>
+                      <p className="mt-1 text-[13px] font-semibold text-[#102033]">{preliminaryGuaranteeCondition}</p>
+                    </div>
+                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
+                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Leitura técnica</p>
+                      <p className="mt-1 text-[13px] font-semibold text-[#102033]">
+                        {institutionalScore !== null ? `Score ${institutionalScore.toFixed(1)} · Grupo ${institutionalRiskBand}` : "Informações insuficientes"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-[#8FA3B4]">Observações técnicas</p>
+                    <div className="mt-1 space-y-1">
+                      {preliminaryRecommendationNotes.length === 0 ? (
+                        <p className="text-[11px] text-[#4F647A]">Sem observações adicionais nesta leitura preliminar.</p>
+                      ) : (
+                        preliminaryRecommendationNotes.map((note) => (
+                          <p key={note} className="text-[11px] text-[#4F647A]">• {note}</p>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsPreliminaryRecommendationExpanded((prev) => !prev)}
+                      className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2 py-1 text-[10px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
+                    >
+                      <Info className="h-3.5 w-3.5" />
+                      Como foi recomendada
+                    </button>
+                  </div>
+                  {isPreliminaryRecommendationExpanded ? (
+                    <div className="mt-2 rounded-[8px] border border-[#D7E1EC] bg-[#FAFCFF] p-2.5 text-[10px] text-[#4F647A]">
+                      <p className="font-semibold text-[#102033]">Critérios considerados</p>
+                      <p>Score preliminar, limite solicitado, cobertura segurada, overdue e status documental.</p>
+                      <p className="mt-1 font-semibold text-[#102033]">Parâmetros utilizados</p>
+                      <p>
+                        Score: {institutionalScore !== null ? institutionalScore.toFixed(1) : "não disponível"} ·
+                        Limite solicitado: {technicalRequestedLimit > 0 ? formatCurrencyBRL(String(technicalRequestedLimit)) : "não disponível"} ·
+                        Cobertura: {technicalCoverageValue !== null ? formatCurrencyBRL(String(technicalCoverageValue)) : "não disponível"} ·
+                        Overdue: {technicalOverdueValue !== null ? formatCurrencyBRL(String(technicalOverdueValue)) : "não disponível"}
+                      </p>
+                    </div>
+                  ) : null}
+                </article>
+              </div>
+
+              <div className="mt-4">
+                <article className="rounded-[12px] border border-[#D7E1EC] bg-[#F8FBFF] p-4">
+                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Grupo de Risco Preliminar</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${toScoreBandClass(institutionalRiskBand)}`}>
+                      {institutionalRiskBand}
+                    </span>
+                    <p className="text-[11px] text-[#4F647A]">
+                      {institutionalScore !== null ? `Score institucional preliminar: ${institutionalScore.toFixed(1)}/10` : "Informações insuficientes"}
+                    </p>
+                  </div>
+                </article>
+              </div>
+
+              <div className="mt-4">
+                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Pilares da Política de Crédito</p>
+                    <p className="text-[11px] text-[#4F647A]">Leitura preliminar (sem bloqueio automático)</p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                    {policyPillars.map((pillar) => (
+                      <div key={pillar.key} className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[12px] font-semibold text-[#102033]">{pillar.title}</p>
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">{pillar.weight}%</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${policyPillarStatusClass(pillar.status)}`}>{pillar.status}</span>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between">
+                          <p className="text-[11px] text-[#8FA3B4]">Nota preliminar</p>
+                          <p className="text-[12px] font-semibold text-[#102033]">{pillar.score !== null ? pillar.score.toFixed(1) : "Não disponível"}</p>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[#EEF3F8]">
+                          <div className="h-full rounded-full bg-[#295B9A]" style={{ width: `${pillar.score !== null ? Math.max(0, Math.min(100, pillar.score * 10)) : 0}%` }} />
+                        </div>
+                        <p className="mt-2 text-[11px] text-[#4F647A]">{pillar.summary}</p>
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedPolicyPillarKey((prev) => (prev === pillar.key ? null : pillar.key))}
+                            className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2 py-1 text-[10px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
+                          >
+                            <Info className="h-3.5 w-3.5" />
+                            Como foi avaliado
+                          </button>
+                        </div>
+                        {expandedPolicyPillarKey === pillar.key ? (
+                          <div className="mt-2 rounded-[8px] border border-[#D7E1EC] bg-white p-2.5 text-[10px] text-[#4F647A]">
+                            <p className="font-semibold text-[#102033]">Fontes utilizadas</p>
+                            <p>{pillar.sources.join(" · ")}</p>
+                            <p className="mt-1 font-semibold text-[#102033]">Critérios considerados</p>
+                            <ul className="mt-0.5 list-disc pl-4">
+                              {pillar.criteria.map((criterion) => (
+                                <li key={criterion}>{criterion}</li>
+                              ))}
+                            </ul>
+                            <p className="mt-1 font-semibold text-[#102033]">Explicação</p>
+                            <p>{pillar.explanation}</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              </div>
+
+              <div className="mt-4 grid gap-3 xl:grid-cols-[1.6fr_1fr]">
+                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
+                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Insights da análise</p>
+                  <div className="mt-2 space-y-2">
+                    {technicalInsights.length === 0 ? (
+                      <p className="text-[11px] text-[#4F647A]">Informações insuficientes para gerar insights.</p>
+                    ) : (
+                      technicalInsights.map((insight, index) => (
+                        <div key={`${insight.text}-${index}`} className="flex items-start gap-2 rounded-[8px] border border-[#E5EAF1] bg-[#FAFCFF] px-2.5 py-2">
+                          {insight.kind === "positivo" ? (
+                            <Check className="mt-0.5 h-3.5 w-3.5 text-[#166534]" />
+                          ) : insight.kind === "critico" ? (
+                            <CircleAlert className="mt-0.5 h-3.5 w-3.5 text-[#B91C1C]" />
+                          ) : (
+                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 text-[#92400E]" />
+                          )}
+                          <p className="text-[11px] text-[#4F647A]">{insight.text}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </article>
+                <article className={`rounded-[12px] border p-4 ${preliminaryEligibility.tone}`}>
+                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Elegibilidade preliminar</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    {preliminaryEligibility.label === "Elegível para análise" ? (
+                      <ShieldCheck className="h-4 w-4 text-[#166534]" />
+                    ) : preliminaryEligibility.label === "Cliente bloqueado" ? (
+                      <CircleAlert className="h-4 w-4 text-[#B91C1C]" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4 text-[#92400E]" />
+                    )}
+                    <p className={`text-[12px] font-semibold ${preliminaryEligibility.className}`}>{preliminaryEligibility.label}</p>
+                  </div>
+                  <p className="mt-1 text-[11px] text-[#4F647A]">Leitura preliminar para apoio do analista, sem bloqueio automático nesta etapa.</p>
+                </article>
+              </div>
+              </>
+              ) : null}
+            </section>
+            ) : null}
+
+            {step === 2 ? (
+            <div className="rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-4">
+              <p className="text-[14px] font-semibold text-[#102033]">Fontes da análise</p>
+              <p className="mt-1 text-[11px] text-[#4F647A]">Importe ou confirme as fontes que irão alimentar a mesa de análise.</p>
+            </div>
+            ) : null}
+
+            {step === 2 ? (
+            <>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <button
                 type="button"
@@ -2005,45 +3026,44 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </button>
 
               <article className={`flex h-full flex-col rounded-[16px] border bg-white p-6 text-left ${
-                hasInternalFinancialSnapshot ? "border-[#10B981]" : "border-[#D7E1EC]"
+                isPortfolioCustomer ? "border-[#10B981]" : "border-[#D7E1EC]"
               }`}>
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#F7F9FC]">
                     <Building2 className="h-5 w-5 text-[#4F647A]" />
                   </div>
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                    hasInternalFinancialSnapshot ? "bg-[#EAF7EE] text-[#166534]" : "bg-[#EEF3F8] text-[#4F647A]"
+                    isPortfolioCustomer ? "bg-[#EAF7EE] text-[#166534]" : "bg-[#EEF3F8] text-[#4F647A]"
                   }`}>
-                    {hasInternalFinancialSnapshot ? "disponível" : "sem histórico interno"}
+                    {isPortfolioCustomer ? "dados internos disponíveis" : "sem histórico interno"}
                   </span>
                 </div>
-                {hasInternalFinancialSnapshot ? (
+                {isPortfolioCustomer ? (
                   <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
                     <p className="mb-1 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Base interna</p>
-                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">Dados internos da carteira</p>
+                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">Carteira Corporativa</p>
                     <p className="text-[10px] font-medium uppercase tracking-[0.5px] text-[#8FA3B4]">Resumo financeiro interno</p>
-                    <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div>
                         <p className="text-[10px] text-[#8FA3B4]">Valor em Aberto</p>
-                        <p className="text-[11px] font-semibold text-[#102033]">{formatCurrencyBRL(String(internalOpenAmount))}</p>
+                        <p className="mt-0.5 text-[12px] font-semibold text-[#102033]">{mappedInternalOpenAmount !== null ? formatCurrencyBRLNoCents(mappedInternalOpenAmount) : "Sem registro"}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-[#8FA3B4]">Limite Total</p>
-                        <p className="text-[11px] font-semibold text-[#102033]">{formatCurrencyBRL(String(internalTotalLimit))}</p>
+                        <p className="mt-0.5 text-[12px] font-semibold text-[#102033]">{mappedInternalTotalLimit !== null ? formatCurrencyBRLNoCents(mappedInternalTotalLimit) : "Sem registro"}</p>
                       </div>
                       <div>
-                        <p className="text-[10px] text-[#8FA3B4]">Limite Disponível</p>
-                        <p className="text-[11px] font-semibold text-[#1A6644]">{formatCurrencyBRL(String(internalAvailableLimit))}</p>
+                        <p className="text-[10px] text-[#8FA3B4]">Disponível</p>
+                        <p className="mt-0.5 text-[12px] font-semibold text-[#1A6644]">{mappedInternalAvailableLimit !== null ? formatCurrencyBRLNoCents(mappedInternalAvailableLimit) : "Sem registro"}</p>
                       </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {internalOverdue !== null ? <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">overdue: {formatCurrencyBRL(String(internalOverdue))}</span> : null}
-                      {internalNotDue !== null ? <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">not due: {formatCurrencyBRL(String(internalNotDue))}</span> : null}
-                      {internalOperationalStatus ? <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">status: {internalOperationalStatus}</span> : null}
-                      <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">exposição: {formatCurrencyBRL(String(internalExposure))}</span>
-                      <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">comportamento: {internalBehaviorLabel}</span>
-                    </div>
-                    <p className="mt-1 text-[10px] text-[#64748B]">Última atualização: base principal de AR.</p>
+                    <p className="mt-2 text-[10px] text-[#4F647A]">
+                      Overdue: {mappedInternalOverdue !== null ? formatCurrencyBRLNoCents(mappedInternalOverdue) : "Sem registro"} · Not Due: {mappedInternalNotDue !== null ? formatCurrencyBRLNoCents(mappedInternalNotDue) : "Sem registro"}
+                    </p>
+                    {!hasInternalPositionData ? (
+                      <p className="mt-1 text-[10px] text-[#64748B]">Cliente localizado na base, sem posição financeira disponível.</p>
+                    ) : null}
+                    <p className="mt-1 text-[10px] text-[#64748B]">Última atualização: {internalLastUpdatedLabel ?? "Sem registro"}</p>
                   </div>
                 ) : (
                   <div className="mt-3 rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
@@ -2128,68 +3148,89 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </button>
             </div>
 
-            {ocr.files.length === 0 ?(
-              <div className="flex items-center justify-between rounded-[14px] border border-dashed border-[#D7E1EC] bg-white px-6 py-4">
-                <div className="flex items-center gap-3">
+            <div className="rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-4">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] text-[#8FA3B4]">
-                    <Upload className="h-4 w-4" />
+                    <FolderOpen className="h-4 w-4" />
                   </div>
                   <div>
-                    <p className="text-[13px] font-medium text-[#4F647A]">
-                      Complementar com demonstrativos financeiros <span className="text-[10px] font-normal text-[#8FA3B4]">(opcional)</span>
-                    </p>
-                    <p className="text-[11px] text-[#8FA3B4]">Envio de DRE ou balanço para leitura assistida.</p>
-                    {ocr.status === "error" && ocr.errorMessage ?<p className="mt-1 text-[11px] text-[#B91C1C]">{ocr.errorMessage}</p> : null}
+                    <p className="text-[13px] font-medium text-[#4F647A]">Central documental da solicitação</p>
+                    <p className="text-[11px] text-[#8FA3B4]">Arquivos enviados na abertura da solicitação.</p>
                   </div>
                 </div>
+                <span className="rounded-full border border-[#D7E1EC] bg-[#F7F9FC] px-2 py-0.5 text-[10px] font-medium text-[#4F647A]">
+                  {step1LibraryDocuments.length} {step1LibraryDocuments.length === 1 ? "documento anexado" : "documentos anexados"}
+                </span>
+              </div>
+
+              <div className="mb-3">
                 <button
                   type="button"
-                  onClick={() => ocrInputRef.current?.click()}
-                  className="rounded-[8px] border border-[#D7E1EC] bg-white px-4 py-2 text-[12px] font-medium text-[#4F647A]"
+                  onClick={() => setIsDocumentLibraryOpen((prev) => !prev)}
+                  className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 py-1 text-[10px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
                 >
-                  Enviar demonstrativo
+                  <Info className="h-3.5 w-3.5" />
+                  {isDocumentLibraryOpen ? "Recolher documentos" : "Ver documentos"}
                 </button>
-                <input ref={ocrInputRef} type="file" className="hidden" onChange={(event) => handleOcrFileChange(event.target.files)} />
               </div>
-            ) : (
-              <div className="rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-4">
-                <div className="mb-3 flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[13px] font-medium text-[#4F647A]">
-                      Complementar com demonstrativos financeiros <span className="text-[10px] font-normal text-[#8FA3B4]">(opcional)</span>
-                    </p>
-                    <p className="text-[11px] text-[#8FA3B4]">Demonstrativo importado</p>
+
+              {!isDocumentLibraryOpen ? null : !hasStep1LibraryDocuments ? (
+                <div className="rounded-[10px] border border-dashed border-[#D7E1EC] bg-white px-3 py-2 text-[11px] text-[#6B7280]">
+                  Nenhum documento foi anexado na etapa anterior.
+                </div>
+              ) : (
+                <>
+                  {documentLibraryFeedback ? (
+                    <div className="mb-3 rounded-[8px] border border-[#F5B5B5] bg-[#FEF2F2] px-3 py-2 text-[11px] text-[#B91C1C]">
+                      {documentLibraryFeedback}
+                    </div>
+                  ) : null}
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {documentLibraryGroups.map((group) => {
+                      const count = step1LibraryDocuments.filter((document) =>
+                        group.types.includes(document.document_type as Step1DocumentType)
+                      ).length;
+                      if (count === 0) return null;
+                      return (
+                        <span key={group.title} className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">
+                          {group.title}: {count}
+                        </span>
+                      );
+                    })}
                   </div>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ocr.status === "success" ?"bg-[#EAF7EE] text-[#166534]" : ocr.status === "processing" ?"bg-[#EFF6FF] text-[#1D4ED8]" : "bg-[#FEF2F2] text-[#B91C1C]"}`}>
-                    {statusLabel(ocr.status)}
-                  </span>
-                </div>
-                <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
-                  <p className="truncate text-[11px] font-semibold text-[#102033]">{ocr.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
-                  <p className="text-[10px] text-[#64748B]">
-                    {ocr.files[0] ?`${formatFileSize(ocr.files[0].file_size)} · ${ocr.importedAt ?`Importado em ${formatImportedAt(ocr.importedAt)}` : "Importado"}` : "Sem arquivo vinculado"}
-                  </p>
-                  <p className="mt-1 text-[10px] text-[#4F647A]">Demonstrativos prontos para leitura assistida</p>
-                </div>
-                <div className="mt-3 flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={removeOcrImport}
-                    className="rounded-[8px] border border-[#F5D0D0] px-3 py-1.5 text-[11px] font-medium text-[#B91C1C] transition hover:bg-[#FEF2F2]"
-                  >
-                    Remover demonstrativo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => ocrInputRef.current?.click()}
-                    className="rounded-[8px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-2 text-[12px] font-medium text-[#102033]"
-                  >
-                    Substituir demonstrativo
-                  </button>
-                </div>
-                <input ref={ocrInputRef} type="file" className="hidden" onChange={(event) => handleOcrFileChange(event.target.files)} />
-              </div>
-            )}
+                  <div className="space-y-2">
+                    {documentLibraryPreview.map((document) => (
+                      <div key={document.id} className="flex flex-wrap items-center gap-2 rounded-[10px] border border-[#E5EAF1] bg-[#FAFCFF] p-2.5 text-[11px]">
+                        <div className="min-w-[190px] flex-1 font-medium text-[#102033]">{document.original_filename}</div>
+                        <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">
+                          {resolveDocumentTypeLabel(document.document_type)}
+                        </span>
+                        <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">
+                          {labelDocumentStatus(document.status)}
+                        </span>
+                        <span className="text-[#8FA3B4]">{new Date(document.uploaded_at).toLocaleDateString("pt-BR")}</span>
+                        <button
+                          type="button"
+                          onClick={() => void handleOpenLibraryDocument(document)}
+                          className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 py-1 text-[10px] font-medium text-[#4F647A] transition hover:bg-[#F2F6FB]"
+                        >
+                          <FileText className="h-3 w-3" />
+                          {shouldOpenInline(document.mime_type) ? "Abrir documento" : "Baixar"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {hasMoreLibraryDocuments ? (
+                    <p className="mt-2 text-[11px] text-[#8FA3B4]">
+                      +{step1LibraryDocuments.length - documentLibraryPreview.length} documentos disponíveis para consulta.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+            </>
+            ) : null}
           </article>
 
           {isImportModalOpen ?(
@@ -2675,7 +3716,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           </div>
 
           <div className="mb-5 flex items-center rounded-[12px] border border-[#D7E1EC] bg-white px-6 py-4">
-            {["Identificação", "Informações para análise", "Dados da solicitação", "Revisão e envio"].map((label, index) => {
+            {["Identificação do cliente", "Coleta de informações", "Mesa de análise", "Revisão e envio"].map((label, index) => {
               const isDone = index < 3;
               const isActive = index === 3;
               return (
@@ -2761,7 +3802,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   <p className={requestedLimitReady ?"text-[#102033]" : "text-[#92580A]"}>{requestedLimitReady ?"✓ " : "! "}Valor solicitado informado</p>
                   <p className={consolidatedSourcesSentCount > 0 ?"text-[#102033]" : "text-[#92580A]"}>{consolidatedSourcesSentCount > 0 ?"✓ " : "! "}Ao menos 1 fonte enviada</p>
                   <p className={manualStatus === "preenchido" ?"text-[#102033]" : "text-[#92580A]"}>{manualStatus === "preenchido" ?"✓ Dados manuais preenchidos" : "! Dados manuais não preenchidos"}</p>
-                  <p className="text-[#4F647A]">{ocr.files.length > 0 ?"✓ OCR demonstrativos - opcional" : "- OCR demonstrativos - opcional"}</p>
+                  <p className="text-[#4F647A]">- Biblioteca documental disponível para consulta</p>
                 </div>
               </article>
 
@@ -2797,7 +3838,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               disabled={!hasStep2Source}
               className="inline-flex items-center rounded-[8px] bg-[#0D1B2A] px-5 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
             >
-              Avançar · Dados da solicitação <ChevronRight className="ml-1 h-3.5 w-3.5" />
+              Avançar · Mesa de análise <ChevronRight className="ml-1 h-3.5 w-3.5" />
             </button>
           </div>
         </div>
