@@ -1673,10 +1673,31 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }
   ];
   const hasFinancialDocuments = financialDocuments.length > 0;
-  // Regra provisória aprovada para o pilar financeiro:
-  // a ausência de DFs/relatório AGRISK estruturado não é neutra e mantém nota zero até a engine financeira definitiva.
-  const financialPillarScore = 0;
-  const financialPillarStatus: PolicyPillarStatus = "Informações insuficientes";
+  const hasValidCofaceCoverage = technicalCoverageValue !== null && technicalCoverageValue > 0;
+  const financialPillarScore = hasValidCofaceCoverage ? 10 : 0;
+  const financialPillarStatus: PolicyPillarStatus = hasValidCofaceCoverage ? "Forte" : "Informações insuficientes";
+  const financialPillarSummary = hasValidCofaceCoverage
+    ? "Cobertura COFACE válida considerada como mitigador da estabilidade financeira."
+    : "Pilar não avaliado por ausência de DFs/relatório financeiro estruturado.";
+  const financialPillarCriteria = hasValidCofaceCoverage
+    ? [
+      `Cobertura COFACE válida: ${formatCurrencyBRL(String(technicalCoverageValue))}`,
+      "Mitigação financeira aplicada conforme política institucional",
+      "Pilar avaliado com score máximo pela garantia externa"
+    ]
+    : [
+      "Ausência de documentação financeira estruturada para motor institucional",
+      "Score financeiro estruturado indisponível"
+    ];
+  const financialPillarExplanation = hasValidCofaceCoverage
+    ? "A cobertura COFACE válida e positiva é tratada como mitigador da instabilidade financeira nesta etapa preliminar, atribuindo nota máxima ao pilar de Estabilidade Financeira e Liquidez."
+    : "A ausência de documentação financeira estruturada não é tratada como dado neutro. Enquanto não houver DFs ou relatório financeiro AGRISK disponível, o pilar permanece com nota zero e impacta o score institucional.";
+  const financialPillarSource = hasValidCofaceCoverage
+    ? "COFACE, DFs e relatório financeiro AGRISK."
+    : "DFs e relatório financeiro AGRISK.";
+  const financialPillarNote = hasValidCofaceCoverage
+    ? "Cobertura COFACE válida aplicada como mitigador, com nota 10.0/10."
+    : "Enquanto a fonte estruturada não estiver ativa, o pilar permanece com nota 0.0/10.";
   const guaranteeRequestedLimit = technicalRequestedLimit > 0 ? technicalRequestedLimit : 0;
   const guaranteeCoverageRatio = technicalCoverageValue !== null && guaranteeRequestedLimit > 0
     ? technicalCoverageValue / guaranteeRequestedLimit
@@ -1759,18 +1780,15 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       weight: 55,
       score: financialPillarScore,
       status: financialPillarStatus,
-      summary: "Pilar não avaliado por ausência de DFs/relatório financeiro estruturado.",
+      summary: financialPillarSummary,
       sources: ["Documentação financeira", "Agrisk"],
-      criteria: [
-        "Ausência de documentação financeira estruturada para motor institucional",
-        "Score financeiro estruturado indisponível"
-      ],
-      explanation: "A ausência de documentação financeira estruturada não é tratada como dado neutro. Enquanto não houver DFs ou relatório financeiro AGRISK disponível, o pilar permanece com nota zero e impacta o score institucional.",
+      criteria: financialPillarCriteria,
+      explanation: financialPillarExplanation,
       tooltip: {
         title: "Estabilidade Financeira e Liquidez",
         description: "Avalia a robustez financeira por demonstrações financeiras, liquidez, endividamento e geração de caixa.",
-        source: "DFs e relatório financeiro AGRISK.",
-        note: "Enquanto a fonte estruturada não estiver ativa, o pilar permanece com nota 0.0/10.",
+        source: financialPillarSource,
+        note: financialPillarNote,
         weightLabel: "Peso do Pilar: 55%"
       }
     },
@@ -3639,7 +3657,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                                   <span className="mt-1 block text-[#64748b]">{item.tooltip.note}</span>
                                 </span>
                               </span>
-                              {item.key === "financial_liquidity" && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Não avaliado</span> : null}
+                              {item.key === "financial_liquidity" && hasValidCofaceCoverage ? <span className="inline-flex rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-2 py-0.5 text-[10px] font-semibold text-[#1D4ED8]">Mitigado por COFACE</span> : null}
+                              {item.key === "financial_liquidity" && !hasValidCofaceCoverage && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Não avaliado</span> : null}
                               {item.key === "market_conditions" && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Em evolução</span> : null}
                             </span>
                             <span>{item.score.toFixed(1)}/10</span>
@@ -3647,7 +3666,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                           <div className="h-2 overflow-hidden rounded-full border border-[#E2E8F0] bg-[#F1F5F9]">
                             <div className={`h-full rounded-full ${item.key === "financial_liquidity" ? "bg-[#94a3b8]" : "bg-[#2563eb]"}`} style={{ width: `${Math.max(0, Math.min(100, item.score * 10))}%` }} />
                           </div>
-                          {item.key === "financial_liquidity" && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Impacta o score por ausência de demonstrações financeiras estruturadas.</p> : null}
+                          {item.key === "financial_liquidity" && !hasValidCofaceCoverage && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Impacta o score por ausência de demonstrações financeiras estruturadas.</p> : null}
                           {item.key === "guarantees" ? <p className="mt-1 text-[11px] text-[#64748b]">{guaranteeCoverageHelperText}</p> : null}
                           {item.key === "market_conditions" && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Metodologia de condições de mercado em evolução no modelo atual.</p> : null}
                           {item.key === "payment_history" ? <p className="mt-1 text-[11px] text-[#64748b]">{paymentPillarHelperText}</p> : null}
@@ -3656,18 +3675,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                       ))}
                     </div>
                   </div>
-                </div>
-              </article>
-
-              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
-                <p className="text-[18px] font-semibold text-[#0f172a]">Explainability da decisão preliminar</p>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  {technicalInsights.length > 0 ? technicalInsights.slice(0, 4).map((insight, index) => (
-                    <div key={`${insight.text}-${index}`} className="rounded-[14px] border border-[#E2E8F0] bg-[#F8FAFC] p-3">
-                      <p className="text-[13px] font-semibold text-[#0f172a]">{insight.kind === "positivo" ? "Fator favorável" : insight.kind === "critico" ? "Ponto crítico" : "Ponto de atenção"}</p>
-                      <p className="mt-1 text-[12px] text-[#475569]">{insight.text}</p>
-                    </div>
-                  )) : <div className="rounded-[14px] border border-[#E2E8F0] bg-[#F8FAFC] p-3 text-[12px] text-[#475569]">Sem dados suficientes para explainability nesta etapa.</div>}
                 </div>
               </article>
 
@@ -3703,33 +3710,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   <p className="text-[16px] font-black text-[#0b1f3a]">Pronto para gerar dossiê</p>
                   <p className="mx-auto mt-2 max-w-[460px] text-[13px] text-[#475569]">Ao gerar, o sistema consolida a análise técnica, parecer do analista, score, exposição, condições recomendadas e trilha de auditoria para revisão final.</p>
                   <button type="button" onClick={() => navigateToStep(4)} className="mt-4 inline-flex items-center rounded-full bg-[#0b1f3a] px-5 py-2.5 text-[13px] font-extrabold text-white">Gerar Dossiê</button>
-                </div>
-              </article>
-              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
-                <p className="text-[18px] font-semibold text-[#0f172a]">Condições recomendadas preliminares</p>
-                <div className="mt-3 space-y-2">
-                  {preliminaryRecommendationNotes.length > 0 ? preliminaryRecommendationNotes.map((note, index) => <div key={`${note}-${index}`} className="rounded-[12px] border border-[#E2E8F0] px-3 py-2 text-[12px] text-[#334155]">{note}</div>) : <div className="rounded-[12px] border border-[#E2E8F0] px-3 py-2 text-[12px] text-[#334155]">Sem observações adicionais nesta leitura preliminar.</div>}
-                </div>
-              </article>
-              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
-                <p className="text-[18px] font-semibold text-[#0f172a]">Insights críticos</p>
-                <div className="mt-3 space-y-2">
-                  {technicalInsights.filter((insight) => insight.kind !== "positivo").slice(0, 3).map((insight, index) => (
-                    <div key={`${insight.text}-${index}`} className={`rounded-[12px] border px-3 py-2 ${insight.kind === "critico" ? "border-[#FECACA] bg-[#FEF2F2]" : "border-[#FDE68A] bg-[#FFFBEB]"}`}>
-                      <p className="text-[12px] font-semibold text-[#0f172a]">{insight.kind === "critico" ? "Crítico" : "Atenção"}</p>
-                      <p className="text-[12px] text-[#475569]">{insight.text}</p>
-                    </div>
-                  ))}
-                </div>
-              </article>
-              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
-                <p className="text-[18px] font-semibold text-[#0f172a]">Resumo de exposição</p>
-                <div className="mt-3 space-y-2 text-[13px]">
-                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Total em aberto</span><span className="font-extrabold text-[#0f172a]">{internalOpenAmount > 0 ? formatCurrencyBRLNoCents(internalOpenAmount) : "—"}</span></div>
-                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Not due</span><span className="font-extrabold text-[#0f172a]">{internalNotDue !== null ? formatCurrencyBRLNoCents(internalNotDue) : "—"}</span></div>
-                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Overdue</span><span className="font-extrabold text-[#0f172a]">{internalOverdue !== null ? formatCurrencyBRLNoCents(internalOverdue) : "—"}</span></div>
-                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Cobertura COFACE</span><span className="font-extrabold text-[#0f172a]">{technicalCoverageValue !== null ? formatCurrencyBRLNoCents(technicalCoverageValue) : "—"}</span></div>
-                  <div className="flex items-center justify-between"><span className="text-[#64748b]">Exposição líquida recomendada</span><span className="font-extrabold text-[#0f172a]">{preliminaryRecommendedLimit !== null && technicalCoverageValue !== null ? formatCurrencyBRLNoCents(Math.max(0, preliminaryRecommendedLimit - technicalCoverageValue)) : "—"}</span></div>
                 </div>
               </article>
             </aside>
