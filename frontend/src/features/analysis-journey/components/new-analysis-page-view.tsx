@@ -1881,6 +1881,22 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       : null
     : null;
   const institutionalRiskBand = institutionalScore !== null ? toScoreBand(institutionalScore) : "Informações insuficientes";
+  const executiveScoreBand = institutionalRiskBand.toUpperCase();
+  const executiveRiskProfile = (() => {
+    if (executiveScoreBand === "AA") return "AA · Muito baixo";
+    if (executiveScoreBand === "A") return "A · Baixo";
+    if (executiveScoreBand === "B") return "B · Moderado";
+    if (executiveScoreBand === "C") return "C · Atenção";
+    if (executiveScoreBand === "D") return "D · Restritivo";
+    return "Perfil não consolidado";
+  })();
+  const executiveRiskAccentClass = (() => {
+    if (executiveScoreBand === "AA" || executiveScoreBand === "A") return "border-t-[#22C55E]";
+    if (executiveScoreBand === "B") return "border-t-[#3B82F6]";
+    if (executiveScoreBand === "C") return "border-t-[#F59E0B]";
+    if (executiveScoreBand === "D") return "border-t-[#DC6B6B]";
+    return "border-t-[#94A3B8]";
+  })();
   const institutionalScoreSummary =
     institutionalScore === null
       ? "Informações insuficientes para cálculo consolidado."
@@ -3559,8 +3575,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 <p className="mt-1 text-[11px] text-[#dbeafe]">{formatCnpjForDisplay(customer.cnpj)}</p>
               </div>
               <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Limite solicitado</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalRequestedLimit > 0 ? formatCurrencyBRLCompactExecutive(technicalRequestedLimit) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Condição comercial proposta</p></div>
-              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Limite recomendado</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{executiveDisplayedRecommendedLimit !== null ? formatCurrencyBRLCompactExecutive(executiveDisplayedRecommendedLimit) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Prévia da política institucional</p></div>
-              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Score preliminar</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Grupo de risco {institutionalRiskBand}</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Cobertura COFACE</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">{executiveCoveragePercent !== null ? `${executiveCoveragePercent}% do limite solicitado` : "Sem percentual"}</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Valor em Aberto</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{mappedInternalOpenAmount !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOpenAmount) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Notdue: {mappedInternalNotDue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalNotDue) : "—"} · Overdue: {mappedInternalOverdue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOverdue) : "—"}</p></div>
               <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Status técnico</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalStatusLabel}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Aguardando parecer final</p></div>
             </div>
           </div>
@@ -3576,10 +3592,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   </div>
                   <div className="rounded-[18px] border border-[#E8EEF5] bg-[rgba(248,250,252,0.78)] p-2.5">
                     <div className="grid gap-2.5 sm:grid-cols-3">
-                    <div className="rounded-[14px] border border-[#EDF2F7] bg-[rgba(255,255,255,0.78)] px-3.5 py-3">
-                      <p className="text-[11px] font-semibold text-[#475569]">Cobertura COFACE</p>
-                      <p className="mt-1.5 text-[18px] font-extrabold text-[#0f172a]">{formatCurrencyBRLCompactExecutive(technicalCoverageValue)}</p>
-                      <p className="mt-1 text-[11px] text-[#64748b]">{executiveCoveragePercent !== null ? `${executiveCoveragePercent}% solicitado` : "Sem percentual"}</p>
+                    <div className={`rounded-[14px] border border-[#EDF2F7] border-t bg-[rgba(255,255,255,0.78)] px-3.5 py-2.5 ${executiveRiskAccentClass}`}>
+                      <div className="flex items-center">
+                        <p className="text-[11px] font-semibold text-[#475569]">Perfil de risco</p>
+                      </div>
+                      <p className="mt-1 text-[18px] font-extrabold leading-tight text-[#0f172a]">{institutionalScore !== null ? executiveRiskProfile : "—"}</p>
+                      <p className="mt-0.5 text-[11px] text-[#64748b]">{institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "Sem score"}</p>
                     </div>
                     <div className={`rounded-[14px] border px-3.5 py-3 ${
                       executiveExposureHasResidual
