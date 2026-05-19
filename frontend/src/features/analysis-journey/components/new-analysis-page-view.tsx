@@ -3427,16 +3427,20 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       
 {step === 3 ?(
         <div className="mt-3 space-y-4">
-          <div className="relative overflow-hidden rounded-[30px] bg-[linear-gradient(135deg,#071426_0%,#0b1f3a_45%,#102a4c_100%)] p-6 text-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+          <div className="relative overflow-hidden rounded-[30px] bg-[linear-gradient(135deg,#071426_0%,#0b1f3a_45%,#102a4c_100%)] px-5 py-[18px] text-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
             <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#bfdbfe]">Etapa 3 · Mesa de análise</p>
-            <h2 className="mt-2 text-[32px] font-extrabold leading-[1.05] tracking-[-0.04em] text-white">Mesa corporativa de análise de crédito</h2>
-            <p className="mt-3 max-w-[780px] text-[14px] leading-6 text-[#dbeafe]">Consolidação técnica dos dados internos, bureaus, política de crédito e julgamento do analista antes da revisão e envio para aprovação.</p>
-            <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Cliente</p><p className="mt-2 text-[22px] font-extrabold text-white">{customer.companyName || "Não informado"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">{formatCnpjForDisplay(customer.cnpj)}</p></div>
-              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Limite solicitado</p><p className="mt-2 text-[22px] font-extrabold text-white">{technicalRequestedLimit > 0 ? formatCurrencyBRLNoCents(technicalRequestedLimit) : "—"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Condição comercial proposta</p></div>
-              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Limite recomendado</p><p className="mt-2 text-[22px] font-extrabold text-white">{preliminaryRecommendedLimit !== null ? formatCurrencyBRLNoCents(preliminaryRecommendedLimit) : "—"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Prévia da política institucional</p></div>
-              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Score preliminar</p><p className="mt-2 text-[22px] font-extrabold text-white">{institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "—"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Grupo de risco {institutionalRiskBand}</p></div>
-              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Status técnico</p><p className="mt-2 text-[22px] font-extrabold text-white">{technicalStatusLabel}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Aguardando parecer final</p></div>
+            <h2 className="mt-1.5 text-[30px] font-extrabold leading-[1.05] tracking-[-0.04em] text-white">Mesa corporativa de análise de crédito</h2>
+            <p className="mt-2 text-[13px] leading-5 text-[#dbeafe] md:whitespace-nowrap">Consolidação técnica dos dados internos, bureaus, política de crédito e julgamento do analista antes da revisão e envio para aprovação.</p>
+            <div className="mt-4 grid gap-2.5 md:grid-cols-2 xl:grid-cols-[1.2fr_0.95fr_0.95fr_0.95fr_0.95fr]">
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5">
+                <p className="text-[11px] font-semibold text-[#bfdbfe]">Cliente</p>
+                <p className="mt-1.5 overflow-hidden text-[20px] font-extrabold leading-tight text-white [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{customer.companyName || "Não informado"}</p>
+                <p className="mt-1 text-[11px] text-[#dbeafe]">{formatCnpjForDisplay(customer.cnpj)}</p>
+              </div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Limite solicitado</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalRequestedLimit > 0 ? formatCurrencyBRLCompactExecutive(technicalRequestedLimit) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Condição comercial proposta</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Limite recomendado</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{executiveDisplayedRecommendedLimit !== null ? formatCurrencyBRLCompactExecutive(executiveDisplayedRecommendedLimit) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Prévia da política institucional</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Score preliminar</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Grupo de risco {institutionalRiskBand}</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Status técnico</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalStatusLabel}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Aguardando parecer final</p></div>
             </div>
           </div>
           <div className="grid gap-4 xl:grid-cols-[1.45fr_0.9fr]">
