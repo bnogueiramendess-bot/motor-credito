@@ -269,6 +269,81 @@ function normalizeAgriskScoreToTenScale(rawScore: number) {
   return Math.max(0, Math.min(10, rawScore / 100));
 }
 
+type ScoreGaugeBand = "Crítico" | "Atenção" | "Moderado" | "Favorável";
+
+function scoreGaugeBandFrom100(score: number) {
+  if (score < 40) return "Crítico";
+  if (score < 60) return "Atenção";
+  if (score < 80) return "Moderado";
+  return "Favorável";
+}
+
+function scoreGaugeBandClass(band: ScoreGaugeBand) {
+  if (band === "Crítico") return "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]";
+  if (band === "Atenção") return "bg-[#FFF7E8] text-[#92400E] border-[#FDE68A]";
+  if (band === "Moderado") return "bg-[#EFF6FF] text-[#1D4ED8] border-[#BFDBFE]";
+  return "bg-[#EAF7EE] text-[#166534] border-[#BBF7D0]";
+}
+
+function InstitutionalScoreGauge({ score }: { score: number | null }) {
+  const safeScore100 = score === null ? 0 : Math.max(0, Math.min(100, score * 10));
+  const displayScore = score === null ? "—" : `${Math.round(safeScore100)}`;
+  const band = scoreGaugeBandFrom100(safeScore100);
+  const cx = 100;
+  const cy = 100;
+  const radius = 76;
+  const arcLength = Math.PI * radius;
+  const pointerRadius = 52;
+  const pointerAngle = Math.PI - (safeScore100 / 100) * Math.PI;
+  const pointerX = cx + pointerRadius * Math.cos(pointerAngle);
+  const pointerY = cy - pointerRadius * Math.sin(pointerAngle);
+  const bands = [
+    { min: 0, max: 39, color: "#f59e9e" },
+    { min: 40, max: 59, color: "#f2c66d" },
+    { min: 60, max: 79, color: "#7aa6e8" },
+    { min: 80, max: 100, color: "#7ac9a4" }
+  ];
+
+  return (
+    <div className="mx-auto w-full max-w-[220px]">
+      <svg viewBox="0 0 200 138" className="h-[138px] w-full" role="img" aria-label="Velocímetro do score institucional preliminar">
+        <path d="M 24 100 A 76 76 0 0 1 176 100" fill="none" stroke="#E2E8F0" strokeWidth="11" strokeLinecap="round" />
+        {bands.map((item) => {
+          const startFraction = item.min / 100;
+          const endFraction = item.max / 100;
+          const segmentLength = (endFraction - startFraction) * arcLength;
+          return (
+            <path
+              key={`${item.min}-${item.max}`}
+              d="M 24 100 A 76 76 0 0 1 176 100"
+              fill="none"
+              stroke={item.color}
+              strokeWidth="9"
+              strokeLinecap="round"
+              strokeDasharray={`${segmentLength} ${arcLength}`}
+              strokeDashoffset={`${-startFraction * arcLength}`}
+            />
+          );
+        })}
+        <line x1={cx} y1={cy} x2={pointerX} y2={pointerY} stroke="#0f2747" strokeWidth="2" strokeLinecap="round" />
+        <circle cx={cx} cy={cy} r="4" fill="#0f2747" />
+        <circle cx={cx} cy={cy} r="6.5" fill="none" stroke="#dbeafe" strokeWidth="1" />
+        <text x="24" y="120" textAnchor="start" className="fill-[#94a3b8] text-[10px] font-semibold">0</text>
+        <text x="176" y="120" textAnchor="end" className="fill-[#94a3b8] text-[10px] font-semibold">100</text>
+      </svg>
+      <div className="mt-[-8px] text-center">
+        <p className="text-[34px] font-black leading-none text-[#102a4c]">{displayScore}</p>
+        <p className="mt-1 text-[11px] font-semibold text-[#64748b]">/100</p>
+      </div>
+      <div className="mt-1 flex items-center justify-center gap-2">
+        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${scoreGaugeBandClass(band)}`}>{band}</span>
+      </div>
+      <p className="mt-1 text-center text-[11px] font-semibold text-[#64748b]">Score preliminar</p>
+      <p className="mt-0.5 text-center text-[10px] text-[#94a3b8]">Score absoluto ponderado pelos pilares da política.</p>
+    </div>
+  );
+}
+
 function formatCnpjForDisplay(value: string | null | undefined) {
   const digits = sanitizeDigits(value ?? "");
   if (digits.length !== 14) return value || "Não informado";
@@ -1562,13 +1637,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         title: "Estabilidade Financeira e Liquidez",
         description: "Avalia a robustez financeira por demonstrações financeiras, liquidez, endividamento e geração de caixa.",
         source: "DFs e relatório financeiro AGRISK.",
-        note: "Enquanto a fonte estruturada não estiver ativa, o pilar permanece com nota 0.0/10."
+        note: "Enquanto a fonte estruturada não estiver ativa, o pilar permanece com nota 0.0/10.",
+        weightLabel: "Peso do Pilar: 55%"
       }
     },
     {
       key: "guarantees",
       title: "Garantias / Seguro de Crédito",
-      weight: 30,
+      weight: 20,
       score: guaranteePillarScore,
       status: guaranteePillarStatus,
       summary: guaranteeCoverageHelperText,
@@ -1584,7 +1660,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         description: "Avalia o nível de mitigação do risco da operação por cobertura COFACE, exposição líquida não coberta e garantias estruturadas.",
         source: "COFACE, Carteira Corporativa e Complemento Manual.",
         note: "A nota atual reflete diretamente o percentual coberto da solicitação comercial original.",
-        weightLabel: "Peso do Pilar: 30%"
+        weightLabel: "Peso do Pilar: 20%"
       }
     },
     {
@@ -3333,9 +3409,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
                 <p className="text-[18px] font-semibold text-[#0f172a]">Score institucional preliminar</p>
                 <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
-                  <div className="mx-auto flex h-[180px] w-[180px] items-center justify-center rounded-full border border-[#E2E8F0] bg-[#EFF6FF]">
-                    <p className="text-[36px] font-black text-[#102a4c]">{institutionalScore !== null ? Math.round(institutionalScore * 10) : "—"}</p>
-                  </div>
+                  <InstitutionalScoreGauge score={institutionalScore} />
                   <div>
                     <div className="space-y-3">
                       {institutionalScoreBreakdown.map((item) => (
@@ -3349,7 +3423,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                                   <span className="block text-[11px] font-semibold text-[#0f172a]">{item.tooltip.title}</span>
                                   <span className="mt-1 block leading-4">{item.tooltip.description}</span>
                                   <span className="mt-1 block text-[#475569]"><strong>Fonte:</strong> {item.tooltip.source}</span>
-                                  {item.tooltip.weightLabel ? <span className="mt-1 block text-[#64748b]">{item.tooltip.weightLabel}</span> : null}
+                                  {item.tooltip.weightLabel ? <span className="mt-1 block font-semibold text-[#64748b]">{item.tooltip.weightLabel}</span> : null}
                                   <span className="mt-1 block text-[#64748b]">{item.tooltip.note}</span>
                                 </span>
                               </span>
