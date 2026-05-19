@@ -359,6 +359,22 @@ function formatCurrencyBRLNoCents(value: number) {
   }).format(Math.round(value));
 }
 
+function formatCurrencyBRLCompactExecutive(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const safe = Math.max(0, value);
+  if (safe >= 1_000_000) {
+    const mmValue = safe / 1_000_000;
+    const rounded = Math.round(mmValue * 10) / 10;
+    const formatted = Number.isInteger(rounded) ? String(Math.trunc(rounded)) : rounded.toFixed(1).replace(".", ",");
+    return `R$ ${formatted}MM`;
+  }
+  if (safe >= 1_000) {
+    const kValue = Math.round(safe / 1_000);
+    return `R$ ${kValue}K`;
+  }
+  return `R$ ${Math.round(safe).toLocaleString("pt-BR")}`;
+}
+
 function toNullableNumeric(value: unknown): number | null {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : null;
@@ -1442,6 +1458,21 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     (typeof workspaceInternalPositionSource?.base_date === "string" && workspaceInternalPositionSource.base_date.trim()
       ? new Date(workspaceInternalPositionSource.base_date).toLocaleDateString("pt-BR")
       : null);
+  const executiveCoveragePercent = technicalCoverageValue !== null && technicalRequestedLimit > 0
+    ? Math.max(0, Math.round((technicalCoverageValue / technicalRequestedLimit) * 100))
+    : null;
+  const executiveOverdueAmount = mappedInternalOverdue;
+  const executiveNotDueAmount = mappedInternalNotDue;
+  const executiveOverdueTotal = mappedInternalOpenAmount !== null
+    ? mappedInternalOpenAmount
+    : executiveOverdueAmount !== null && executiveNotDueAmount !== null
+      ? executiveOverdueAmount + executiveNotDueAmount
+      : null;
+  const executiveOverduePercent = executiveOverdueAmount !== null && executiveOverdueTotal !== null
+    ? executiveOverdueTotal > 0
+      ? Math.max(0, Math.min(100, Math.round((executiveOverdueAmount / executiveOverdueTotal) * 100)))
+      : 0
+    : null;
 
   useEffect(() => {
     if (mappedInternalOpenAmount === null || mappedInternalOverdue === null || mappedInternalNotDue === null) return;
@@ -1765,6 +1796,20 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const baseByCoverage = technicalCoverageValue !== null ? Math.min(baseByScore, technicalCoverageValue) : baseByScore * 0.7;
     return Math.max(0, baseByCoverage);
   })();
+  const executiveCofaceFloorApplied =
+    preliminaryRecommendedLimit !== null &&
+    technicalCoverageValue !== null &&
+    technicalCoverageValue > preliminaryRecommendedLimit;
+  const executiveDisplayedRecommendedLimit =
+    preliminaryRecommendedLimit === null
+      ? (technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : null)
+      : (technicalCoverageValue !== null ? Math.max(preliminaryRecommendedLimit, technicalCoverageValue) : preliminaryRecommendedLimit);
+  const executiveCoverageAvailable = technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : 0;
+  const executiveNetInternalExposure = executiveDisplayedRecommendedLimit !== null
+    ? Math.max(executiveDisplayedRecommendedLimit - executiveCoverageAvailable, 0)
+    : null;
+  const executiveExposureFullyCovered = executiveNetInternalExposure !== null && executiveNetInternalExposure === 0;
+  const executiveExposureHasResidual = executiveNetInternalExposure !== null && executiveNetInternalExposure > 0;
   const preliminaryMaxTermDays = institutionalRiskBand === "AA"
     ? 360
     : institutionalRiskBand === "A"
@@ -3398,11 +3443,35 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             <div className="space-y-4">
               <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
                 <p className="text-[18px] font-semibold text-[#0f172a]">Visão executiva da análise</p>
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-[18px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#0b1f3a_0%,#102a4c_100%)] p-4 text-white"><p className="text-[12px] text-[#bfdbfe]">Limite recomendado</p><p className="mt-2 text-[20px] font-extrabold text-white">{preliminaryRecommendedLimit !== null ? formatCurrencyBRLNoCents(preliminaryRecommendedLimit) : "—"}</p></div>
-                  <div className="rounded-[18px] border border-[#E2E8F0] bg-[#F8FAFC] p-4"><p className="text-[12px] text-[#64748b]">Cobertura COFACE</p><p className="mt-2 text-[20px] font-extrabold text-[#0f172a]">{technicalCoverageValue !== null ? formatCurrencyBRLNoCents(technicalCoverageValue) : "—"}</p></div>
-                  <div className="rounded-[18px] border border-[#E2E8F0] bg-[#F8FAFC] p-4"><p className="text-[12px] text-[#64748b]">Exposição interna</p><p className="mt-2 text-[20px] font-extrabold text-[#0f172a]">{technicalExposureValue > 0 ? formatCurrencyBRLNoCents(technicalExposureValue) : "—"}</p></div>
-                  <div className="rounded-[18px] border border-[#E2E8F0] bg-[#F8FAFC] p-4"><p className="text-[12px] text-[#64748b]">Overdue / Not due</p><p className="mt-2 text-[20px] font-extrabold text-[#0f172a]">{internalOverdue !== null && internalNotDue !== null ? `${Math.round((internalOverdue / Math.max(1, internalOverdue + internalNotDue)) * 100)}% / ${Math.round((internalNotDue / Math.max(1, internalOverdue + internalNotDue)) * 100)}%` : "—"}</p></div>
+                <div className="mt-4 grid gap-3 xl:grid-cols-[0.95fr_1.35fr]">
+                  <div className="flex min-h-[114px] flex-col justify-between rounded-[18px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#0b1f3a_0%,#102a4c_100%)] px-4 py-3 text-white shadow-[0_10px_20px_rgba(15,23,42,0.18)]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[#bfdbfe]">Limite recomendado</p>
+                    <p className="text-[28px] font-extrabold leading-none text-white">{formatCurrencyBRLCompactExecutive(executiveDisplayedRecommendedLimit)}</p>
+                    <p className="text-[11px] text-[#dbeafe]">{executiveCofaceFloorApplied ? "Cobertura COFACE utilizada como piso decisório." : "Recomendação preliminar da política institucional."}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-[#E8EEF5] bg-[rgba(248,250,252,0.78)] p-2.5">
+                    <div className="grid gap-2.5 sm:grid-cols-3">
+                    <div className="rounded-[14px] border border-[#EDF2F7] bg-[rgba(255,255,255,0.78)] px-3.5 py-3">
+                      <p className="text-[11px] font-semibold text-[#475569]">Cobertura COFACE</p>
+                      <p className="mt-1.5 text-[18px] font-extrabold text-[#0f172a]">{formatCurrencyBRLCompactExecutive(technicalCoverageValue)}</p>
+                      <p className="mt-1 text-[11px] text-[#64748b]">{executiveCoveragePercent !== null ? `${executiveCoveragePercent}% solicitado` : "Sem percentual"}</p>
+                    </div>
+                    <div className={`rounded-[14px] border px-3.5 py-3 ${
+                      executiveExposureHasResidual
+                        ? "border-[#F5DEB3] bg-[rgba(255,251,235,0.78)]"
+                        : "border-[#EDF2F7] bg-[rgba(255,255,255,0.78)]"
+                    }`}>
+                      <p className="text-[11px] font-semibold text-[#475569]">Exposição interna</p>
+                      <p className="mt-1.5 text-[18px] font-extrabold text-[#0f172a]">{formatCurrencyBRLCompactExecutive(executiveNetInternalExposure)}</p>
+                      <p className={`mt-1 text-[11px] ${executiveExposureHasResidual ? "font-semibold text-[#B45309]" : "text-[#64748b]"}`}>{executiveExposureFullyCovered ? "Coberto" : "Atenção"}</p>
+                    </div>
+                    <div className="flex min-h-[96px] flex-col justify-center rounded-[14px] border border-[#EDF2F7] bg-[rgba(255,255,255,0.78)] px-3.5 py-3">
+                      <p className="text-[11px] font-semibold text-[#475569]">Overdue</p>
+                      <p className="mt-1.5 text-[18px] font-extrabold text-[#0f172a]">{executiveOverduePercent !== null ? `${executiveOverduePercent}%` : "—"}</p>
+                      <p className="mt-1 text-[11px] text-[#64748b]">{executiveOverduePercent === 0 ? "Sem overdue" : executiveOverduePercent !== null ? "Com overdue" : "Sem base interna"}</p>
+                    </div>
+                    </div>
+                  </div>
                 </div>
               </article>
 
