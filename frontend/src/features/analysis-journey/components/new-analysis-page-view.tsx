@@ -3703,13 +3703,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   ))}
                 </ul>
               </article>
-              <article className="rounded-[24px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#FFFFFF_0%,#F8FAFC_100%)] p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)] p-5 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
                 <p className="text-[18px] font-semibold text-[#0f172a]">Dossiê de Crédito</p>
-                <p className="mt-1 text-[13px] text-[#64748b]">Geração do dossiê técnico após validação da mesa de análise, parecer do analista e condições recomendadas.</p>
-                <div className="mt-4 rounded-[22px] border border-dashed border-[#93c5fd] bg-[#eff6ff] p-4 text-center">
-                  <p className="text-[16px] font-black text-[#0b1f3a]">Pronto para gerar dossiê</p>
-                  <p className="mx-auto mt-2 max-w-[460px] text-[13px] text-[#475569]">Ao gerar, o sistema consolida a análise técnica, parecer do analista, score, exposição, condições recomendadas e trilha de auditoria para revisão final.</p>
-                  <button type="button" onClick={() => navigateToStep(4)} className="mt-4 inline-flex items-center rounded-full bg-[#0b1f3a] px-5 py-2.5 text-[13px] font-extrabold text-white">Gerar Dossiê</button>
+                <p className="mt-1 text-[13px] text-[#64748b]">Encerramento institucional da mesa de análise com consolidação do parecer técnico do analista.</p>
+                <div className="mt-4 rounded-[18px] border border-[#D7E6F6] bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F6FD_100%)] p-4">
+                  <p className="text-[16px] font-extrabold text-[#0b1f3a]">Dossiê técnico consolidado</p>
+                  <p className="mt-2 max-w-[560px] text-[13px] leading-relaxed text-[#475569]">O dossiê consolida score institucional, parecer técnico, mitigadores, exposição, condições recomendadas e trilha decisória para submissão à aprovação.</p>
+                  <button type="button" onClick={() => navigateToStep(4)} className="mt-4 inline-flex items-center rounded-full bg-[#0b1f3a] px-5 py-2.5 text-[13px] font-extrabold text-white">Gerar dossiê técnico</button>
                 </div>
               </article>
             </aside>
@@ -3850,6 +3850,27 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               className="inline-flex items-center rounded-[8px] bg-[#0D1B2A] px-5 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
             >
               Avançar · Mesa de análise <ChevronRight className="ml-1 h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : step === 3 ?(
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#D7E1EC] bg-white px-7 py-4">
+          <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
+            <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[#8FA3B4] text-[9px]">i</span>
+            O parecer técnico desta etapa compõe o dossiê consolidado para submissão à aprovação.
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => setStep(2)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-5 py-2 text-[12px] font-medium text-[#4F647A]">
+              <ChevronLeft className="mr-1 inline h-3.5 w-3.5" />
+              Voltar
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToStep(4)}
+              disabled={!canContinue}
+              className="rounded-[8px] bg-[#0b1f3a] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
+            >
+              Gerar dossiê técnico
             </button>
           </div>
         </div>
