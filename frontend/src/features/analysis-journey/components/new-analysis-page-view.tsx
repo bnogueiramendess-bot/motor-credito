@@ -101,6 +101,24 @@ type InternalEconomicPosition = {
   base_date?: string | null;
 };
 
+type ExecutiveNarrativeSeverity = "neutral" | "positive" | "attention";
+
+type ExecutiveNarrativeInput = {
+  score: number | null;
+  scoreBand: string;
+  internalSuggestedLimit: number | null;
+  cofaceCoverage: number | null;
+  recommendedLimit: number | null;
+  exposure: number | null;
+  overduePercentage: number | null;
+};
+
+type ExecutiveNarrativeResult = {
+  summary: string;
+  highlights: Array<{ label: string; text: string }>;
+  severity: ExecutiveNarrativeSeverity;
+};
+
 function RequiredMark() {
   return <span className="ml-1 text-[#dc2626]">*</span>;
 }
@@ -426,6 +444,90 @@ function policyPillarStatusClass(status: PolicyPillarStatus) {
   if (status === "Atenção") return "bg-[#FFF7E8] text-[#92400E] border-[#FDE68A]";
   if (status === "Crítico") return "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]";
   return "bg-[#EEF3F8] text-[#4F647A] border-[#D7E1EC]";
+}
+
+function buildExecutiveNarrative({
+  score,
+  scoreBand,
+  internalSuggestedLimit,
+  cofaceCoverage,
+  recommendedLimit,
+  exposure,
+  overduePercentage
+}: ExecutiveNarrativeInput): ExecutiveNarrativeResult {
+  const scoreText = score !== null ? `${Math.round(score * 10)}/100` : "informação não disponível";
+  const scoreBandText = score !== null ? scoreBand.toUpperCase() : "informação não disponível";
+  const internalLimitText = internalSuggestedLimit !== null ? formatCurrencyBRLCompactExecutive(internalSuggestedLimit) : "informação não disponível";
+  const coverageText = cofaceCoverage !== null ? formatCurrencyBRLCompactExecutive(cofaceCoverage) : "informação não disponível";
+  const recommendedText = recommendedLimit !== null ? formatCurrencyBRLCompactExecutive(recommendedLimit) : "informação não disponível";
+
+  const isRestrictiveScore = score !== null && score < 4;
+  const hasCoface = cofaceCoverage !== null && cofaceCoverage > 0;
+  const cofaceAsFloor = hasCoface && internalSuggestedLimit !== null && cofaceCoverage > internalSuggestedLimit;
+  const hasResidualExposure = exposure !== null && exposure > 0;
+  const hasOverdue = overduePercentage !== null && overduePercentage > 0;
+  const fullyCovered = exposure !== null && exposure === 0;
+
+  const opening = isRestrictiveScore
+    ? `Apesar do perfil de risco ${scoreBandText} (${scoreText}),`
+    : `Considerando o perfil de risco ${scoreBandText} (${scoreText}),`;
+  const base = ` a política institucional definiu limite interno preliminar de ${internalLimitText}.`;
+  const coverageSentence = hasCoface
+    ? ` Há cobertura COFACE disponível de ${coverageText}.`
+    : " Sem cobertura COFACE disponível, a recomendação permanece limitada ao cálculo interno da política institucional e aos fatores técnicos avaliados na mesa.";
+  const floorSentence = hasCoface
+    ? cofaceAsFloor
+      ? " A cobertura COFACE disponível suporta integralmente a recomendação final e foi adotada como piso decisório, ampliando a mitigação do risco além do limite preliminar."
+      : " A cobertura COFACE foi considerada na recomendação, porém sem necessidade de ajuste do piso em relação ao limite preliminar."
+    : "";
+  const decisionSentence = ` O limite recomendado final é ${recommendedText}.`;
+  const exposureSentence = exposure === null
+    ? " A exposição residual está com informação não disponível."
+    : hasResidualExposure
+      ? ` A recomendação final excede a cobertura disponível, gerando exposição residual de ${formatCurrencyBRLCompactExecutive(exposure)} que deve ser considerada na decisão.`
+      : " Não há exposição residual identificada na recomendação final.";
+  const overdueSentence = overduePercentage === null
+    ? " Overdue interno: informação não disponível."
+    : hasOverdue
+      ? ` Há overdue interno identificado de ${overduePercentage}%, que deve ser considerado como fator de restrição na análise.`
+      : " Não há overdue interno identificado.";
+
+  const summary = `${opening}${base}${coverageSentence}${floorSentence}${decisionSentence}${exposureSentence}${overdueSentence}`;
+
+  const highlights: Array<{ label: string; text: string }> = [
+    {
+      label: "Mitigação",
+      text: hasCoface
+        ? cofaceAsFloor
+          ? "Cobertura COFACE utilizada como piso decisório da recomendação."
+          : "Cobertura COFACE disponível, sem efeito de piso sobre o limite interno."
+        : "Sem cobertura COFACE; recomendação baseada na política interna."
+    },
+    {
+      label: "Exposição",
+      text: exposure === null
+        ? "Informação não disponível."
+        : hasResidualExposure
+          ? `Exposição residual de ${formatCurrencyBRLCompactExecutive(exposure)}.`
+          : "Sem exposição residual identificada."
+    },
+    {
+      label: "Carteira",
+      text: overduePercentage === null
+        ? "Overdue interno com informação não disponível."
+        : hasOverdue
+          ? `Overdue interno de ${overduePercentage}%.`
+          : "Cliente sem overdue interno relevante."
+    }
+  ];
+
+  const severity: ExecutiveNarrativeSeverity = hasResidualExposure || hasOverdue
+    ? "attention"
+    : fullyCovered && hasCoface
+      ? "positive"
+      : "neutral";
+
+  return { summary, highlights, severity };
 }
 
 const agriskWarningLabelMap: Record<string, string> = {
@@ -1810,6 +1912,25 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     : null;
   const executiveExposureFullyCovered = executiveNetInternalExposure !== null && executiveNetInternalExposure === 0;
   const executiveExposureHasResidual = executiveNetInternalExposure !== null && executiveNetInternalExposure > 0;
+  const executiveInternalSuggestedLimit = (() => {
+    if (institutionalScore === null || technicalRequestedLimit <= 0) return null;
+    const scoreFactor = institutionalScore >= 9 ? 1 : institutionalScore >= 8 ? 0.95 : institutionalScore >= 6 ? 0.8 : institutionalScore >= 4 ? 0.6 : 0.4;
+    return Math.max(0, technicalRequestedLimit * scoreFactor);
+  })();
+  const executiveNarrative = buildExecutiveNarrative({
+    score: institutionalScore,
+    scoreBand: institutionalRiskBand,
+    internalSuggestedLimit: executiveInternalSuggestedLimit,
+    cofaceCoverage: technicalCoverageValue,
+    recommendedLimit: executiveDisplayedRecommendedLimit,
+    exposure: executiveNetInternalExposure,
+    overduePercentage: executiveOverduePercent
+  });
+  const executiveNarrativeCardClass = executiveNarrative.severity === "attention"
+    ? "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]"
+    : executiveNarrative.severity === "positive"
+      ? "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]"
+      : "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]";
   const preliminaryMaxTermDays = institutionalRiskBand === "AA"
     ? 360
     : institutionalRiskBand === "A"
@@ -3539,6 +3660,24 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </article>
             </div>
             <aside className="space-y-4">
+              <article className={`rounded-[24px] p-6 shadow-[0_4px_14px_rgba(15,23,42,0.04)] ${executiveNarrativeCardClass}`}>
+                <div className="flex items-start gap-3">
+                  <span className="mt-1 h-10 w-[3px] rounded-full bg-[#8DB8EA]" aria-hidden="true" />
+                  <div>
+                    <p className="text-[18px] font-semibold text-[#0f172a]">Explicação da análise</p>
+                    <p className="mt-1 text-[13px] text-[#64748b]">Leitura executiva da lógica aplicada à recomendação.</p>
+                  </div>
+                </div>
+                <p className="mt-5 max-w-[70ch] text-[13px] leading-[1.85] text-[#334155]">{executiveNarrative.summary}</p>
+                <ul className="mt-5 divide-y divide-[#E8EEF5]/70 text-[12px] text-[#475569]">
+                  {executiveNarrative.highlights.slice(0, 3).map((item, index) => (
+                    <li key={`${item.label}-${index}`} className="py-3.5 first:pt-0 last:pb-0">
+                      <p className="text-[12px] font-medium tracking-[0.01em] text-[#5B6E84]">{item.label}</p>
+                      <p className="mt-1.5 text-[12px] leading-relaxed text-[#334155]">{item.text}</p>
+                    </li>
+                  ))}
+                </ul>
+              </article>
               <article className="rounded-[24px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#FFFFFF_0%,#F8FAFC_100%)] p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
                 <p className="text-[18px] font-semibold text-[#0f172a]">Dossiê de Crédito</p>
                 <p className="mt-1 text-[13px] text-[#64748b]">Geração do dossiê técnico após validação da mesa de análise, parecer do analista e condições recomendadas.</p>
