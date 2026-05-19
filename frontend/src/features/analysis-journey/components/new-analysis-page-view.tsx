@@ -74,6 +74,13 @@ type PolicyPillar = {
   sources: string[];
   criteria: string[];
   explanation: string;
+  tooltip: {
+    title: string;
+    description: string;
+    source: string;
+    note: string;
+    weightLabel?: string;
+  };
 };
 
 type InstitutionalScoreBreakdownItem = {
@@ -82,6 +89,7 @@ type InstitutionalScoreBreakdownItem = {
   weight: number;
   score: number;
   weighted: number;
+  tooltip: PolicyPillar["tooltip"];
 };
 
 type InternalEconomicPosition = {
@@ -252,6 +260,13 @@ function formatIsoDateToBr(value: string | null | undefined) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
   if (!match) return value;
   return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+function normalizeAgriskScoreToTenScale(rawScore: number) {
+  if (!Number.isFinite(rawScore) || rawScore <= 0) return 0;
+  if (rawScore <= 10) return Math.max(0, Math.min(10, rawScore));
+  if (rawScore <= 1000) return Math.max(0, Math.min(10, rawScore / 100));
+  return Math.max(0, Math.min(10, rawScore / 100));
 }
 
 function formatCnpjForDisplay(value: string | null | undefined) {
@@ -1450,64 +1465,85 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }
   ];
   const hasFinancialDocuments = financialDocuments.length > 0;
-  const financialPillarScore = !hasFinancialDocuments
-    ? null
-    : technicalAgriskScore !== null
-      ? Math.max(0, Math.min(10, technicalAgriskScore))
-      : 6;
-  const financialPillarStatus: PolicyPillarStatus = !hasFinancialDocuments
-    ? "Informações insuficientes"
-    : financialPillarScore !== null && financialPillarScore >= 8
-      ? "Forte"
-      : financialPillarScore !== null && financialPillarScore >= 6
-        ? "Adequado"
-        : financialPillarScore !== null && financialPillarScore >= 4
-          ? "Atenção"
-          : "Crítico";
-  const guaranteePillarScore = technicalCoverageValue === null || technicalRequestedLimit <= 0
-    ? null
-    : Math.max(0, Math.min(10, (technicalCoverageValue / technicalRequestedLimit) * 10));
-  const guaranteePillarStatus: PolicyPillarStatus = technicalCoverageValue === null
-    ? "Crítico"
-    : technicalRequestedLimit <= 0
-      ? "Informações insuficientes"
-      : technicalCoverageValue >= technicalRequestedLimit
-        ? "Forte"
-        : technicalCoverageValue >= technicalRequestedLimit * 0.6
-          ? "Atenção"
-          : "Crítico";
-  const marketPillarScore = technicalAgriskScore !== null ? Math.max(0, Math.min(10, technicalAgriskScore)) : null;
-  const marketPillarStatus: PolicyPillarStatus = technicalAgriskScore === null
-    ? "Informações insuficientes"
-    : technicalAgriskScore >= 8
-      ? "Forte"
-      : technicalAgriskScore >= 6
-        ? "Adequado"
-        : technicalAgriskScore >= 4
-          ? "Atenção"
-          : "Crítico";
-  const paymentPillarScore = technicalOverdueValue === null
-    ? null
-    : technicalOverdueValue <= 0
-      ? 9
-      : technicalRequestedLimit > 0
-        ? Math.max(0, Math.min(10, 10 - (technicalOverdueValue / technicalRequestedLimit) * 10))
-        : 4;
-  const paymentPillarStatus: PolicyPillarStatus = technicalOverdueValue === null
-    ? "Informações insuficientes"
-    : technicalOverdueValue <= 0
-      ? "Forte"
-      : technicalRequestedLimit > 0 && technicalOverdueValue <= technicalRequestedLimit * 0.25
-        ? "Atenção"
-        : "Crítico";
-  const relationshipPillarScore = hasInternalFinancialSnapshot ? (technicalOverdueValue !== null && technicalOverdueValue > 0 ? 5 : 8) : hasInternalDataAvailable ? 6 : null;
-  const relationshipPillarStatus: PolicyPillarStatus = hasInternalFinancialSnapshot
-    ? technicalOverdueValue !== null && technicalOverdueValue > 0
-      ? "Atenção"
-      : "Forte"
-    : hasInternalDataAvailable
+  // Regra provisória aprovada para o pilar financeiro:
+  // a ausência de DFs/relatório AGRISK estruturado não é neutra e mantém nota zero até a engine financeira definitiva.
+  const financialPillarScore = 0;
+  const financialPillarStatus: PolicyPillarStatus = "Informações insuficientes";
+  const guaranteeRequestedLimit = technicalRequestedLimit > 0 ? technicalRequestedLimit : 0;
+  const guaranteeCoverageRatio = technicalCoverageValue !== null && guaranteeRequestedLimit > 0
+    ? technicalCoverageValue / guaranteeRequestedLimit
+    : 0;
+  const guaranteePillarScore = !hasCofaceImported || technicalCoverageValue === null || technicalCoverageValue <= 0 || guaranteeRequestedLimit <= 0
+    ? 0
+    : Math.max(0, Math.min(10, guaranteeCoverageRatio * 10));
+  const guaranteePillarStatus: PolicyPillarStatus = guaranteePillarScore >= 8
+    ? "Forte"
+    : guaranteePillarScore >= 6
       ? "Adequado"
-      : "Informações insuficientes";
+      : guaranteePillarScore >= 4
+        ? "Atenção"
+        : guaranteePillarScore >= 1
+          ? "Crítico"
+          : "Informações insuficientes";
+  const guaranteeCoveragePercent = Math.max(0, Math.round(guaranteeCoverageRatio * 100));
+  const guaranteeCoverageHelperText = !hasCofaceImported || technicalCoverageValue === null || technicalCoverageValue <= 0 || guaranteeRequestedLimit <= 0
+    ? "Sem cobertura estruturada disponível."
+    : `Cobertura COFACE equivalente a ${guaranteeCoveragePercent}% do limite solicitado.`;
+  const marketPillarScore = 0;
+  const marketPillarStatus: PolicyPillarStatus = "Informações insuficientes";
+  const agriskRestrictiveScoresRaw = [
+    agriskImport.agriskReadPayload?.credit?.score ?? null,
+    ...(agriskImport.agriskReadPayload?.credit?.secondary_scores ?? []).map((item) => item.score ?? null)
+  ]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+  const agriskRestrictiveScoresNormalized = agriskRestrictiveScoresRaw.map((score) => normalizeAgriskScoreToTenScale(score));
+  const paymentPillarScore = agriskRestrictiveScoresNormalized.length === 0
+    ? 0
+    : agriskRestrictiveScoresNormalized.reduce((acc, score) => acc + score, 0) / agriskRestrictiveScoresNormalized.length;
+  const paymentPillarStatus: PolicyPillarStatus = paymentPillarScore >= 8
+    ? "Forte"
+    : paymentPillarScore >= 6
+      ? "Adequado"
+      : paymentPillarScore >= 4
+        ? "Atenção"
+        : paymentPillarScore >= 1
+          ? "Crítico"
+          : "Informações insuficientes";
+  const paymentPillarHelperText = agriskRestrictiveScoresNormalized.length === 0
+    ? "Sem scores restritivos AGRISK disponíveis."
+    : `Média dos scores restritivos AGRISK disponíveis: ${paymentPillarScore.toFixed(1)}/10.`;
+  const relationshipHasInternalBase = hasInternalDataAvailable;
+  const relationshipExposure = technicalExposureValue > 0 ? technicalExposureValue : 0;
+  const relationshipOverdue = technicalOverdueValue !== null && technicalOverdueValue > 0 ? technicalOverdueValue : 0;
+  const relationshipHasActiveExposure = relationshipExposure > 0;
+  const relationshipOverdueRatio = relationshipHasActiveExposure ? relationshipOverdue / relationshipExposure : 0;
+  const relationshipPillarScore = !relationshipHasInternalBase
+    ? 0
+    : !relationshipHasActiveExposure
+      ? 6
+      : relationshipOverdue <= 0
+        ? 10
+        : relationshipOverdueRatio <= 0.05
+          ? 7.5
+          : 5;
+  const relationshipPillarStatus: PolicyPillarStatus = relationshipPillarScore >= 8
+    ? "Forte"
+    : relationshipPillarScore >= 6
+      ? "Adequado"
+      : relationshipPillarScore >= 4
+        ? "Atenção"
+        : relationshipPillarScore >= 1
+          ? "Crítico"
+          : "Informações insuficientes";
+  const relationshipPillarHelperText = !relationshipHasInternalBase
+    ? "Cliente novo, sem histórico interno de relacionamento."
+    : !relationshipHasActiveExposure
+      ? "Cliente na base interna, sem exposição atual."
+      : relationshipOverdue <= 0
+        ? "Cliente com relacionamento ativo na carteira e sem overdue relevante."
+        : relationshipOverdueRatio <= 0.05
+          ? "Cliente com overdue interno moderado."
+          : "Cliente com overdue interno relevante.";
   const policyPillars: PolicyPillar[] = [
     {
       key: "financial_liquidity",
@@ -1515,50 +1551,41 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       weight: 55,
       score: financialPillarScore,
       status: financialPillarStatus,
-      summary: !hasFinancialDocuments
-        ? "Documentação financeira incompleta para leitura técnica."
-        : financialPillarStatus === "Forte"
-          ? "Documentação financeira completa e score consistente."
-          : financialPillarStatus === "Adequado"
-            ? "Liquidez em faixa adequada para continuidade da análise."
-            : financialPillarStatus === "Atenção"
-              ? "Sinais de atenção na liquidez e consistência financeira."
-              : "Indicativos críticos de risco financeiro preliminar.",
+      summary: "Pilar não avaliado por ausência de DFs/relatório financeiro estruturado.",
       sources: ["Documentação financeira", "Agrisk"],
       criteria: [
-        hasFinancialDocuments ? "Presença de documentação financeira" : "Ausência de documentação financeira",
-        technicalAgriskScore !== null ? `Score preliminar Agrisk: ${technicalAgriskScore.toFixed(0)}/10` : "Score Agrisk indisponível"
+        "Ausência de documentação financeira estruturada para motor institucional",
+        "Score financeiro estruturado indisponível"
       ],
-      explanation: !hasFinancialDocuments
-        ? "A avaliação foi limitada pela ausência de documentação financeira."
-        : "A avaliação considerou documentação financeira e consistência do score preliminar disponível."
+      explanation: "A ausência de documentação financeira estruturada não é tratada como dado neutro. Enquanto não houver DFs ou relatório financeiro AGRISK disponível, o pilar permanece com nota zero e impacta o score institucional.",
+      tooltip: {
+        title: "Estabilidade Financeira e Liquidez",
+        description: "Avalia a robustez financeira por demonstrações financeiras, liquidez, endividamento e geração de caixa.",
+        source: "DFs e relatório financeiro AGRISK.",
+        note: "Enquanto a fonte estruturada não estiver ativa, o pilar permanece com nota 0.0/10."
+      }
     },
     {
       key: "guarantees",
       title: "Garantias / Seguro de Crédito",
-      weight: 20,
+      weight: 30,
       score: guaranteePillarScore,
       status: guaranteePillarStatus,
-      summary: technicalCoverageValue === null
-        ? "Sem cobertura COFACE disponível no momento."
-        : guaranteePillarStatus === "Forte"
-          ? "Cobertura segurada compatível com o limite solicitado."
-          : guaranteePillarStatus === "Atenção"
-            ? "Cobertura parcial frente ao limite solicitado."
-            : "Cobertura insuficiente para suportar o limite solicitado.",
+      summary: guaranteeCoverageHelperText,
       sources: ["COFACE", "Mesa de análise"],
       criteria: [
-        technicalRequestedLimit > 0 ? `Limite solicitado: ${formatCurrencyBRL(String(technicalRequestedLimit))}` : "Limite solicitado não disponível",
+        guaranteeRequestedLimit > 0 ? `Limite solicitado: ${formatCurrencyBRL(String(guaranteeRequestedLimit))}` : "Limite solicitado indisponível",
         technicalCoverageValue !== null ? `Cobertura segurada: ${formatCurrencyBRL(String(technicalCoverageValue))}` : "Cobertura segurada não disponível",
-        technicalCoverageValue === null || technicalRequestedLimit <= 0
-          ? "Critério aplicado: dados insuficientes para comparação completa"
-          : technicalCoverageValue < technicalRequestedLimit
-            ? "Critério aplicado: cobertura < limite solicitado"
-            : "Critério aplicado: cobertura >= limite solicitado"
+        `Índice de cobertura: ${guaranteeCoveragePercent}%`
       ],
-      explanation: technicalCoverageValue === null
-        ? "Sem dados de cobertura segurada para suportar o limite solicitado."
-        : "A avaliação comparou diretamente cobertura segurada e limite solicitado."
+      explanation: "A nota é calculada por (Cobertura COFACE / Limite Solicitado) × 10, com limite máximo de 10.0.",
+      tooltip: {
+        title: "Garantias / Seguro de Crédito",
+        description: "Avalia o nível de mitigação do risco da operação por cobertura COFACE, exposição líquida não coberta e garantias estruturadas.",
+        source: "COFACE, Carteira Corporativa e Complemento Manual.",
+        note: "A nota atual reflete diretamente o percentual coberto da solicitação comercial original.",
+        weightLabel: "Peso do Pilar: 30%"
+      }
     },
     {
       key: "market_conditions",
@@ -1566,23 +1593,20 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       weight: 15,
       score: marketPillarScore,
       status: marketPillarStatus,
-      summary: marketPillarStatus === "Informações insuficientes"
-        ? "Dados de mercado ainda insuficientes para interpretação."
-        : marketPillarStatus === "Forte"
-          ? "Indicadores externos sugerem condição favorável."
-          : marketPillarStatus === "Adequado"
-            ? "Condições externas em faixa estável."
-            : marketPillarStatus === "Atenção"
-              ? "Condições externas exigem atenção adicional."
-              : "Condições externas sinalizam risco elevado.",
+      summary: "Metodologia de condições de mercado em evolução no modelo atual.",
       sources: ["Agrisk", "Dados externos existentes"],
       criteria: [
-        technicalAgriskScore !== null ? `Score Agrisk considerado: ${technicalAgriskScore.toFixed(0)}/10` : "Sem score Agrisk disponível",
-        "Sinais externos consolidados disponíveis na análise"
+        "Pilar preservado institucionalmente no motor de score",
+        "Metodologia ativa ainda em evolução"
       ],
-      explanation: technicalAgriskScore === null
-        ? "A avaliação não pôde ser concluída por falta de indicador externo principal."
-        : "A avaliação considerou os sinais externos já estruturados no relatório."
+      explanation: "O pilar permanece visível conforme política oficial, porém sem metodologia robusta ativa nesta fase.",
+      tooltip: {
+        title: "Condições de Mercado",
+        description: "Avalia fatores externos relacionados ao ambiente de atuação do cliente, como setor, mercado e condições macroeconômicas.",
+        source: "Dados externos e sinais de mercado disponíveis.",
+        note: "Metodologia em evolução no modelo atual.",
+        weightLabel: "Peso do Pilar: 15%"
+      }
     },
     {
       key: "payment_history",
@@ -1590,21 +1614,22 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       weight: 5,
       score: paymentPillarScore,
       status: paymentPillarStatus,
-      summary: paymentPillarStatus === "Informações insuficientes"
-        ? "Sem base interna suficiente para histórico de pagamento."
-        : paymentPillarStatus === "Forte"
-          ? "Sem overdue relevante identificado na carteira."
-          : paymentPillarStatus === "Atenção"
-            ? "Overdue presente em nível de atenção."
-            : "Overdue relevante impactando o histórico de pagamento.",
-      sources: ["Carteira interna"],
+      summary: paymentPillarHelperText,
+      sources: ["AGRISK"],
       criteria: [
-        technicalOverdueValue !== null ? `Overdue interno: ${formatCurrencyBRL(String(technicalOverdueValue))}` : "Overdue interno não disponível",
-        technicalExposureValue > 0 ? `Exposição atual: ${formatCurrencyBRL(String(technicalExposureValue))}` : "Exposição atual não disponível"
+        `Scores restritivos considerados: ${agriskRestrictiveScoresNormalized.length}`,
+        agriskRestrictiveScoresNormalized.length > 0
+          ? `Média em escala 0-10: ${paymentPillarScore.toFixed(1)}`
+          : "Sem scores restritivos disponíveis no relatório"
       ],
-      explanation: technicalOverdueValue === null
-        ? "Sem dados suficientes para medir comportamento de pagamento."
-        : "A avaliação comparou overdue e exposição atual para leitura preliminar de risco."
+      explanation: "A nota considera média simples dos scores restritivos AGRISK disponíveis, convertidos para escala 0-10.",
+      tooltip: {
+        title: "Histórico de Pagamento",
+        description: "Avalia o comportamento de crédito do cliente com base nos scores restritivos disponíveis no relatório AGRISK.",
+        source: "AGRISK — QUOD, Boa Vista e scores restritivos disponíveis.",
+        note: "Sem scores disponíveis, a nota do pilar permanece 0.0/10.",
+        weightLabel: "Peso do Pilar: 5%"
+      }
     },
     {
       key: "relationship_history",
@@ -1612,21 +1637,21 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       weight: 5,
       score: relationshipPillarScore,
       status: relationshipPillarStatus,
-      summary: relationshipPillarStatus === "Informações insuficientes"
-        ? "Relacionamento interno ainda sem histórico consolidado."
-        : relationshipPillarStatus === "Forte"
-          ? "Cliente com relacionamento recorrente e estável."
-          : relationshipPillarStatus === "Adequado"
-            ? "Cliente em fase de consolidação de relacionamento."
-            : "Relacionamento com pontos de atenção no comportamento recente.",
+      summary: relationshipPillarHelperText,
       sources: ["Histórico interno", "Carteira interna"],
       criteria: [
-        hasInternalDataAvailable ? "Cliente localizado na base interna" : "Cliente sem histórico interno consolidado",
-        hasInternalFinancialSnapshot ? "Há movimentação interna disponível" : "Movimentação interna não disponível"
+        relationshipHasInternalBase ? "Cliente localizado na base interna" : "Cliente sem histórico interno consolidado",
+        relationshipHasActiveExposure ? `Exposição interna ativa: ${formatCurrencyBRL(String(relationshipExposure))}` : "Sem exposição interna ativa",
+        relationshipHasActiveExposure ? `Overdue interno: ${formatCurrencyBRL(String(relationshipOverdue))}` : "Overdue não aplicável sem exposição ativa"
       ],
-      explanation: hasInternalDataAvailable
-        ? "A avaliação considerou recorrência e qualidade do relacionamento interno existente."
-        : "A avaliação ficou limitada por ausência de histórico interno."
+      explanation: "A nota segue regra objetiva por presença em base interna, exposição ativa e proporção de overdue interno sobre a exposição.",
+      tooltip: {
+        title: "Histórico de Relacionamento",
+        description: "Avalia o relacionamento interno do cliente com a empresa, considerando presença na carteira corporativa, exposição atual e comportamento de pagamento interno.",
+        source: "Carteira Corporativa / AR Aging.",
+        note: "Regra objetiva aplicada com base em presença na carteira, exposição e overdue interno.",
+        weightLabel: "Peso do Pilar: 5%"
+      }
     }
   ];
   const institutionalScoreBreakdown: InstitutionalScoreBreakdownItem[] = policyPillars
@@ -1636,11 +1661,15 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       title: pillar.title,
       weight: pillar.weight,
       score: pillar.score,
-      weighted: pillar.score * (pillar.weight / 100)
+      weighted: pillar.score * pillar.weight,
+      tooltip: pillar.tooltip
     }));
+  const institutionalTotalWeight = policyPillars.reduce((acc, pillar) => acc + pillar.weight, 0);
   const hasInstitutionalScoreData = institutionalScoreBreakdown.length === policyPillars.length;
   const institutionalScore = hasInstitutionalScoreData
-    ? institutionalScoreBreakdown.reduce((acc, item) => acc + item.weighted, 0)
+    ? institutionalTotalWeight > 0
+      ? institutionalScoreBreakdown.reduce((acc, item) => acc + item.weighted, 0) / institutionalTotalWeight
+      : null
     : null;
   const institutionalRiskBand = institutionalScore !== null ? toScoreBand(institutionalScore) : "Informações insuficientes";
   const institutionalScoreSummary =
@@ -2432,7 +2461,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         </article>
       ) : null}
 
-      {step >= 2 ?(
+      {step >= 2 && step !== 3 ?(
         <div className={`flex items-center gap-3 bg-white ${step === 4 ?"h-[44px] border-b border-[#D7E1EC] px-7" : "rounded-[10px] border border-[#D7E1EC] px-5 py-3"}`}>
           <div className="mr-1 text-[11px] text-[#8FA3B4]">Cliente da solicitação</div>
           <div className={`flex items-center justify-center rounded-[6px] text-[10px] font-bold ${step === 4 ?"h-[26px] w-[26px] bg-[#295B9A] text-white" : "h-7 w-7 bg-[#EEF3F8] text-[#295B9A]"}`}>
@@ -2444,7 +2473,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         </div>
       ) : null}
 
-      {step === 2 || step === 3 ?(
+      {step === 2 ?(
         <>
           <article className="space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2480,346 +2509,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   <div><p className="text-[10px] uppercase text-[#8FA3B4]">Data da solicitação</p><p className="text-[12px] font-medium text-[#102033]">{new Date().toLocaleDateString("pt-BR")}</p></div>
                 </div>
               </section>
-            ) : null}
-
-            {step === 3 ? (
-            <section className="rounded-[16px] border border-[#D7E1EC] bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.08em] text-[#8FA3B4]">Central técnica</p>
-                  <p className="text-[16px] font-semibold text-[#102033]">Painel Técnico Consolidado</p>
-                  <p className="text-[12px] text-[#4F647A]">Resumo executivo dos dados estruturados para apoio da análise.</p>
-                </div>
-                <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${technicalStatusClass}`}>{technicalStatusLabel}</span>
-              </div>
-
-              <div className="mt-4 rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-[10px] border border-[#D7E1EC] bg-white p-3">
-                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Score Institucional Preliminar</p>
-                    <p className="mt-1 text-[18px] font-semibold text-[#102033]">{institutionalScore !== null ? institutionalScore.toFixed(1) : "Sem dados suficientes"}</p>
-                  </div>
-                  <div className="rounded-[10px] border border-[#D7E1EC] bg-white p-3">
-                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Grupo de Risco Preliminar</p>
-                    <span className={`mt-1 inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold ${toScoreBandClass(institutionalRiskBand)}`}>{institutionalRiskBand}</span>
-                  </div>
-                  <div className="rounded-[10px] border border-[#D7E1EC] bg-white p-3">
-                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Limite Recomendado</p>
-                    <p className="mt-1 text-[14px] font-semibold text-[#102033]">{preliminaryRecommendedLimit !== null ? formatCurrencyBRL(String(preliminaryRecommendedLimit.toFixed(2))) : "Aguardando importação"}</p>
-                  </div>
-                  <div className={`rounded-[10px] border p-3 ${preliminaryEligibility.tone}`}>
-                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Elegibilidade</p>
-                    <p className={`mt-1 text-[12px] font-semibold ${preliminaryEligibility.className}`}>{preliminaryEligibility.label}</p>
-                  </div>
-                </div>
-                <div className="mt-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-[#8FA3B4]">Insights críticos</p>
-                  <div className="mt-1 space-y-1.5">
-                    {executiveInsights.length > 0 ? executiveInsights.map((insight, index) => (
-                      <p key={`${insight.text}-${index}`} className="text-[11px] text-[#4F647A]">• {insight.text}</p>
-                    )) : <p className="text-[11px] text-[#4F647A]">Sem dados suficientes para priorização de alertas.</p>}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4">
-                <button
-                  type="button"
-                  onClick={() => setIsTechnicalDetailsOpen((prev) => !prev)}
-                  className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
-                >
-                  <Info className="h-3.5 w-3.5" />
-                  {isTechnicalDetailsOpen ? "Ocultar análise técnica detalhada" : "Análise Técnica Detalhada"}
-                </button>
-              </div>
-
-              {isTechnicalDetailsOpen ? (
-              <>
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
-                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Cliente</p>
-                  <p className="mt-1 text-[13px] font-semibold text-[#102033]">{customer.companyName || "Não disponível"}</p>
-                  <p className="text-[11px] text-[#4F647A]">{formatCnpjForDisplay(customer.cnpj) || "Não disponível"}</p>
-                  <p className="text-[11px] text-[#8FA3B4]">{economicGroupLabel}</p>
-                </div>
-                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
-                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Limite solicitado</p>
-                  <p className="mt-1 text-[14px] font-semibold text-[#102033]">{technicalRequestedLimit > 0 ? formatCurrencyBRL(String(technicalRequestedLimit)) : "Não disponível"}</p>
-                </div>
-                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
-                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Exposição atual</p>
-                  <p className="mt-1 text-[14px] font-semibold text-[#102033]">{technicalExposureValue > 0 ? formatCurrencyBRL(String(technicalExposureValue)) : "Não disponível"}</p>
-                </div>
-                <div className="rounded-[12px] border border-[#E5EAF1] bg-[#FAFCFF] p-3">
-                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Cobertura COFACE / Overdue</p>
-                  <p className="mt-1 text-[12px] font-semibold text-[#102033]">
-                    {technicalCoverageValue !== null ? formatCurrencyBRL(String(technicalCoverageValue)) : "Não disponível"}
-                  </p>
-                  <p className="text-[11px] text-[#4F647A]">
-                    Overdue: {technicalOverdueValue !== null ? formatCurrencyBRL(String(technicalOverdueValue)) : "Não disponível"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {technicalCards.map((card) => (
-                  <article key={card.key} className="rounded-[12px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
-                    <div className="mb-2 flex items-center gap-2 text-[#8FA3B4]">
-                      <Building2 className="h-3.5 w-3.5" />
-                      <p className="text-[10px] uppercase tracking-[0.05em]">{card.label}</p>
-                    </div>
-                    <p className="text-[14px] font-semibold text-[#102033]">{card.value}</p>
-                    <p className="text-[11px] text-[#4F647A]">{card.subtitle}</p>
-                  </article>
-                ))}
-              </div>
-
-              <div className="mt-4">
-                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Score Institucional Preliminar</p>
-                      <p className="text-[11px] text-[#4F647A]">Leitura consolidada dos pilares da política.</p>
-                    </div>
-                    <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${toScoreBandClass(institutionalRiskBand)}`}>
-                      {institutionalRiskBand}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-end gap-3">
-                    <p className="text-[24px] font-semibold text-[#102033]">
-                      {institutionalScore !== null ? institutionalScore.toFixed(1) : "—"}
-                    </p>
-                    <p className="mb-1 text-[11px] text-[#8FA3B4]">/10</p>
-                  </div>
-                  <p className="text-[11px] text-[#4F647A]">{institutionalScoreSummary}</p>
-                  <p className="mt-1 text-[11px] text-[#8FA3B4]">
-                    Este score representa uma leitura preliminar baseada nos dados disponíveis nesta etapa. A recomendação final será gerada na execução do motor de crédito.
-                  </p>
-
-                  {institutionalScore !== null ? (
-                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      {institutionalScoreBreakdown.map((item) => (
-                        <div key={item.key} className="rounded-[8px] border border-[#E5EAF1] bg-[#FCFDFE] px-2.5 py-2">
-                          <p className="text-[10px] font-medium text-[#102033]">{item.title}</p>
-                          <p className="text-[10px] text-[#4F647A]">
-                            Nota {item.score.toFixed(1)} · Peso {item.weight}% · Contribuição {item.weighted.toFixed(2)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-3 rounded-[8px] border border-dashed border-[#D7E1EC] bg-[#F8FBFF] px-3 py-2 text-[11px] text-[#4F647A]">
-                      Informações insuficientes para cálculo consolidado.
-                    </div>
-                  )}
-
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={() => setIsInstitutionalScoreExpanded((prev) => !prev)}
-                      className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2 py-1 text-[10px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
-                    >
-                      <Info className="h-3.5 w-3.5" />
-                      Como foi calculado
-                    </button>
-                  </div>
-                  {isInstitutionalScoreExpanded ? (
-                    <div className="mt-2 rounded-[8px] border border-[#D7E1EC] bg-[#FAFCFF] p-2.5 text-[10px] text-[#4F647A]">
-                      <p className="font-semibold text-[#102033]">Avaliação preliminar</p>
-                      <p>Score calculado pela média ponderada dos pilares da política institucional.</p>
-                      <p className="mt-1 font-semibold text-[#102033]">Pesos utilizados</p>
-                      <p>Financeiro 55% · Garantias 20% · Mercado 15% · Pagamento 5% · Relacionamento 5%.</p>
-                      <p className="mt-1 font-semibold text-[#102033]">Fórmula resumida</p>
-                      <p>Σ(nota do pilar × peso do pilar), normalizado em escala 0–10.</p>
-                    </div>
-                  ) : null}
-                </article>
-              </div>
-
-              <div className="mt-4">
-                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Condições Recomendadas Preliminares</p>
-                      <p className="text-[11px] text-[#4F647A]">Condição sugerida para orientação técnica do analista.</p>
-                    </div>
-                    <span className="rounded-full border border-[#D7E1EC] bg-[#F7F9FC] px-2.5 py-1 text-[10px] font-medium text-[#4F647A]">
-                      Recomendação preliminar
-                    </span>
-                  </div>
-
-                  <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
-                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Limite recomendado</p>
-                      <p className="mt-1 text-[14px] font-semibold text-[#102033]">
-                        {preliminaryRecommendedLimit !== null ? formatCurrencyBRL(String(preliminaryRecommendedLimit.toFixed(2))) : "Não disponível"}
-                      </p>
-                    </div>
-                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
-                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Prazo máximo recomendado</p>
-                      <p className="mt-1 text-[14px] font-semibold text-[#102033]">
-                        {preliminaryMaxTermDays !== null ? `${preliminaryMaxTermDays} dias` : institutionalRiskBand === "D" ? "Revisão manual obrigatória" : "Não disponível"}
-                      </p>
-                    </div>
-                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
-                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Cobertura / garantia</p>
-                      <p className="mt-1 text-[13px] font-semibold text-[#102033]">{preliminaryGuaranteeCondition}</p>
-                    </div>
-                    <div className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
-                      <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Leitura técnica</p>
-                      <p className="mt-1 text-[13px] font-semibold text-[#102033]">
-                        {institutionalScore !== null ? `Score ${institutionalScore.toFixed(1)} · Grupo ${institutionalRiskBand}` : "Informações insuficientes"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.05em] text-[#8FA3B4]">Observações técnicas</p>
-                    <div className="mt-1 space-y-1">
-                      {preliminaryRecommendationNotes.length === 0 ? (
-                        <p className="text-[11px] text-[#4F647A]">Sem observações adicionais nesta leitura preliminar.</p>
-                      ) : (
-                        preliminaryRecommendationNotes.map((note) => (
-                          <p key={note} className="text-[11px] text-[#4F647A]">• {note}</p>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={() => setIsPreliminaryRecommendationExpanded((prev) => !prev)}
-                      className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2 py-1 text-[10px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
-                    >
-                      <Info className="h-3.5 w-3.5" />
-                      Como foi recomendada
-                    </button>
-                  </div>
-                  {isPreliminaryRecommendationExpanded ? (
-                    <div className="mt-2 rounded-[8px] border border-[#D7E1EC] bg-[#FAFCFF] p-2.5 text-[10px] text-[#4F647A]">
-                      <p className="font-semibold text-[#102033]">Critérios considerados</p>
-                      <p>Score preliminar, limite solicitado, cobertura segurada, overdue e status documental.</p>
-                      <p className="mt-1 font-semibold text-[#102033]">Parâmetros utilizados</p>
-                      <p>
-                        Score: {institutionalScore !== null ? institutionalScore.toFixed(1) : "não disponível"} ·
-                        Limite solicitado: {technicalRequestedLimit > 0 ? formatCurrencyBRL(String(technicalRequestedLimit)) : "não disponível"} ·
-                        Cobertura: {technicalCoverageValue !== null ? formatCurrencyBRL(String(technicalCoverageValue)) : "não disponível"} ·
-                        Overdue: {technicalOverdueValue !== null ? formatCurrencyBRL(String(technicalOverdueValue)) : "não disponível"}
-                      </p>
-                    </div>
-                  ) : null}
-                </article>
-              </div>
-
-              <div className="mt-4">
-                <article className="rounded-[12px] border border-[#D7E1EC] bg-[#F8FBFF] p-4">
-                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Grupo de Risco Preliminar</p>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${toScoreBandClass(institutionalRiskBand)}`}>
-                      {institutionalRiskBand}
-                    </span>
-                    <p className="text-[11px] text-[#4F647A]">
-                      {institutionalScore !== null ? `Score institucional preliminar: ${institutionalScore.toFixed(1)}/10` : "Informações insuficientes"}
-                    </p>
-                  </div>
-                </article>
-              </div>
-
-              <div className="mt-4">
-                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Pilares da Política de Crédito</p>
-                    <p className="text-[11px] text-[#4F647A]">Leitura preliminar (sem bloqueio automático)</p>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
-                    {policyPillars.map((pillar) => (
-                      <div key={pillar.key} className="rounded-[10px] border border-[#E5EAF1] bg-[#FCFDFE] p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-[12px] font-semibold text-[#102033]">{pillar.title}</p>
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">{pillar.weight}%</span>
-                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${policyPillarStatusClass(pillar.status)}`}>{pillar.status}</span>
-                          </div>
-                        </div>
-                        <div className="mt-2 flex items-center justify-between">
-                          <p className="text-[11px] text-[#8FA3B4]">Nota preliminar</p>
-                          <p className="text-[12px] font-semibold text-[#102033]">{pillar.score !== null ? pillar.score.toFixed(1) : "Não disponível"}</p>
-                        </div>
-                        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[#EEF3F8]">
-                          <div className="h-full rounded-full bg-[#295B9A]" style={{ width: `${pillar.score !== null ? Math.max(0, Math.min(100, pillar.score * 10)) : 0}%` }} />
-                        </div>
-                        <p className="mt-2 text-[11px] text-[#4F647A]">{pillar.summary}</p>
-                        <div className="mt-2">
-                          <button
-                            type="button"
-                            onClick={() => setExpandedPolicyPillarKey((prev) => (prev === pillar.key ? null : pillar.key))}
-                            className="inline-flex items-center gap-1 rounded-[8px] border border-[#D7E1EC] bg-white px-2 py-1 text-[10px] font-medium text-[#4F647A] hover:bg-[#F2F6FB]"
-                          >
-                            <Info className="h-3.5 w-3.5" />
-                            Como foi avaliado
-                          </button>
-                        </div>
-                        {expandedPolicyPillarKey === pillar.key ? (
-                          <div className="mt-2 rounded-[8px] border border-[#D7E1EC] bg-white p-2.5 text-[10px] text-[#4F647A]">
-                            <p className="font-semibold text-[#102033]">Fontes utilizadas</p>
-                            <p>{pillar.sources.join(" · ")}</p>
-                            <p className="mt-1 font-semibold text-[#102033]">Critérios considerados</p>
-                            <ul className="mt-0.5 list-disc pl-4">
-                              {pillar.criteria.map((criterion) => (
-                                <li key={criterion}>{criterion}</li>
-                              ))}
-                            </ul>
-                            <p className="mt-1 font-semibold text-[#102033]">Explicação</p>
-                            <p>{pillar.explanation}</p>
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </article>
-              </div>
-
-              <div className="mt-4 grid gap-3 xl:grid-cols-[1.6fr_1fr]">
-                <article className="rounded-[12px] border border-[#D7E1EC] bg-white p-4">
-                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Insights da análise</p>
-                  <div className="mt-2 space-y-2">
-                    {technicalInsights.length === 0 ? (
-                      <p className="text-[11px] text-[#4F647A]">Informações insuficientes para gerar insights.</p>
-                    ) : (
-                      technicalInsights.map((insight, index) => (
-                        <div key={`${insight.text}-${index}`} className="flex items-start gap-2 rounded-[8px] border border-[#E5EAF1] bg-[#FAFCFF] px-2.5 py-2">
-                          {insight.kind === "positivo" ? (
-                            <Check className="mt-0.5 h-3.5 w-3.5 text-[#166534]" />
-                          ) : insight.kind === "critico" ? (
-                            <CircleAlert className="mt-0.5 h-3.5 w-3.5 text-[#B91C1C]" />
-                          ) : (
-                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 text-[#92400E]" />
-                          )}
-                          <p className="text-[11px] text-[#4F647A]">{insight.text}</p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </article>
-                <article className={`rounded-[12px] border p-4 ${preliminaryEligibility.tone}`}>
-                  <p className="text-[10px] uppercase tracking-[0.05em] text-[#8FA3B4]">Elegibilidade preliminar</p>
-                  <div className="mt-2 flex items-center gap-2">
-                    {preliminaryEligibility.label === "Elegível para análise" ? (
-                      <ShieldCheck className="h-4 w-4 text-[#166534]" />
-                    ) : preliminaryEligibility.label === "Cliente bloqueado" ? (
-                      <CircleAlert className="h-4 w-4 text-[#B91C1C]" />
-                    ) : (
-                      <AlertTriangle className="h-4 w-4 text-[#92400E]" />
-                    )}
-                    <p className={`text-[12px] font-semibold ${preliminaryEligibility.className}`}>{preliminaryEligibility.label}</p>
-                  </div>
-                  <p className="mt-1 text-[11px] text-[#4F647A]">Leitura preliminar para apoio do analista, sem bloqueio automático nesta etapa.</p>
-                </article>
-              </div>
-              </>
-              ) : null}
-            </section>
             ) : null}
 
             {step === 2 ? (
@@ -3616,93 +3305,131 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
       
 {step === 3 ?(
-        <div className="space-y-3">
-          <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-            <p className="text-[13px] font-medium text-[#111827]">Solicita??o atual</p>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <label className="text-[11px] text-[#374151]">Limite solicitado<RequiredMark /><input value={analysis.requestedLimit} onFocus={() => { isRequestedLimitFocusedRef.current = true; const numericValue = toNumberInput(analysis.requestedLimit); setAnalysis((prev) => ({ ...prev, requestedLimit: numericValue > 0 ? String(numericValue).replace(".", ",") : "" })); }} onChange={(event) => setAnalysis((prev) => ({ ...prev, requestedLimit: normalizeRequestedLimitDraft(event.target.value) }))} onBlur={(event) => { isRequestedLimitFocusedRef.current = false; commitRequestedLimit(event.currentTarget.value); }} className="mt-1 h-9 w-full rounded-[6px] border px-3 text-[12px]" /></label>
-              <label className="text-[11px] text-[#374151]">Analista respons?vel
-                <input value={analysis.assignedAnalystName} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-              </label>
-              <label className="text-[11px] text-[#374151] md:col-span-2 xl:col-span-3">Coment?rio / justificativa
-                <textarea value={analysis.comment} onChange={(event) => setAnalysis((prev) => ({ ...prev, comment: event.target.value }))} className="mt-1 min-h-16 w-full rounded-[6px] border px-3 py-2 text-[12px]" />
-              </label>
+        <div className="mt-3 space-y-4">
+          <div className="relative overflow-hidden rounded-[30px] bg-[linear-gradient(135deg,#071426_0%,#0b1f3a_45%,#102a4c_100%)] p-6 text-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+            <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#bfdbfe]">Etapa 3 · Mesa de análise</p>
+            <h2 className="mt-2 text-[32px] font-extrabold leading-[1.05] tracking-[-0.04em] text-white">Mesa corporativa de análise de crédito</h2>
+            <p className="mt-3 max-w-[780px] text-[14px] leading-6 text-[#dbeafe]">Consolidação técnica dos dados internos, bureaus, política de crédito e julgamento do analista antes da revisão e envio para aprovação.</p>
+            <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Cliente</p><p className="mt-2 text-[22px] font-extrabold text-white">{customer.companyName || "Não informado"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">{formatCnpjForDisplay(customer.cnpj)}</p></div>
+              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Limite solicitado</p><p className="mt-2 text-[22px] font-extrabold text-white">{technicalRequestedLimit > 0 ? formatCurrencyBRLNoCents(technicalRequestedLimit) : "—"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Condição comercial proposta</p></div>
+              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Limite recomendado</p><p className="mt-2 text-[22px] font-extrabold text-white">{preliminaryRecommendedLimit !== null ? formatCurrencyBRLNoCents(preliminaryRecommendedLimit) : "—"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Prévia da política institucional</p></div>
+              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Score preliminar</p><p className="mt-2 text-[22px] font-extrabold text-white">{institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "—"}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Grupo de risco {institutionalRiskBand}</p></div>
+              <div className="rounded-[20px] border border-white/20 bg-white/10 p-4"><p className="text-[12px] font-semibold text-[#bfdbfe]">Status técnico</p><p className="mt-2 text-[22px] font-extrabold text-white">{technicalStatusLabel}</p><p className="mt-1 text-[12px] text-[#dbeafe]">Aguardando parecer final</p></div>
             </div>
-          </article>
+          </div>
+          <div className="grid gap-4 xl:grid-cols-[1.45fr_0.9fr]">
+            <div className="space-y-4">
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Visão executiva da análise</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-[18px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#0b1f3a_0%,#102a4c_100%)] p-4 text-white"><p className="text-[12px] text-[#bfdbfe]">Limite recomendado</p><p className="mt-2 text-[20px] font-extrabold text-white">{preliminaryRecommendedLimit !== null ? formatCurrencyBRLNoCents(preliminaryRecommendedLimit) : "—"}</p></div>
+                  <div className="rounded-[18px] border border-[#E2E8F0] bg-[#F8FAFC] p-4"><p className="text-[12px] text-[#64748b]">Cobertura COFACE</p><p className="mt-2 text-[20px] font-extrabold text-[#0f172a]">{technicalCoverageValue !== null ? formatCurrencyBRLNoCents(technicalCoverageValue) : "—"}</p></div>
+                  <div className="rounded-[18px] border border-[#E2E8F0] bg-[#F8FAFC] p-4"><p className="text-[12px] text-[#64748b]">Exposição interna</p><p className="mt-2 text-[20px] font-extrabold text-[#0f172a]">{technicalExposureValue > 0 ? formatCurrencyBRLNoCents(technicalExposureValue) : "—"}</p></div>
+                  <div className="rounded-[18px] border border-[#E2E8F0] bg-[#F8FAFC] p-4"><p className="text-[12px] text-[#64748b]">Overdue / Not due</p><p className="mt-2 text-[20px] font-extrabold text-[#0f172a]">{internalOverdue !== null && internalNotDue !== null ? `${Math.round((internalOverdue / Math.max(1, internalOverdue + internalNotDue)) * 100)}% / ${Math.round((internalNotDue / Math.max(1, internalOverdue + internalNotDue)) * 100)}%` : "—"}</p></div>
+                </div>
+              </article>
 
-          {hasInternalFinancialSnapshot ?(
-            <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-              <p className="text-[13px] font-medium text-[#111827]">Contexto atual do cliente</p>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <label className="text-[11px] text-[#374151]">Limite atual
-                  <input value={formatCurrencyBRL(String(internalTotalLimit))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                </label>
-                <label className="text-[11px] text-[#374151]">Limite utilizado
-                  <input value={formatCurrencyBRL(String(internalOpenAmount))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                </label>
-                <label className="text-[11px] text-[#374151]">Limite dispon?vel
-                  <input value={formatCurrencyBRL(String(internalAvailableLimit))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                </label>
-                <label className="text-[11px] text-[#374151]">Exposi??o
-                  <input value={formatCurrencyBRL(String(internalExposure))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                </label>
-                {internalOverdue !== null ?(
-                  <label className="text-[11px] text-[#374151]">Overdue
-                    <input value={formatCurrencyBRL(String(internalOverdue))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-                {internalNotDue !== null ?(
-                  <label className="text-[11px] text-[#374151]">Not due
-                    <input value={formatCurrencyBRL(String(internalNotDue))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-                {internalOperationalStatus ?(
-                  <label className="text-[11px] text-[#374151]">Status operacional
-                    <input value={internalOperationalStatus} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-                <label className="text-[11px] text-[#374151]">Comportamento interno
-                  <input value={internalBehaviorLabel} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                </label>
-                <label className="text-[11px] text-[#374151]">Varia??o solicitada
-                  <input value={formatCurrencyBRL(String(toNumberInput(analysis.requestedLimit) - internalTotalLimit))} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                </label>
-              </div>
-            </article>
-          ) : null}
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Score institucional preliminar</p>
+                <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
+                  <div className="mx-auto flex h-[180px] w-[180px] items-center justify-center rounded-full border border-[#E2E8F0] bg-[#EFF6FF]">
+                    <p className="text-[36px] font-black text-[#102a4c]">{institutionalScore !== null ? Math.round(institutionalScore * 10) : "—"}</p>
+                  </div>
+                  <div>
+                    <div className="space-y-3">
+                      {institutionalScoreBreakdown.map((item) => (
+                        <div key={item.key}>
+                          <div className="mb-1 flex items-center justify-between text-[12px] font-semibold text-[#334155]">
+                            <span className="inline-flex items-center gap-2">
+                              <span>{item.title}</span>
+                              <span className="group relative inline-flex">
+                                <Info className="h-3.5 w-3.5 text-[#94a3b8] transition-colors duration-150 group-hover:text-[#2563eb]" />
+                                <span className="pointer-events-none absolute left-1/2 top-[calc(100%+8px)] z-30 w-[300px] -translate-x-1/2 rounded-[10px] border border-[#E2E8F0] bg-white px-3 py-2 text-left text-[11px] font-normal text-[#334155] opacity-0 shadow-[0_8px_20px_rgba(15,23,42,0.08)] transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                                  <span className="block text-[11px] font-semibold text-[#0f172a]">{item.tooltip.title}</span>
+                                  <span className="mt-1 block leading-4">{item.tooltip.description}</span>
+                                  <span className="mt-1 block text-[#475569]"><strong>Fonte:</strong> {item.tooltip.source}</span>
+                                  {item.tooltip.weightLabel ? <span className="mt-1 block text-[#64748b]">{item.tooltip.weightLabel}</span> : null}
+                                  <span className="mt-1 block text-[#64748b]">{item.tooltip.note}</span>
+                                </span>
+                              </span>
+                              {item.key === "financial_liquidity" && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Não avaliado</span> : null}
+                              {item.key === "market_conditions" && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Em evolução</span> : null}
+                            </span>
+                            <span>{item.score.toFixed(1)}/10</span>
+                          </div>
+                          <div className="h-2 overflow-hidden rounded-full border border-[#E2E8F0] bg-[#F1F5F9]">
+                            <div className={`h-full rounded-full ${item.key === "financial_liquidity" ? "bg-[#94a3b8]" : "bg-[#2563eb]"}`} style={{ width: `${Math.max(0, Math.min(100, item.score * 10))}%` }} />
+                          </div>
+                          {item.key === "financial_liquidity" && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Impacta o score por ausência de demonstrações financeiras estruturadas.</p> : null}
+                          {item.key === "guarantees" ? <p className="mt-1 text-[11px] text-[#64748b]">{guaranteeCoverageHelperText}</p> : null}
+                          {item.key === "market_conditions" && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Metodologia de condições de mercado em evolução no modelo atual.</p> : null}
+                          {item.key === "payment_history" ? <p className="mt-1 text-[11px] text-[#64748b]">{paymentPillarHelperText}</p> : null}
+                          {item.key === "relationship_history" ? <p className="mt-1 text-[11px] text-[#64748b]">{relationshipPillarHelperText}</p> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </article>
 
-          {(hasCofaceImported || hasCofaceCoverageImported) ?(
-            <article className="space-y-3 rounded-[10px] border border-[#e2e5eb] bg-white p-4">
-              <p className="text-[13px] font-medium text-[#111827]">Cobertura / garantia</p>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {hasCofaceCoverageImported ?(
-                  <label className="text-[11px] text-[#374151]">Limite com garantia
-                    <input value={guaranteeDisplayText} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-                {hasCofaceCoverageImported ?(
-                  <label className="text-[11px] text-[#374151]">Valor de cobertura COFACE
-                    <input value={guaranteeDisplayText} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-                {cofaceImport.cofaceReadPayload?.coface?.dra != null ?(
-                  <label className="text-[11px] text-[#374151]">DRA COFACE
-                    <input value={String(cofaceImport.cofaceReadPayload.coface.dra)} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-                {cofaceImport.cofaceReadPayload?.coface?.notation ?(
-                  <label className="text-[11px] text-[#374151]">Rating / decis?o
-                    <input value={cofaceImport.cofaceReadPayload.coface.notation} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-                {cofaceImport.cofaceReadPayload?.coface?.decision_effective_date ?(
-                  <label className="text-[11px] text-[#374151]">Validade
-                    <input value={formatIsoDateToBr(cofaceImport.cofaceReadPayload.coface.decision_effective_date)} readOnly className="mt-1 h-9 w-full rounded-[6px] border bg-[#f9fafb] px-3 text-[12px] text-[#6b7280]" />
-                  </label>
-                ) : null}
-              </div>
-            </article>
-          ) : null}
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Explainability da decisão preliminar</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {technicalInsights.length > 0 ? technicalInsights.slice(0, 4).map((insight, index) => (
+                    <div key={`${insight.text}-${index}`} className="rounded-[14px] border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                      <p className="text-[13px] font-semibold text-[#0f172a]">{insight.kind === "positivo" ? "Fator favorável" : insight.kind === "critico" ? "Ponto crítico" : "Ponto de atenção"}</p>
+                      <p className="mt-1 text-[12px] text-[#475569]">{insight.text}</p>
+                    </div>
+                  )) : <div className="rounded-[14px] border border-[#E2E8F0] bg-[#F8FAFC] p-3 text-[12px] text-[#475569]">Sem dados suficientes para explainability nesta etapa.</div>}
+                </div>
+              </article>
+
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Parecer técnico do analista</p>
+                <textarea value={analysis.comment} onChange={(event) => setAnalysis((prev) => ({ ...prev, comment: event.target.value }))} className="mt-3 min-h-[180px] w-full rounded-[20px] border border-[#E2E8F0] px-4 py-3 text-[13px] text-[#334155]" placeholder="Registrar análise qualitativa, fundamentos da recomendação e ressalvas antes da revisão." />
+                <p className="mt-2 text-[12px] text-[#64748b]">Parecer usado na geração do dossiê técnico.</p>
+              </article>
+            </div>
+            <aside className="space-y-4">
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#FFFFFF_0%,#F8FAFC_100%)] p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Dossiê de Crédito</p>
+                <p className="mt-1 text-[13px] text-[#64748b]">Geração do dossiê técnico após validação da mesa de análise, parecer do analista e condições recomendadas.</p>
+                <div className="mt-4 rounded-[22px] border border-dashed border-[#93c5fd] bg-[#eff6ff] p-4 text-center">
+                  <p className="text-[16px] font-black text-[#0b1f3a]">Pronto para gerar dossiê</p>
+                  <p className="mx-auto mt-2 max-w-[460px] text-[13px] text-[#475569]">Ao gerar, o sistema consolida a análise técnica, parecer do analista, score, exposição, condições recomendadas e trilha de auditoria para revisão final.</p>
+                  <button type="button" onClick={() => navigateToStep(4)} className="mt-4 inline-flex items-center rounded-full bg-[#0b1f3a] px-5 py-2.5 text-[13px] font-extrabold text-white">Gerar Dossiê</button>
+                </div>
+              </article>
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Condições recomendadas preliminares</p>
+                <div className="mt-3 space-y-2">
+                  {preliminaryRecommendationNotes.length > 0 ? preliminaryRecommendationNotes.map((note, index) => <div key={`${note}-${index}`} className="rounded-[12px] border border-[#E2E8F0] px-3 py-2 text-[12px] text-[#334155]">{note}</div>) : <div className="rounded-[12px] border border-[#E2E8F0] px-3 py-2 text-[12px] text-[#334155]">Sem observações adicionais nesta leitura preliminar.</div>}
+                </div>
+              </article>
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Insights críticos</p>
+                <div className="mt-3 space-y-2">
+                  {technicalInsights.filter((insight) => insight.kind !== "positivo").slice(0, 3).map((insight, index) => (
+                    <div key={`${insight.text}-${index}`} className={`rounded-[12px] border px-3 py-2 ${insight.kind === "critico" ? "border-[#FECACA] bg-[#FEF2F2]" : "border-[#FDE68A] bg-[#FFFBEB]"}`}>
+                      <p className="text-[12px] font-semibold text-[#0f172a]">{insight.kind === "critico" ? "Crítico" : "Atenção"}</p>
+                      <p className="text-[12px] text-[#475569]">{insight.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
+                <p className="text-[18px] font-semibold text-[#0f172a]">Resumo de exposição</p>
+                <div className="mt-3 space-y-2 text-[13px]">
+                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Total em aberto</span><span className="font-extrabold text-[#0f172a]">{internalOpenAmount > 0 ? formatCurrencyBRLNoCents(internalOpenAmount) : "—"}</span></div>
+                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Not due</span><span className="font-extrabold text-[#0f172a]">{internalNotDue !== null ? formatCurrencyBRLNoCents(internalNotDue) : "—"}</span></div>
+                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Overdue</span><span className="font-extrabold text-[#0f172a]">{internalOverdue !== null ? formatCurrencyBRLNoCents(internalOverdue) : "—"}</span></div>
+                  <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-2"><span className="text-[#64748b]">Cobertura COFACE</span><span className="font-extrabold text-[#0f172a]">{technicalCoverageValue !== null ? formatCurrencyBRLNoCents(technicalCoverageValue) : "—"}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-[#64748b]">Exposição líquida recomendada</span><span className="font-extrabold text-[#0f172a]">{preliminaryRecommendedLimit !== null && technicalCoverageValue !== null ? formatCurrencyBRLNoCents(Math.max(0, preliminaryRecommendedLimit - technicalCoverageValue)) : "—"}</span></div>
+                </div>
+              </article>
+            </aside>
+          </div>
         </div>
       ) : null}
 
