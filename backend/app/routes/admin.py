@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import func, inspect, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.security import CurrentUser, get_current_user, require_permissions
@@ -84,6 +85,14 @@ SYSTEM_PROFILE_NAMES = {"administrador_master"}
 class ResetOperationalDataRequest(BaseModel):
     confirm: str
     domains: list[str] | None = None
+
+
+def _table_exists(db: Session, table_name: str) -> bool:
+    try:
+        return inspect(db.get_bind()).has_table(table_name)
+    except SQLAlchemyError:
+        db.rollback()
+        return False
 
 
 def _is_production_env() -> bool:
@@ -238,18 +247,24 @@ def _user_to_read(db: Session, user: User) -> UserRead:
             .order_by(BusinessUnit.name.asc())
         ).all()
     )
-    workflow_role_codes = list(
-        db.scalars(
-            select(WorkflowRole.code)
-            .join(UserWorkflowRole, UserWorkflowRole.workflow_role_id == WorkflowRole.id)
-            .where(
-                UserWorkflowRole.user_id == user.id,
-                WorkflowRole.is_active.is_(True),
+    workflow_role_codes: list[str] = []
+    if _table_exists(db, "workflow_roles") and _table_exists(db, "user_workflow_roles"):
+        try:
+            workflow_role_codes = list(
+                db.scalars(
+                    select(WorkflowRole.code)
+                    .join(UserWorkflowRole, UserWorkflowRole.workflow_role_id == WorkflowRole.id)
+                    .where(
+                        UserWorkflowRole.user_id == user.id,
+                        WorkflowRole.is_active.is_(True),
+                    )
+                    .distinct()
+                    .order_by(WorkflowRole.code.asc())
+                ).all()
             )
-            .distinct()
-            .order_by(WorkflowRole.code.asc())
-        ).all()
-    )
+        except SQLAlchemyError:
+            db.rollback()
+            workflow_role_codes = []
     return UserRead(
         id=user.id,
         user_code=user.user_code,
@@ -267,6 +282,8 @@ def _user_to_read(db: Session, user: User) -> UserRead:
 
 
 def _list_user_workflow_roles(db: Session, user_id: int) -> list[UserWorkflowRoleRead]:
+    if not _table_exists(db, "workflow_roles") or not _table_exists(db, "user_workflow_roles"):
+        return []
     rows = db.execute(
         select(
             WorkflowRole.id,
@@ -304,6 +321,8 @@ def _replace_user_workflow_roles(
     actor_user_id: int,
     assignments: list,
 ) -> None:
+    if not _table_exists(db, "workflow_roles") or not _table_exists(db, "user_workflow_roles"):
+        return
     role_by_code = {
         role.code: role
         for role in db.scalars(select(WorkflowRole).where(WorkflowRole.is_active.is_(True))).all()
@@ -991,9 +1010,15 @@ def list_workflow_roles(
     db: Session = Depends(get_db),
     _: CurrentUser = Depends(require_permissions(["users:view"])),
 ) -> list[WorkflowRole]:
+    if not _table_exists(db, "workflow_roles"):
+        return []
     ensure_workflow_roles_seed(db)
-    db.commit()
-    return list(db.scalars(select(WorkflowRole).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())).all())
+    try:
+        db.commit()
+        return list(db.scalars(select(WorkflowRole).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())).all())
+    except SQLAlchemyError:
+        db.rollback()
+        return []
 
 
 @router.get("/users/{user_id}/workflow-roles", response_model=list[UserWorkflowRoleRead])
@@ -1019,6 +1044,8 @@ def update_user_workflow_roles(
     if user is None or user.company_id != current.user.company_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado.")
 
+    if not _table_exists(db, "workflow_roles") or not _table_exists(db, "user_workflow_roles"):
+        return []
     ensure_workflow_roles_seed(db)
     _replace_user_workflow_roles(
         db,
@@ -1036,12 +1063,18 @@ def get_approval_matrix_options(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(require_permissions(["profiles:view"])),
 ) -> ApprovalMatrixOptionsRead:
-    ensure_workflow_roles_seed(db)
-    workflow_roles = list(
-        db.scalars(
-            select(WorkflowRole).where(WorkflowRole.is_active.is_(True)).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
-        ).all()
-    )
+    workflow_roles = []
+    if _table_exists(db, "workflow_roles"):
+        ensure_workflow_roles_seed(db)
+        try:
+            workflow_roles = list(
+                db.scalars(
+                    select(WorkflowRole).where(WorkflowRole.is_active.is_(True)).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
+                ).all()
+            )
+        except SQLAlchemyError:
+            db.rollback()
+            workflow_roles = []
     business_units = list(
         db.scalars(
             select(BusinessUnit)
@@ -1060,10 +1093,16 @@ def get_approval_matrix_rules(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(require_permissions(["profiles:view"])),
 ) -> list[ApprovalMatrixRuleRead]:
+    if not _table_exists(db, "approval_matrix_rules"):
+        return []
     ensure_workflow_roles_seed(db)
     ensure_approval_matrix_seed(db)
-    db.commit()
-    rules = list_approval_matrix_rules(db, company_id=current.user.company_id)
+    try:
+        db.commit()
+        rules = list_approval_matrix_rules(db, company_id=current.user.company_id)
+    except SQLAlchemyError:
+        db.rollback()
+        return []
     return [_approval_rule_to_read(db, rule) for rule in rules]
 
 
@@ -1073,6 +1112,11 @@ def create_approval_matrix_rule_endpoint(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(require_permissions(["profiles:manage"])),
 ) -> ApprovalMatrixRuleRead:
+    if not _table_exists(db, "approval_matrix_rules") or not _table_exists(db, "approval_matrix_rule_roles"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Matriz de aprovacao indisponivel. Aplique as migrations de governanca.",
+        )
     ensure_workflow_roles_seed(db)
     if payload.business_unit_id is not None:
         bu = db.get(BusinessUnit, payload.business_unit_id)
@@ -1097,6 +1141,11 @@ def update_approval_matrix_rule_endpoint(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(require_permissions(["profiles:manage"])),
 ) -> ApprovalMatrixRuleRead:
+    if not _table_exists(db, "approval_matrix_rules") or not _table_exists(db, "approval_matrix_rule_roles"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Matriz de aprovacao indisponivel. Aplique as migrations de governanca.",
+        )
     rule = db.get(ApprovalMatrixRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Regra de aprovacao nao encontrada.")

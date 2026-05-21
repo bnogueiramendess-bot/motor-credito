@@ -90,6 +90,8 @@ from app.services.workflow_authorization import (
     can_execute_credit_analysis,
     can_issue_credit_opinion,
     can_submit_credit_analysis,
+    can_approve_credit_decision,
+    can_reject_credit_decision,
 )
 from app.services.approval_matrix import resolve_required_approval_roles
 
@@ -2029,7 +2031,10 @@ def list_credit_analyses_monitor(
             if can_validate and can_submit_approval and status_value in {"in_progress"}:
                 available_actions.append("submit_approval")
             if can_approve and status_value == "in_approval":
-                available_actions.append("review_decision")
+                approval_auth = can_approve_credit_decision(db, current, analysis)
+                rejection_auth = can_reject_credit_decision(db, current, analysis)
+                if approval_auth.allowed or rejection_auth.allowed:
+                    available_actions.append("review_decision")
             if status_value in {"approved", "rejected"}:
                 available_actions.append("view_result")
             if can_view_own and requester_email == current.user.email.strip().lower() and status_value not in {"approved", "rejected"}:
@@ -2755,12 +2760,22 @@ def apply_analysis_final_decision(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> FinalDecisionResponse:
-    _require_any_permission_or_403(current, "credit_request_approve", "credit_request_reject", "credit.approval.approve", "credit.approval.reject", "scope:all_bu")
     analysis_record = db.get(CreditAnalysis, analysis_id)
     if analysis_record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
+        )
+    if payload.final_decision == FinalDecision.APPROVED:
+        approval_authorization = can_approve_credit_decision(db, current, analysis_record)
+    elif payload.final_decision == FinalDecision.REJECTED:
+        approval_authorization = can_reject_credit_decision(db, current, analysis_record)
+    else:
+        approval_authorization = can_approve_credit_decision(db, current, analysis_record)
+    if not approval_authorization.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário sem alçada configurada para aprovar esta decisão de crédito.",
         )
     _enforce_technical_access_or_403(db, current, analysis_record)
     previous_status = _current_status_value(analysis_record)
@@ -2783,6 +2798,18 @@ def apply_analysis_final_decision(
         owner_role="workflow_encerrado",
         transition_at=decision_timestamp,
     )
+    decision_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    decision_memory["approval_authorization"] = {
+        "approval_authorization_source": approval_authorization.authorization_source,
+        "approval_matrix_rule_id": approval_authorization.approval_matrix_rule_id,
+        "approval_matrix_rule_name": approval_authorization.approval_matrix_rule_name,
+        "required_role_codes": approval_authorization.required_role_codes,
+        "matched_role_codes": approval_authorization.matched_role_codes,
+        "enforcement_enabled": approval_authorization.enforcement_enabled,
+        "legacy_fallback_used": approval_authorization.legacy_fallback_used,
+        "reason": approval_authorization.reason,
+    }
+    analysis.decision_memory_json = decision_memory
 
     db.add(
         DecisionEvent(
@@ -2806,6 +2833,14 @@ def apply_analysis_final_decision(
                     "final_decision": analysis.final_decision.value,
                     "final_limit": str(analysis.final_limit) if analysis.final_limit is not None else None,
                     "analyst_notes": payload.analyst_notes,
+                    "approval_authorization_source": approval_authorization.authorization_source,
+                    "approval_matrix_rule_id": approval_authorization.approval_matrix_rule_id,
+                    "approval_matrix_rule_name": approval_authorization.approval_matrix_rule_name,
+                    "required_role_codes": approval_authorization.required_role_codes,
+                    "matched_role_codes": approval_authorization.matched_role_codes,
+                    "enforcement_enabled": approval_authorization.enforcement_enabled,
+                    "legacy_fallback_used": approval_authorization.legacy_fallback_used,
+                    "approval_reason": approval_authorization.reason,
                 },
             ),
         )

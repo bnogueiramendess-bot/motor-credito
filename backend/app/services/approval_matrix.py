@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from decimal import Decimal
 from typing import Iterable
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.models.approval_matrix_rule import ApprovalMatrixRule
 from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
@@ -229,11 +229,16 @@ def resolve_required_approval_roles(
 
 
 def ensure_approval_matrix_seed(db: Session) -> None:
-    for item in INITIAL_APPROVAL_MATRIX_RULES:
-        payload = ApprovalMatrixRuleWrite(**item)
-        existing = db.scalar(select(ApprovalMatrixRule).where(ApprovalMatrixRule.code == payload.code))
-        if existing is None:
-            create_approval_matrix_rule(db, payload=payload, created_by_user_id=None)
-        else:
-            update_approval_matrix_rule(db, rule=existing, payload=payload)
-    db.flush()
+    try:
+        for item in INITIAL_APPROVAL_MATRIX_RULES:
+            payload = ApprovalMatrixRuleWrite(**item)
+            existing = db.scalar(select(ApprovalMatrixRule).where(ApprovalMatrixRule.code == payload.code))
+            if existing is None:
+                create_approval_matrix_rule(db, payload=payload, created_by_user_id=None)
+            else:
+                update_approval_matrix_rule(db, rule=existing, payload=payload)
+        db.flush()
+    except SQLAlchemyError:
+        db.rollback()
+        # Base ainda sem migration da matriz: manter startup funcional em modo legado.
+        return

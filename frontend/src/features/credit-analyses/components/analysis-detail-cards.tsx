@@ -88,6 +88,14 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
     memory: decision?.decision_memory_json ?? analysis.decision_memory_json
   });
   const milestones = buildMilestones({ analysis, events });
+  const decisionMemory = (decision?.decision_memory_json ?? analysis.decision_memory_json) as Record<string, unknown> | null;
+  const approvalPreview =
+    decisionMemory && typeof decisionMemory.approval_matrix_preview === "object"
+      ? (decisionMemory.approval_matrix_preview as Record<string, unknown>)
+      : null;
+  const approvalRequiredRoles = Array.isArray(approvalPreview?.required_roles)
+    ? (approvalPreview.required_roles as string[])
+    : [];
 
   const confidencePercent = scoreSummary
     ? Math.round((scoreSummary.matchedRules / Math.max(scoreSummary.evaluatedRules, 1)) * 100)
@@ -358,6 +366,9 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
                     ? "Motor sugere reprovar. Revisão manual recomendada antes da decisão final."
                     : "Aguardando revisão dos fatores críticos para concluir análise."}
               </div>
+              {approvalRequiredRoles.length > 0 ? (
+                <div className="mt-2 text-xs text-[#4F647A]">Alçada requerida: {approvalRequiredRoles.join(" / ")}</div>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-2.5">
               <Button variant="outline" className="h-auto rounded-lg border-[#D7E1EC] px-5 py-2.5 text-[13px] font-medium text-[#102033]">

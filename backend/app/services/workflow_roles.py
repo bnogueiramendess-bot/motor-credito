@@ -1,11 +1,16 @@
-from __future__ import annotations
+﻿from __future__ import annotations
+
+import logging
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, object_session
 
 from app.models.user import User
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
+
+logger = logging.getLogger(__name__)
 
 WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
     {
@@ -72,24 +77,31 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
 
 
 def ensure_workflow_roles_seed(db: Session) -> None:
-    for item in WORKFLOW_ROLE_CATALOG:
-        existing = db.scalar(select(WorkflowRole).where(WorkflowRole.code == item["code"]))
-        if existing is None:
-            db.add(
-                WorkflowRole(
-                    code=item["code"],
-                    name=item["name"],
-                    description=item["description"],
-                    type=item["type"],
-                    is_active=True,
+    try:
+        for item in WORKFLOW_ROLE_CATALOG:
+            existing = db.scalar(select(WorkflowRole).where(WorkflowRole.code == item["code"]))
+            if existing is None:
+                db.add(
+                    WorkflowRole(
+                        code=item["code"],
+                        name=item["name"],
+                        description=item["description"],
+                        type=item["type"],
+                        is_active=True,
+                    )
                 )
-            )
-            continue
-        existing.name = item["name"]
-        existing.description = item["description"]
-        existing.type = item["type"]
-        existing.is_active = True
-    db.flush()
+                continue
+            existing.name = item["name"]
+            existing.description = item["description"]
+            existing.type = item["type"]
+            existing.is_active = True
+        db.flush()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.warning(
+            "workflow_roles seed skipped because workflow tables are unavailable. "
+            "Apply alembic migrations to enable workflow governance."
+        )
 
 
 def user_has_workflow_role(user: User, code: str) -> bool:

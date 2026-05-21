@@ -19,10 +19,10 @@ function formatAmount(value: string | null, currency: string) {
 }
 
 function formatRange(rule: ApprovalMatrixRuleDto) {
-  if (rule.min_amount && rule.max_amount) return `${formatAmount(rule.min_amount, rule.currency)} atÃ© ${formatAmount(rule.max_amount, rule.currency)}`;
+  if (rule.min_amount && rule.max_amount) return `${formatAmount(rule.min_amount, rule.currency)} até ${formatAmount(rule.max_amount, rule.currency)}`;
   if (rule.min_amount && !rule.max_amount) return `Acima de ${formatAmount(rule.min_amount, rule.currency)}`;
-  if (!rule.min_amount && rule.max_amount) return `AtÃ© ${formatAmount(rule.max_amount, rule.currency)}`;
-  return "Faixa nÃ£o limitada";
+  if (!rule.min_amount && rule.max_amount) return `Até ${formatAmount(rule.max_amount, rule.currency)}`;
+  return "Faixa não limitada";
 }
 
 export function AdminApprovalMatrixPageView() {
@@ -132,22 +132,22 @@ export function AdminApprovalMatrixPageView() {
       }
       setOpenEditor(false);
     } catch (error) {
-      setFeedback(error instanceof ApiError ? error.message : "NÃ£o foi possÃ­vel salvar a regra.");
+      setFeedback(error instanceof ApiError ? error.message : "Não foi possível salvar a regra.");
     }
   }
 
   return (
     <section className="space-y-5">
       <header className="rounded-2xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 px-6 py-5 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">GovernanÃ§a</p>
-        <h1 className="mt-1 text-2xl font-semibold text-slate-900">Matriz de AprovaÃ§Ã£o</h1>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Governança</p>
+        <h1 className="mt-1 text-2xl font-semibold text-slate-900">Matriz de Aprovação</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Estrutura institucional de alÃ§adas, aprovadores e exceÃ§Ãµes, preparada para integraÃ§Ã£o gradual com o workflow.
+          Estrutura institucional de alçadas, aprovadores e exceções, preparada para integração gradual com o workflow.
         </p>
       </header>
 
       <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="text-sm text-slate-600">Gerencie regras por faixa, papÃ©is aprovadores e obrigatoriedades de governanÃ§a.</p>
+        <p className="text-sm text-slate-600">Gerencie regras por faixa, papéis aprovadores e obrigatoriedades de governança.</p>
         <button type="button" onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
           <PlusCircle className="h-4 w-4" /> Nova regra
         </button>
@@ -160,7 +160,7 @@ export function AdminApprovalMatrixPageView() {
       ) : null}
 
       {rulesQuery.isLoading ? <p className="text-sm text-slate-500">Carregando matriz...</p> : null}
-      {rulesQuery.isError ? <p className="text-sm text-rose-700">NÃ£o foi possÃ­vel carregar a matriz de aprovaÃ§Ã£o.</p> : null}
+      {rulesQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar a matriz de aprovação.</p> : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         {rules.map((rule) => (
@@ -169,7 +169,7 @@ export function AdminApprovalMatrixPageView() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">{rule.code}</p>
                 <h2 className="mt-1 text-lg font-semibold text-slate-900">{rule.name}</h2>
-                <p className="mt-1 text-sm text-slate-600">{rule.description ?? "Regra institucional sem descriÃ§Ã£o adicional."}</p>
+                <p className="mt-1 text-sm text-slate-600">{rule.description ?? "Regra institucional sem descrição adicional."}</p>
               </div>
               <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", rule.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700")}>
                 {rule.is_active ? "Ativa" : "Inativa"}
@@ -177,13 +177,13 @@ export function AdminApprovalMatrixPageView() {
             </div>
             <div className="mt-4 space-y-2 text-sm text-slate-700">
               <p><strong>Faixa:</strong> {formatRange(rule)}</p>
-              <p><strong>Aprovadores mÃ­nimos:</strong> {rule.required_approvals}</p>
-              <p><strong>PapÃ©is:</strong> {rule.roles.map((item) => item.workflow_role_name).join(", ")}</p>
+              <p><strong>Aprovadores mínimos:</strong> {rule.required_approvals}</p>
+              <p><strong>Papéis:</strong> {rule.roles.map((item) => item.workflow_role_name).join(", ")}</p>
               <p><strong>Escopo BU:</strong> {rule.business_unit_name ?? "Todas as BU's"}</p>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              {rule.requires_committee ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">ComitÃª obrigatÃ³rio</span> : null}
-              {rule.requires_unanimous ? <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">AprovaÃ§Ã£o unÃ¢nime</span> : null}
+              {rule.requires_committee ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Comitê obrigatório</span> : null}
+              {rule.requires_unanimous ? <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">Aprovação unânime</span> : null}
               <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">Prioridade {rule.priority}</span>
             </div>
             <button type="button" onClick={() => openEdit(rule)} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700">
@@ -199,19 +199,19 @@ export function AdminApprovalMatrixPageView() {
             <div className="mb-4 flex items-start justify-between">
               <div>
                 <h3 className="text-xl font-semibold text-slate-900">{editingRuleId ? "Editar Regra" : "Nova Regra"}</h3>
-                <p className="text-sm text-slate-600">Configure alÃ§ada, aprovadores e critÃ©rios institucionais.</p>
+                <p className="text-sm text-slate-600">Configure alçada, aprovadores e critérios institucionais.</p>
               </div>
               <button type="button" onClick={() => setOpenEditor(false)} className="text-sm text-slate-600">Fechar</button>
             </div>
             <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
               <div className="grid gap-3 md:grid-cols-2">
-                <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="CÃ³digo da regra" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
+                <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Código da regra" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
                 <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome da regra" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
               </div>
-              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="DescriÃ§Ã£o institucional" className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Descrição institucional" className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
               <div className="grid gap-3 md:grid-cols-3">
-                <input value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="Valor mÃ­nimo" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
-                <input value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} placeholder="Valor mÃ¡ximo" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
+                <input value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="Valor mínimo" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
+                <input value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} placeholder="Valor máximo" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
                 <input type="number" value={requiredApprovals} onChange={(event) => setRequiredApprovals(Number(event.target.value))} min={1} className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
               </div>
               <div className="grid gap-3 md:grid-cols-2">
@@ -223,12 +223,12 @@ export function AdminApprovalMatrixPageView() {
               </div>
               <div className="grid gap-2 md:grid-cols-3">
                 <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} /> <span className="ml-2">Regra ativa</span></label>
-                <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={requiresCommittee} onChange={(event) => setRequiresCommittee(event.target.checked)} /> <span className="ml-2">ComitÃª obrigatÃ³rio</span></label>
-                <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={requiresUnanimous} onChange={(event) => setRequiresUnanimous(event.target.checked)} /> <span className="ml-2">AprovaÃ§Ã£o unÃ¢nime</span></label>
+                <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={requiresCommittee} onChange={(event) => setRequiresCommittee(event.target.checked)} /> <span className="ml-2">Comitê obrigatório</span></label>
+                <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={requiresUnanimous} onChange={(event) => setRequiresUnanimous(event.target.checked)} /> <span className="ml-2">Aprovação unânime</span></label>
               </div>
               <div className="space-y-3 rounded-xl border border-slate-200 p-4">
-                <div className="flex items-center gap-2 text-slate-800"><Shield className="h-4 w-4" /> <p className="text-sm font-semibold">PapÃ©is aprovadores</p></div>
-                {optionsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papÃ©is...</p> : null}
+                <div className="flex items-center gap-2 text-slate-800"><Shield className="h-4 w-4" /> <p className="text-sm font-semibold">Papéis aprovadores</p></div>
+                {optionsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
                 <div className="space-y-3">
                   {([['Operacionais', groupedRoles.operational], ['Governança', groupedRoles.governance], ['Aprovação', groupedRoles.approval]] as const).map(([title, roleList]) => (
                     <div key={title} className="space-y-2">
@@ -246,7 +246,7 @@ export function AdminApprovalMatrixPageView() {
                 </div>
               </div>
               <button type="submit" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
-                {editingRuleId ? "Salvar alteraÃ§Ãµes" : "Criar regra"}
+                {editingRuleId ? "Salvar alterações" : "Criar regra"}
               </button>
             </form>
           </div>
