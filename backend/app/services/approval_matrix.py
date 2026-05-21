@@ -15,7 +15,8 @@ from app.schemas.approval_matrix import ApprovalMatrixRuleWrite
 
 INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
     {
-        "code": "APPROVAL_BRL_0_1MM",
+        "legacy_code": "APPROVAL_BRL_0_1MM",
+        "code": "DOA-0001",
         "name": "Alçada BRL 0 a 1MM",
         "description": "Aprovação padrão para valores até BRL 1MM.",
         "min_amount": Decimal("0"),
@@ -28,7 +29,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "workflow_role_codes": ["CREDIT_FINANCE_HEAD"],
     },
     {
-        "code": "APPROVAL_BRL_1_5MM",
+        "legacy_code": "APPROVAL_BRL_1_5MM",
+        "code": "DOA-0002",
         "name": "Alçada BRL 1MM a 5MM",
         "description": "Aprovação padrão para valores entre BRL 1MM e BRL 5MM.",
         "min_amount": Decimal("1000000"),
@@ -41,7 +43,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "workflow_role_codes": ["CREDIT_FINANCE_DIRECTOR"],
     },
     {
-        "code": "APPROVAL_BRL_5_10MM",
+        "legacy_code": "APPROVAL_BRL_5_10MM",
+        "code": "DOA-0003",
         "name": "Alçada BRL 5MM a 10MM",
         "description": "Aprovação padrão para valores entre BRL 5MM e BRL 10MM.",
         "min_amount": Decimal("5000000"),
@@ -54,7 +57,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "workflow_role_codes": ["CREDIT_GROUP_CFO"],
     },
     {
-        "code": "APPROVAL_BRL_GT_10MM",
+        "legacy_code": "APPROVAL_BRL_GT_10MM",
+        "code": "DOA-0004",
         "name": "Alçada BRL acima de 10MM",
         "description": "Aprovação executiva para valores acima de BRL 10MM.",
         "min_amount": Decimal("10000000"),
@@ -67,7 +71,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "workflow_role_codes": ["CREDIT_CEO"],
     },
     {
-        "code": "APPROVAL_EXCEPTIONS_COMMITTEE",
+        "legacy_code": "APPROVAL_EXCEPTIONS_COMMITTEE",
+        "code": "DOA-0005",
         "name": "Exceções de Comitê",
         "description": "Canal institucional para exceções e deliberações colegiadas.",
         "min_amount": None,
@@ -80,6 +85,20 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "workflow_role_codes": ["CREDIT_COMMITTEE"],
     },
 ]
+
+
+def generate_next_approval_matrix_code(db: Session) -> str:
+    rules = list(db.scalars(select(ApprovalMatrixRule.code)).all())
+    max_suffix = 0
+    for raw_code in rules:
+        code = (raw_code or "").strip().upper()
+        if not code.startswith("DOA-"):
+            continue
+        suffix = code.removeprefix("DOA-")
+        if not suffix.isdigit():
+            continue
+        max_suffix = max(max_suffix, int(suffix))
+    return f"DOA-{max_suffix + 1:04d}"
 
 
 def list_approval_matrix_rules(db: Session, *, company_id: int) -> list[ApprovalMatrixRule]:
@@ -127,8 +146,9 @@ def create_approval_matrix_rule(
     payload: ApprovalMatrixRuleWrite,
     created_by_user_id: int | None,
 ) -> ApprovalMatrixRule:
+    next_code = generate_next_approval_matrix_code(db)
     rule = ApprovalMatrixRule(
-        code=payload.code,
+        code=next_code,
         name=payload.name,
         description=payload.description,
         is_active=payload.is_active,
@@ -231,12 +251,39 @@ def resolve_required_approval_roles(
 def ensure_approval_matrix_seed(db: Session) -> None:
     try:
         for item in INITIAL_APPROVAL_MATRIX_RULES:
-            payload = ApprovalMatrixRuleWrite(**item)
-            existing = db.scalar(select(ApprovalMatrixRule).where(ApprovalMatrixRule.code == payload.code))
-            if existing is None:
-                create_approval_matrix_rule(db, payload=payload, created_by_user_id=None)
-            else:
-                update_approval_matrix_rule(db, rule=existing, payload=payload)
+            seed_code = str(item["code"]).strip().upper()
+            legacy_code = str(item["legacy_code"]).strip().upper()
+            payload = ApprovalMatrixRuleWrite(**{k: v for k, v in item.items() if k != "legacy_code"})
+
+            existing_new = db.scalar(select(ApprovalMatrixRule).where(ApprovalMatrixRule.code == seed_code))
+            if existing_new is not None:
+                continue
+
+            existing_legacy = db.scalar(select(ApprovalMatrixRule).where(ApprovalMatrixRule.code == legacy_code))
+            if existing_legacy is not None:
+                existing_legacy.code = seed_code
+                db.flush()
+                continue
+
+            # Bootstrap inicial: cria seed somente se não houver código novo/legado correspondente.
+            rule = ApprovalMatrixRule(
+                code=payload.code,
+                name=payload.name,
+                description=payload.description,
+                is_active=payload.is_active,
+                min_amount=payload.min_amount,
+                max_amount=payload.max_amount,
+                currency=payload.currency.strip().upper(),
+                required_approvals=payload.required_approvals,
+                requires_committee=payload.requires_committee,
+                requires_unanimous=payload.requires_unanimous,
+                business_unit_id=payload.business_unit_id,
+                priority=payload.priority,
+                created_by_user_id=None,
+            )
+            db.add(rule)
+            db.flush()
+            _save_rule_roles(db, rule, payload.workflow_role_codes)
         db.flush()
     except SQLAlchemyError:
         db.rollback()

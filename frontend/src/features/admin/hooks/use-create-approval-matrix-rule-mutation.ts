@@ -12,6 +12,7 @@ export function useCreateApprovalMatrixRuleMutation() {
     mutationFn: (payload: ApprovalMatrixRuleWritePayload) => createApprovalMatrixRule(payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: adminQueryKeys.approvalMatrix });
+      await queryClient.invalidateQueries({ queryKey: adminQueryKeys.approvalMatrixNextCode });
     }
   });
 }

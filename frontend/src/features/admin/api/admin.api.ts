@@ -201,8 +201,12 @@ export type ApprovalMatrixRuleWritePayload = {
 };
 
 export type ApprovalMatrixOptionsDto = {
-  workflow_roles: Array<{ id: number; code: string; name: string; type: WorkflowRoleType }>;
+  workflow_roles: Array<{ id: number; code: string; name: string; description?: string; type: WorkflowRoleType | string; is_active?: boolean }>;
   business_units: Array<{ id: number; code: string; name: string }>;
+};
+
+export type ApprovalMatrixNextCodeDto = {
+  code: string;
 };
 
 export async function listAdminUsers() {
@@ -310,6 +314,10 @@ export async function listApprovalMatrixRules() {
 
 export async function getApprovalMatrixOptions() {
   return apiClient.get<ApprovalMatrixOptionsDto>("/api/admin/approval-matrix/options");
+}
+
+export async function getApprovalMatrixNextCode() {
+  return apiClient.get<ApprovalMatrixNextCodeDto>("/api/admin/approval-matrix/next-code");
 }
 
 export async function createApprovalMatrixRule(payload: ApprovalMatrixRuleWritePayload) {

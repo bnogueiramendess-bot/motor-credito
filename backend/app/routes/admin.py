@@ -71,6 +71,7 @@ from app.services.workflow_roles import ensure_workflow_roles_seed
 from app.services.approval_matrix import (
     create_approval_matrix_rule,
     ensure_approval_matrix_seed,
+    generate_next_approval_matrix_code,
     list_approval_matrix_rules,
     update_approval_matrix_rule,
 )
@@ -1122,7 +1123,8 @@ def create_approval_matrix_rule_endpoint(
         bu = db.get(BusinessUnit, payload.business_unit_id)
         if bu is None or bu.company_id != current.user.company_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="BU invalida para esta regra.")
-    duplicated = db.scalar(select(ApprovalMatrixRule.id).where(ApprovalMatrixRule.code == payload.code))
+    next_code = generate_next_approval_matrix_code(db)
+    duplicated = db.scalar(select(ApprovalMatrixRule.id).where(ApprovalMatrixRule.code == next_code))
     if duplicated is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ja existe uma regra com este codigo.")
     try:
@@ -1132,6 +1134,16 @@ def create_approval_matrix_rule_endpoint(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _approval_rule_to_read(db, rule)
+
+
+@router.get("/approval-matrix/next-code")
+def get_approval_matrix_next_code(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["profiles:view"])),
+) -> dict[str, str]:
+    if not _table_exists(db, "approval_matrix_rules"):
+        return {"code": "DOA-0001"}
+    return {"code": generate_next_approval_matrix_code(db)}
 
 
 @router.put("/approval-matrix/{rule_id}", response_model=ApprovalMatrixRuleRead)

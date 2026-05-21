@@ -1,10 +1,11 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { CheckCircle2, Pencil, PlusCircle, Shield } from "lucide-react";
+import { Check, CheckCircle2, Info, Lock, Pencil, PlusCircle, Shield } from "lucide-react";
 
 import { ApprovalMatrixRuleDto, ApprovalMatrixRuleWritePayload } from "@/features/admin/api/admin.api";
 import { useApprovalMatrixOptionsQuery } from "@/features/admin/hooks/use-approval-matrix-options-query";
+import { useApprovalMatrixNextCodeQuery } from "@/features/admin/hooks/use-approval-matrix-next-code-query";
 import { useApprovalMatrixQuery } from "@/features/admin/hooks/use-approval-matrix-query";
 import { useCreateApprovalMatrixRuleMutation } from "@/features/admin/hooks/use-create-approval-matrix-rule-mutation";
 import { useUpdateApprovalMatrixRuleMutation } from "@/features/admin/hooks/use-update-approval-matrix-rule-mutation";
@@ -25,9 +26,47 @@ function formatRange(rule: ApprovalMatrixRuleDto) {
   return "Faixa não limitada";
 }
 
+function normalizeWorkflowRoleType(value: string | null | undefined): "operational" | "governance" | "approval" | null {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "operational" || normalized === "governance" || normalized === "approval") return normalized;
+  return null;
+}
+
+type HelpTipProps = {
+  text: string;
+};
+
+function HelpTip({ text }: HelpTipProps) {
+  return (
+    <span className="group relative inline-flex">
+      <span className="inline-flex h-4.5 w-4.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-slate-500 transition-colors duration-150 group-hover:border-slate-400 group-hover:text-slate-700">
+        <Info className="h-3 w-3" />
+      </span>
+      <span className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-20 w-64 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-medium leading-4 text-slate-100 opacity-0 shadow-xl ring-1 ring-slate-700/60 transition duration-200 group-hover:opacity-100">
+        {text}
+      </span>
+    </span>
+  );
+}
+
+type FieldLabelProps = {
+  title: string;
+  helpText?: string;
+};
+
+function FieldLabel({ title, helpText }: FieldLabelProps) {
+  return (
+    <label className="mb-1.5 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-slate-600">
+      {title}
+      {helpText ? <HelpTip text={helpText} /> : null}
+    </label>
+  );
+}
+
 export function AdminApprovalMatrixPageView() {
   const rulesQuery = useApprovalMatrixQuery();
   const optionsQuery = useApprovalMatrixOptionsQuery();
+  const nextCodeQuery = useApprovalMatrixNextCodeQuery();
   const createMutation = useCreateApprovalMatrixRuleMutation();
   const updateMutation = useUpdateApprovalMatrixRuleMutation();
 
@@ -51,14 +90,22 @@ export function AdminApprovalMatrixPageView() {
   const rules = rulesQuery.data ?? [];
   const businessUnits = optionsQuery.data?.business_units ?? [];
 
-  const groupedRoles = useMemo(
-    () => ({
-      operational: (optionsQuery.data?.workflow_roles ?? []).filter((item) => item.type === "operational"),
-      governance: (optionsQuery.data?.workflow_roles ?? []).filter((item) => item.type === "governance"),
-      approval: (optionsQuery.data?.workflow_roles ?? []).filter((item) => item.type === "approval")
-    }),
-    [optionsQuery.data?.workflow_roles]
-  );
+  const groupedRoles = useMemo(() => {
+    const base = { operational: [], governance: [], approval: [] } as {
+      operational: Array<{ id: number; code: string; name: string; type: string; is_active?: boolean }>;
+      governance: Array<{ id: number; code: string; name: string; type: string; is_active?: boolean }>;
+      approval: Array<{ id: number; code: string; name: string; type: string; is_active?: boolean }>;
+    };
+    for (const role of optionsQuery.data?.workflow_roles ?? []) {
+      const normalizedType = normalizeWorkflowRoleType(role.type);
+      const isActive = role.is_active ?? true;
+      if (!normalizedType || !isActive) continue;
+      base[normalizedType].push(role);
+    }
+    return base;
+  }, [optionsQuery.data?.workflow_roles]);
+
+  const totalAvailableRoles = groupedRoles.operational.length + groupedRoles.governance.length + groupedRoles.approval.length;
 
   function resetForm() {
     setEditingRuleId(null);
@@ -76,8 +123,10 @@ export function AdminApprovalMatrixPageView() {
     setSelectedRoleCodes([]);
   }
 
-  function openCreate() {
+  async function openCreate() {
     resetForm();
+    const nextCode = nextCodeQuery.data?.code ?? (await nextCodeQuery.refetch()).data?.code ?? "";
+    setCode(nextCode);
     setOpenEditor(true);
   }
 
@@ -199,55 +248,142 @@ export function AdminApprovalMatrixPageView() {
             <div className="mb-4 flex items-start justify-between">
               <div>
                 <h3 className="text-xl font-semibold text-slate-900">{editingRuleId ? "Editar Regra" : "Nova Regra"}</h3>
-                <p className="text-sm text-slate-600">Configure alçada, aprovadores e critérios institucionais.</p>
+                <p className="text-sm text-slate-600">Defina critérios institucionais, alçadas e responsáveis pela aprovação corporativa.</p>
               </div>
               <button type="button" onClick={() => setOpenEditor(false)} className="text-sm text-slate-600">Fechar</button>
             </div>
-            <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-              <div className="grid gap-3 md:grid-cols-2">
-                <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Código da regra" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
-                <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome da regra" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
-              </div>
-              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Descrição institucional" className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <div className="grid gap-3 md:grid-cols-3">
-                <input value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="Valor mínimo" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
-                <input value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} placeholder="Valor máximo" className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
-                <input type="number" value={requiredApprovals} onChange={(event) => setRequiredApprovals(Number(event.target.value))} min={1} className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <select value={businessUnitId ?? ""} onChange={(event) => setBusinessUnitId(event.target.value ? Number(event.target.value) : null)} className="h-10 rounded-lg border border-slate-300 px-3 text-sm">
-                  <option value="">Todas as BU&apos;s</option>
-                  {businessUnits.map((bu) => <option key={bu.id} value={bu.id}>{bu.name}</option>)}
-                </select>
-                <input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} className="h-10 rounded-lg border border-slate-300 px-3 text-sm" />
-              </div>
-              <div className="grid gap-2 md:grid-cols-3">
-                <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} /> <span className="ml-2">Regra ativa</span></label>
-                <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={requiresCommittee} onChange={(event) => setRequiresCommittee(event.target.checked)} /> <span className="ml-2">Comitê obrigatório</span></label>
-                <label className="rounded-lg border border-slate-200 p-3 text-sm"><input type="checkbox" checked={requiresUnanimous} onChange={(event) => setRequiresUnanimous(event.target.checked)} /> <span className="ml-2">Aprovação unânime</span></label>
-              </div>
-              <div className="space-y-3 rounded-xl border border-slate-200 p-4">
-                <div className="flex items-center gap-2 text-slate-800"><Shield className="h-4 w-4" /> <p className="text-sm font-semibold">Papéis aprovadores</p></div>
+            <form className="space-y-6" onSubmit={(event) => void handleSubmit(event)}>
+              <section className="space-y-4 border-b border-slate-200 pb-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Informações da regra</p>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <FieldLabel title="Código da regra" helpText="Identificador técnico e institucional da regra utilizado para rastreabilidade, auditoria e governança." />
+                    <div className="relative">
+                      <input value={code} readOnly placeholder="DOA-0001" className="h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 pr-9 text-sm text-slate-800 placeholder:text-slate-400" />
+                      <Lock className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">Código institucional gerado automaticamente.</p>
+                  </div>
+                  <div>
+                    <FieldLabel title="Nome da regra" />
+                    <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Alçada corporativa padrão" className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 placeholder:text-slate-400" />
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel title="Descrição institucional" />
+                  <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Contextualize objetivo e aplicação institucional desta regra." className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400" />
+                </div>
+              </section>
+
+              <section className="space-y-4 border-b border-slate-200 pb-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Critérios de aprovação</p>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div>
+                    <FieldLabel title="Valor mínimo" helpText="Define a faixa de valor em que esta alçada será aplicada." />
+                    <input value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="Ex.: 10000.00" className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 placeholder:text-slate-400" />
+                  </div>
+                  <div>
+                    <FieldLabel title="Valor máximo" helpText="Define a faixa de valor em que esta alçada será aplicada." />
+                    <input value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} placeholder="Ex.: 500000.00" className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 placeholder:text-slate-400" />
+                  </div>
+                  <div>
+                    <FieldLabel title="Mín. de aprovadores" helpText="Quantidade mínima de aprovadores exigidos para validação da operação. Preparado para aprovações múltiplas futuras." />
+                    <input type="number" value={requiredApprovals} onChange={(event) => setRequiredApprovals(Number(event.target.value))} min={1} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800" />
+                  </div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <FieldLabel title="Unidade de negócio" />
+                    <select value={businessUnitId ?? ""} onChange={(event) => setBusinessUnitId(event.target.value ? Number(event.target.value) : null)} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800">
+                      <option value="">Todas as BU&apos;s</option>
+                      {businessUnits.map((bu) => <option key={bu.id} value={bu.id}>{bu.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <FieldLabel title="Prioridade" helpText="Usada para resolver conflitos entre regras. Regras com menor prioridade numérica possuem precedência." />
+                    <input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800" />
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-4 border-b border-slate-200 pb-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Governança</p>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
+                    <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+                    <span>Regra ativa</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
+                    <input type="checkbox" checked={requiresCommittee} onChange={(event) => setRequiresCommittee(event.target.checked)} />
+                    <span>Comitê obrigatório</span>
+                    <HelpTip text="Indica que a operação exige participação formal do Comitê de Crédito." />
+                  </label>
+                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
+                    <input type="checkbox" checked={requiresUnanimous} onChange={(event) => setRequiresUnanimous(event.target.checked)} />
+                    <span>Aprovação unânime</span>
+                    <HelpTip text="Quando habilitado, todos os aprovadores exigidos deverão aprovar a operação." />
+                  </label>
+                </div>
+              </section>
+
+              <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/40 p-4">
+                <div className="flex items-center gap-2 text-slate-800">
+                  <Shield className="h-4 w-4" />
+                  <p className="text-sm font-semibold">Papéis aprovadores</p>
+                  <HelpTip text="Define quais papéis institucionais possuem alçada para aprovação nesta regra." />
+                </div>
                 {optionsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
-                <div className="space-y-3">
-                  {([['Operacionais', groupedRoles.operational], ['Governança', groupedRoles.governance], ['Aprovação', groupedRoles.approval]] as const).map(([title, roleList]) => (
+                {optionsQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar os papéis de workflow.</p> : null}
+                {!optionsQuery.isLoading && !optionsQuery.isError && totalAvailableRoles === 0 ? (
+                  <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                    Nenhum papel de workflow ativo encontrado. Cadastre ou ative papéis antes de criar regras de aprovação.
+                  </p>
+                ) : null}
+                <div className="space-y-4">
+                  {([["Operacionais", groupedRoles.operational], ["Governança", groupedRoles.governance], ["Aprovação", groupedRoles.approval]] as const)
+                    .filter(([, roleList]) => roleList.length > 0)
+                    .map(([title, roleList]) => (
                     <div key={title} className="space-y-2">
                       <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">{title}</p>
                       <div className="grid gap-2 md:grid-cols-2">
                         {roleList.map((role) => (
-                          <label key={role.code} className="rounded-lg border border-slate-200 p-2 text-sm">
-                            <input type="checkbox" checked={selectedRoleCodes.includes(role.code)} onChange={() => toggleRole(role.code)} />
-                            <span className="ml-2 font-medium text-slate-800">{role.name}</span>
+                          <label
+                            key={role.code}
+                            className={cn(
+                              "flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm transition-colors",
+                              selectedRoleCodes.includes(role.code)
+                                ? title === "Aprovação"
+                                  ? "border-emerald-300 bg-emerald-50/70"
+                                  : "border-slate-400 bg-white"
+                                : title === "Aprovação"
+                                  ? "border-emerald-200 bg-white"
+                                  : "border-slate-200 bg-white"
+                            )}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input type="checkbox" checked={selectedRoleCodes.includes(role.code)} onChange={() => toggleRole(role.code)} />
+                              <span className="font-medium text-slate-800">{role.name}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              {selectedRoleCodes.includes(role.code) ? <Check className="h-3.5 w-3.5 text-emerald-700" /> : null}
+                              {title === "Aprovação" ? <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-emerald-700">Alçada</span> : null}
+                            </span>
                           </label>
                         ))}
                       </div>
                     </div>
-                  ))}
+                    ))}
                 </div>
+              </section>
+
+              <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-slate-200 bg-white/95 px-1 pb-1 pt-4 backdrop-blur">
+                <button type="button" onClick={() => setOpenEditor(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">
+                  Cancelar
+                </button>
+                <button type="submit" className="rounded-lg bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm">
+                  {editingRuleId ? "Salvar alterações" : "Criar regra"}
+                </button>
               </div>
-              <button type="submit" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
-                {editingRuleId ? "Salvar alterações" : "Criar regra"}
-              </button>
             </form>
           </div>
         </div>
@@ -255,4 +391,3 @@ export function AdminApprovalMatrixPageView() {
     </section>
   );
 }
-
