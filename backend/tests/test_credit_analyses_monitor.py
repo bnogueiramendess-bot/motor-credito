@@ -16,6 +16,7 @@ from app.models.audit_log import AuditLog
 from app.models.business_unit import BusinessUnit
 from app.models.company import Company
 from app.models.credit_analysis import CreditAnalysis
+from app.models.credit_report_read import CreditReportRead
 from app.models.customer import Customer
 from app.models.decision_event import DecisionEvent
 from app.models.permission import Permission
@@ -32,7 +33,7 @@ from app.routes.credit_analyses import (
     start_credit_analysis,
     update_credit_analysis_workspace_state,
 )
-from app.models.enums import FinalDecision, AnalysisStatus
+from app.models.enums import FinalDecision, AnalysisStatus, MotorResult
 from app.schemas.final_decision import FinalDecisionApplyRequest
 from app.schemas.credit_analysis import CreditAnalysisWorkspaceStateUpdateRequest
 from app.services.security import hash_password
@@ -40,7 +41,7 @@ from app.services.security import hash_password
 
 class CreditAnalysesMonitorTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.created: dict[str, list[int]] = {k: [] for k in ["rows", "runs", "audits", "analyses", "customers", "scopes", "users", "role_permissions", "roles", "permissions", "bus", "companies"]}
+        self.created: dict[str, list[int]] = {k: [] for k in ["rows", "runs", "audits", "analyses", "customers", "report_reads", "scopes", "users", "role_permissions", "roles", "permissions", "bus", "companies"]}
         self.company_id: int | None = None
         self._run_suffix = uuid.uuid4().hex[:8]
         self._email_map: dict[str, str] = {}
@@ -55,6 +56,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
                 db.execute(delete(ArAgingImportRun).where(ArAgingImportRun.id.in_(self.created["runs"])))
             if self.created["audits"]:
                 db.execute(delete(AuditLog).where(AuditLog.id.in_(self.created["audits"])))
+            if self.created["report_reads"]:
+                db.execute(delete(CreditReportRead).where(CreditReportRead.id.in_(self.created["report_reads"])))
             if self.created["analyses"] or self.created["users"]:
                 db.execute(
                     delete(AuditLog).where(
@@ -413,6 +416,105 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
                 list_credit_analysis_events(analysis_id=analysis_bu_b, db=db, current=analyst_bu_a)
         self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_get_credit_analysis_returns_maintenance_recommendation_for_existing_customer(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.runtime@indorama.com", ["credit_request_validate"], bu_id)
+        with SessionLocal() as db:
+            customer = Customer(
+                company_name="Cliente Runtime",
+                document_number=self._next_document_number(),
+                segment="ind",
+                region="sudeste",
+                relationship_start_date=None,
+            )
+            db.add(customer)
+            db.flush()
+            self.created["customers"].append(customer.id)
+
+            row = ArAgingDataTotalRow(
+                import_run_id=run_id,
+                row_number=len(self.created["rows"]) + 1,
+                cnpj_raw=customer.document_number,
+                cnpj_normalized=customer.document_number,
+                customer_name=customer.company_name,
+                bu_raw="Fertilizer",
+                bu_normalized="Fertilizer",
+                economic_group_raw="GRP-RUNTIME",
+                economic_group_normalized="GRP-RUNTIME",
+                open_amount=Decimal("0"),
+                due_amount=Decimal("0"),
+                overdue_amount=Decimal("0"),
+                aging_label="0-30",
+                raw_payload_json={
+                    "approved_credit_amount": "4500000.00",
+                    "exposure_amount": "0.00",
+                    "col_17": "0",
+                },
+            )
+            db.add(row)
+            db.flush()
+            self.created["rows"].append(row.id)
+
+            coface_read = CreditReportRead(
+                source_type="coface",
+                status="valid",
+                original_filename="coface-runtime.pdf",
+                mime_type="application/pdf",
+                file_size=1024,
+                customer_document_number=customer.document_number,
+                report_document_number=customer.document_number,
+                is_document_match=True,
+                validation_message=None,
+                score_primary=None,
+                score_source=None,
+                warnings_json=[],
+                confidence="high",
+                read_payload_json={
+                    "coface": {
+                        "decision_amount": 4500000.00,
+                    }
+                },
+            )
+            db.add(coface_read)
+            db.flush()
+            self.created["report_reads"].append(coface_read.id)
+
+            analysis = CreditAnalysis(
+                customer_id=customer.id,
+                protocol_number=f"PROTO-RUNTIME-{customer.id}",
+                requested_limit=Decimal("5000000.00"),
+                current_limit=Decimal("0"),
+                exposure_amount=Decimal("0"),
+                annual_revenue_estimated=Decimal("0"),
+                suggested_limit=Decimal("4500000.00"),
+                analysis_status=AnalysisStatus.IN_PROGRESS,
+                motor_result=MotorResult.MANUAL_REVIEW,
+                decision_memory_json={
+                    "triage_submission": {"source": "cliente_existente_carteira"},
+                    "report_links": {"coface": {"read_id": coface_read.id}},
+                },
+            )
+            db.add(analysis)
+            db.flush()
+            self.created["analyses"].append(analysis.id)
+            db.commit()
+            analysis_id = analysis.id
+
+        with SessionLocal() as db:
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+
+        self.assertIsInstance(detail.decision_memory_json, dict)
+        assert isinstance(detail.decision_memory_json, dict)
+        classification = detail.decision_memory_json.get("recommendation_classification")
+        self.assertIsInstance(classification, dict)
+        assert isinstance(classification, dict)
+        self.assertEqual(classification.get("label"), "Manutenção do limite atual recomendada")
+        self.assertEqual(classification.get("requested_limit"), "5000000.00")
+        self.assertEqual(classification.get("current_approved_limit"), "4500000.00")
+        self.assertEqual(classification.get("coface_coverage_limit"), "4500000.0")
+        self.assertEqual(classification.get("final_suggested_limit"), "4500000.00")
+        self.assertEqual(classification.get("is_existing_customer"), True)
+
     def test_scope_all_bu_can_read_detail_and_events(self) -> None:
         bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()
         master = self._create_user("master@indorama.com", ["credit_request_view_bu", "scope:all_bu"], bu_a_id)
@@ -422,6 +524,205 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             events = list_credit_analysis_events(analysis_id=analysis_id, db=db, current=master)
         self.assertEqual(detail.id, analysis_id)
         self.assertIsInstance(events, list)
+
+    def test_get_credit_analysis_uses_latest_valid_run_for_customer_not_global_latest(self) -> None:
+        bu_id, customer_run_id = self._setup_base()
+        analyst = self._create_user("analista.run.customer@indorama.com", ["credit_request_validate"], bu_id)
+        with SessionLocal() as db:
+            customer = Customer(
+                company_name="Cliente Snapshot",
+                document_number=self._next_document_number(),
+                segment="ind",
+                region="sudeste",
+                relationship_start_date=None,
+            )
+            db.add(customer)
+            db.flush()
+            self.created["customers"].append(customer.id)
+
+            row_customer = ArAgingDataTotalRow(
+                import_run_id=customer_run_id,
+                row_number=len(self.created["rows"]) + 1,
+                cnpj_raw=customer.document_number,
+                cnpj_normalized=customer.document_number,
+                customer_name=customer.company_name,
+                bu_raw="Fertilizer",
+                bu_normalized="Fertilizer",
+                economic_group_raw="GRP-SNAPSHOT",
+                economic_group_normalized="GRP-SNAPSHOT",
+                open_amount=Decimal("0"),
+                due_amount=Decimal("0"),
+                overdue_amount=Decimal("0"),
+                aging_label="0-30",
+                raw_payload_json={"approved_credit_amount": "4500000.00", "exposure_amount": "0.00", "col_17": "0"},
+            )
+            db.add(row_customer)
+            db.flush()
+            self.created["rows"].append(row_customer.id)
+
+            newer_run = ArAgingImportRun(
+                base_date=date(2026, 5, 10),
+                status="valid",
+                original_filename="base-newer.xlsx",
+                mime_type="application/xlsx",
+                file_size=1000,
+                warnings_json=[],
+                totals_json={},
+            )
+            db.add(newer_run)
+            db.flush()
+            self.created["runs"].append(newer_run.id)
+
+            other_cnpj = self._next_document_number()
+            row_other = ArAgingDataTotalRow(
+                import_run_id=newer_run.id,
+                row_number=len(self.created["rows"]) + 1,
+                cnpj_raw=other_cnpj,
+                cnpj_normalized=other_cnpj,
+                customer_name="Outro Cliente",
+                bu_raw="Fertilizer",
+                bu_normalized="Fertilizer",
+                economic_group_raw="GRP-OTHER",
+                economic_group_normalized="GRP-OTHER",
+                open_amount=Decimal("0"),
+                due_amount=Decimal("0"),
+                overdue_amount=Decimal("0"),
+                aging_label="0-30",
+                raw_payload_json={"approved_credit_amount": "9000000.00", "exposure_amount": "0.00", "col_17": "0"},
+            )
+            db.add(row_other)
+            db.flush()
+            self.created["rows"].append(row_other.id)
+
+            coface_read = CreditReportRead(
+                source_type="coface",
+                status="valid",
+                original_filename="coface-snapshot.pdf",
+                mime_type="application/pdf",
+                file_size=1024,
+                customer_document_number=customer.document_number,
+                report_document_number=customer.document_number,
+                is_document_match=True,
+                validation_message=None,
+                score_primary=None,
+                score_source=None,
+                warnings_json=[],
+                confidence="high",
+                read_payload_json={"coface": {"decision_amount": 4500000.00}},
+            )
+            db.add(coface_read)
+            db.flush()
+            self.created["report_reads"].append(coface_read.id)
+
+            analysis = CreditAnalysis(
+                customer_id=customer.id,
+                protocol_number=f"PROTO-SNAPSHOT-{customer.id}",
+                requested_limit=Decimal("5000000.00"),
+                current_limit=Decimal("0"),
+                exposure_amount=Decimal("0"),
+                annual_revenue_estimated=Decimal("0"),
+                suggested_limit=Decimal("4500000.00"),
+                analysis_status=AnalysisStatus.IN_PROGRESS,
+                motor_result=MotorResult.MANUAL_REVIEW,
+                decision_memory_json={
+                    "triage_submission": {"source": "cliente_existente_carteira"},
+                    "report_links": {"coface": {"read_id": coface_read.id}},
+                },
+            )
+            db.add(analysis)
+            db.flush()
+            self.created["analyses"].append(analysis.id)
+            db.commit()
+            analysis_id = analysis.id
+
+        with SessionLocal() as db:
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+        assert isinstance(detail.decision_memory_json, dict)
+        classification = detail.decision_memory_json.get("recommendation_classification")
+        assert isinstance(classification, dict)
+        self.assertEqual(classification.get("label"), "Manutenção do limite atual recomendada")
+        self.assertEqual(classification.get("current_approved_limit"), "4500000.00")
+
+    def test_get_credit_analysis_legacy_without_triage_source_still_identifies_existing_customer(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.legacy@indorama.com", ["credit_request_validate"], bu_id)
+        with SessionLocal() as db:
+            customer = Customer(
+                company_name="Cliente Legado",
+                document_number=self._next_document_number(),
+                segment="ind",
+                region="sudeste",
+                relationship_start_date=None,
+            )
+            db.add(customer)
+            db.flush()
+            self.created["customers"].append(customer.id)
+
+            row = ArAgingDataTotalRow(
+                import_run_id=run_id,
+                row_number=len(self.created["rows"]) + 1,
+                cnpj_raw=customer.document_number,
+                cnpj_normalized=customer.document_number,
+                customer_name=customer.company_name,
+                bu_raw="Fertilizer",
+                bu_normalized="Fertilizer",
+                economic_group_raw="GRP-LEGACY",
+                economic_group_normalized="GRP-LEGACY",
+                open_amount=Decimal("0"),
+                due_amount=Decimal("0"),
+                overdue_amount=Decimal("0"),
+                aging_label="0-30",
+                raw_payload_json={"approved_credit_amount": "4500000.00", "exposure_amount": "0.00", "col_17": "0"},
+            )
+            db.add(row)
+            db.flush()
+            self.created["rows"].append(row.id)
+
+            coface_read = CreditReportRead(
+                source_type="coface",
+                status="valid",
+                original_filename="coface-legacy.pdf",
+                mime_type="application/pdf",
+                file_size=1024,
+                customer_document_number=customer.document_number,
+                report_document_number=customer.document_number,
+                is_document_match=True,
+                validation_message=None,
+                score_primary=None,
+                score_source=None,
+                warnings_json=[],
+                confidence="high",
+                read_payload_json={"coface": {"decision_amount": 4500000.00}},
+            )
+            db.add(coface_read)
+            db.flush()
+            self.created["report_reads"].append(coface_read.id)
+
+            analysis = CreditAnalysis(
+                customer_id=customer.id,
+                protocol_number=f"PROTO-LEGACY-{customer.id}",
+                requested_limit=Decimal("5000000.00"),
+                current_limit=Decimal("0"),
+                exposure_amount=Decimal("0"),
+                annual_revenue_estimated=Decimal("0"),
+                suggested_limit=Decimal("4500000.00"),
+                analysis_status=AnalysisStatus.IN_PROGRESS,
+                motor_result=MotorResult.MANUAL_REVIEW,
+                decision_memory_json={"report_links": {"coface": {"read_id": coface_read.id}}},
+            )
+            db.add(analysis)
+            db.flush()
+            self.created["analyses"].append(analysis.id)
+            db.commit()
+            analysis_id = analysis.id
+
+        with SessionLocal() as db:
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+        assert isinstance(detail.decision_memory_json, dict)
+        classification = detail.decision_memory_json.get("recommendation_classification")
+        assert isinstance(classification, dict)
+        self.assertEqual(classification.get("label"), "Manutenção do limite atual recomendada")
+        self.assertEqual(classification.get("is_existing_customer"), True)
 
 
 if __name__ == "__main__":

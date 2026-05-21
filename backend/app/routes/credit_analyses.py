@@ -74,6 +74,7 @@ from app.services.protocol import generate_protocol_number
 from app.services.decision import DecisionCalculationError, calculate_and_apply_decision
 from app.services.score import ScoreCalculationError, calculate_and_upsert_score
 from app.services.external_cnpj import fetch_external_cnpj_data, is_valid_cnpj
+from app.services.recommendation import classify_recommendation
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_text_key
 from app.services.credit_policy_config import MIN_EARLY_REVIEW_JUSTIFICATION_LENGTH, REANALYSIS_COOLDOWN_DAYS
 from app.services.bu_scope import (
@@ -444,6 +445,97 @@ def _attach_journey_progress_fields(db: Session, analysis: CreditAnalysis) -> No
     resolved = max(current or 0, derived)
     setattr(analysis, "current_journey_step", resolved)
     setattr(analysis, "last_completed_journey_step", last if last is not None else max(1, resolved - 1))
+
+
+def _extract_coface_coverage_limit(analysis: CreditAnalysis, db: Session, customer: Customer | None) -> Decimal | None:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    report_links = memory.get("report_links") if isinstance(memory.get("report_links"), dict) else {}
+    coface_link = report_links.get("coface") if isinstance(report_links.get("coface"), dict) else {}
+    read_id = coface_link.get("read_id") if isinstance(coface_link.get("read_id"), int) else None
+
+    read: CreditReportRead | None = db.get(CreditReportRead, int(read_id)) if read_id else None
+    if read is None and customer is not None and customer.document_number:
+        read = db.scalar(
+            select(CreditReportRead)
+            .where(
+                CreditReportRead.customer_document_number == customer.document_number,
+                CreditReportRead.source_type == "coface",
+                CreditReportRead.status.in_(["valid", "valid_with_warnings"]),
+            )
+            .order_by(CreditReportRead.id.desc())
+            .limit(1)
+        )
+    if read is None or not isinstance(read.read_payload_json, dict):
+        return None
+
+    coface_payload = read.read_payload_json.get("coface")
+    if not isinstance(coface_payload, dict):
+        return None
+    amount = coface_payload.get("decision_amount")
+    try:
+        value = Decimal(str(amount))
+    except Exception:
+        return None
+    if value <= Decimal("0"):
+        return None
+    return value
+
+
+def _resolve_current_approved_limit(db: Session, customer: Customer | None) -> Decimal | None:
+    if customer is None or not customer.document_number:
+        return None
+
+    latest_run_id = db.scalar(
+        select(ArAgingImportRun.id)
+        .join(ArAgingDataTotalRow, ArAgingDataTotalRow.import_run_id == ArAgingImportRun.id)
+        .where(
+            ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
+            ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+        )
+        .order_by(ArAgingImportRun.id.desc())
+        .limit(1)
+    )
+    if latest_run_id is not None:
+        approved_from_total = db.scalar(
+            select(func.coalesce(func.sum(ArAgingDataTotalRow.raw_payload_json["approved_credit_amount"].astext.cast(Numeric(18, 2))), 0))
+            .where(
+                ArAgingDataTotalRow.import_run_id == latest_run_id,
+                ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+            )
+        )
+        if approved_from_total is not None and approved_from_total > Decimal("0"):
+            return approved_from_total
+
+    portfolio = _build_portfolio_row_for_cnpj(db, normalized_cnpj=customer.document_number, has_all_scope=True)
+    approved_from_group = portfolio[6] if len(portfolio) > 6 else None
+    if approved_from_group is not None and approved_from_group > Decimal("0"):
+        return approved_from_group
+    return None
+
+
+def _attach_recommendation_classification(db: Session, analysis: CreditAnalysis) -> None:
+    customer = db.get(Customer, analysis.customer_id)
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    triage = memory.get("triage_submission") if isinstance(memory.get("triage_submission"), dict) else {}
+    current_approved_limit = _resolve_current_approved_limit(db, customer)
+    source_value = triage.get("source")
+    is_existing_customer = (
+        source_value == "cliente_existente_carteira"
+        or (current_approved_limit is not None and current_approved_limit > Decimal("0"))
+    )
+
+    classification = classify_recommendation(
+        requested_limit=analysis.requested_limit,
+        engine_recommended_limit=analysis.suggested_limit,
+        coface_coverage_limit=_extract_coface_coverage_limit(analysis, db, customer),
+        current_approved_limit=current_approved_limit,
+        is_existing_customer=is_existing_customer,
+        motor_result=analysis.motor_result,
+    )
+
+    updated_memory = dict(memory)
+    updated_memory["recommendation_classification"] = classification
+    analysis.decision_memory_json = updated_memory
 
 
 def _resolve_owner_role_for_status(status_value: str) -> str:
@@ -2010,6 +2102,7 @@ def get_credit_analysis(
         )
     _enforce_technical_access_or_403(db, current, analysis)
     _attach_journey_progress_fields(db, analysis)
+    _attach_recommendation_classification(db, analysis)
     return analysis
 
 

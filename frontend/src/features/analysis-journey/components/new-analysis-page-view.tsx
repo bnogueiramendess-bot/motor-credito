@@ -317,7 +317,7 @@ function getScoreBandVisualTokens(scoreBand: InstitutionalScoreBand): ScoreBandV
     return {
       badgeClass: "bg-[#EAF7EE] text-[#166534] border-[#BBF7D0]",
       textColor: "#166534",
-      accent: "#22C55E",
+      accent: "#2F6B57",
       ring: "#BBF7D0",
       glow: "shadow-[0_12px_30px_rgba(34,197,94,0.22)]"
     };
@@ -326,7 +326,7 @@ function getScoreBandVisualTokens(scoreBand: InstitutionalScoreBand): ScoreBandV
     return {
       badgeClass: "bg-[#EDF6FF] text-[#1D4ED8] border-[#BFDBFE]",
       textColor: "#1D4ED8",
-      accent: "#2563EB",
+      accent: "#4B8B73",
       ring: "#BFDBFE",
       glow: "shadow-[0_12px_30px_rgba(37,99,235,0.20)]"
     };
@@ -335,7 +335,7 @@ function getScoreBandVisualTokens(scoreBand: InstitutionalScoreBand): ScoreBandV
     return {
       badgeClass: "bg-[#EEF2FF] text-[#4338CA] border-[#C7D2FE]",
       textColor: "#E0E7FF",
-      accent: "#4F46E5",
+      accent: "#3B5F9D",
       ring: "#4338CA",
       glow: "shadow-[0_10px_28px_rgba(79,70,229,0.14)]"
     };
@@ -344,7 +344,7 @@ function getScoreBandVisualTokens(scoreBand: InstitutionalScoreBand): ScoreBandV
     return {
       badgeClass: "bg-[#FFF7E8] text-[#92400E] border-[#FDE68A]",
       textColor: "#92400E",
-      accent: "#D97706",
+      accent: "#B9812C",
       ring: "#FDE68A",
       glow: "shadow-[0_12px_30px_rgba(217,119,6,0.20)]"
     };
@@ -353,7 +353,7 @@ function getScoreBandVisualTokens(scoreBand: InstitutionalScoreBand): ScoreBandV
     return {
       badgeClass: "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]",
       textColor: "#B91C1C",
-      accent: "#DC2626",
+      accent: "#B55252",
       ring: "#FECACA",
       glow: "shadow-[0_12px_30px_rgba(220,38,38,0.20)]"
     };
@@ -2226,6 +2226,16 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     : executiveNarrative.severity === "positive"
       ? "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]"
       : "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]";
+  const recommendationClassification = (() => {
+    const decisionMemory = workspaceDetailQuery.data?.analysis?.decision_memory_json;
+    if (!decisionMemory || typeof decisionMemory !== "object") return null;
+    const classification = (decisionMemory as Record<string, unknown>).recommendation_classification;
+    return classification && typeof classification === "object" ? (classification as Record<string, unknown>) : null;
+  })();
+  const recommendationClassificationLabel = (() => {
+    const label = recommendationClassification?.label;
+    return typeof label === "string" && label.trim() ? label : null;
+  })();
   const preliminaryMaxTermDays = institutionalRiskBand === "AA"
     ? 360
     : institutionalRiskBand === "A"
@@ -3856,9 +3866,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 <p className="mt-1 text-[11px] text-[#dbeafe]">{formatCnpjForDisplay(customer.cnpj)}</p>
               </div>
               <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Limite solicitado</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalRequestedLimit > 0 ? formatCurrencyBRLCompactExecutive(technicalRequestedLimit) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Condição comercial proposta</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5">
+                <p className="text-[11px] font-semibold text-[#bfdbfe]">Limite Atual Aprovado</p>
+                <p className="mt-1.5 text-[20px] font-extrabold text-white">{mappedInternalTotalLimit !== null ? formatCurrencyBRLCompactExecutive(mappedInternalTotalLimit) : "Não disponível"}</p>
+                <p className="mt-0.5 text-[11px] text-[#dbeafe]">{mappedInternalTotalLimit !== null ? "Limite total aprovado vigente" : "Cliente sem limite vigente identificado na base importada."}</p>
+              </div>
               <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Cobertura COFACE</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">{executiveCoveragePercent !== null ? `${executiveCoveragePercent}% do limite solicitado` : "Sem percentual"}</p></div>
               <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Valor em Aberto</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{mappedInternalOpenAmount !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOpenAmount) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Notdue: {mappedInternalNotDue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalNotDue) : "—"} · Overdue: {mappedInternalOverdue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOverdue) : "—"}</p></div>
-              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Status técnico</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalStatusLabel}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Aguardando parecer final</p></div>
             </div>
           </div>
           <div className="grid gap-4 xl:grid-cols-[1.45fr_0.9fr]">
@@ -4042,24 +4056,31 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 const exposureResidual = executiveNetInternalExposure ?? 0;
                 const hasCoverage = technicalCoverageValue !== null && technicalCoverageValue > 0;
                 const recommendationLabel =
-                  recommended <= 0
-                    ? "Reprovação recomendada"
-                    : requested > 0 && recommended < requested
-                      ? "Aprovação parcial recomendada"
-                      : "Aprovação recomendada";
+                  recommendationClassificationLabel ?? (
+                    recommended <= 0
+                      ? "Reprovação recomendada"
+                      : requested > 0 && recommended < requested
+                        ? "Aprovação parcial recomendada"
+                        : "Aprovação integral recomendada"
+                  );
                 const recommendationToneClass =
-                  recommended <= 0
+                  recommendationLabel === "Reprovação recomendada"
                     ? "text-[#9f1239]"
-                    : requested > 0 && recommended < requested
+                    : recommendationLabel === "Aprovação parcial recomendada" || recommendationLabel === "Manutenção do limite atual recomendada"
                       ? "text-[#92400e]"
                       : "text-[#166534]";
-                const executiveRationale = hasCoverage && exposureResidual <= 0
+                const classificationJustification = recommendationClassification?.justification;
+                const executiveRationale = typeof classificationJustification === "string" && classificationJustification.trim()
+                  ? classificationJustification
+                  : hasCoverage && exposureResidual <= 0
                   ? "Cobertura COFACE integral mitigando a exposição da operação."
                   : exposureResidual > 0
                     ? "Exposição residual identificada e destacada para decisão da alçada aprovadora."
                     : hasCoverage
                       ? "Cobertura COFACE considerada na recomendação final submetida para aprovação."
                       : "Recomendação fundamentada no limite institucional preliminar e nos insumos consolidados da análise.";
+                const currentApprovedLimitFromBackend = toNullableNumeric(recommendationClassification?.current_approved_limit);
+                const shouldShowCurrentLimit = recommendationClassification?.show_current_limit === true && currentApprovedLimitFromBackend !== null && currentApprovedLimitFromBackend > 0;
 
                 return (
                   <article className="h-full w-full">
@@ -4073,6 +4094,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         </p>
                         <p className="mt-2 text-[12px] leading-[1.5] text-[#4f647a]">
                           <span className="font-semibold text-[#334155]">Solicitado:</span> <span className="font-semibold text-[#0f2747]">{requested > 0 ? formatCurrencyBRLCompactExecutive(requested) : "—"}</span>
+                          {shouldShowCurrentLimit ? (
+                            <>
+                              {" · "}
+                              <span className="font-semibold text-[#334155]">Limite atual:</span> <span className="font-semibold text-[#0f2747]">{formatCurrencyBRLCompactExecutive(currentApprovedLimitFromBackend)}</span>
+                            </>
+                          ) : null}
                           {" · "}
                           <span className="font-semibold text-[#334155]">COFACE:</span> <span className="font-semibold text-[#0f2747]">{technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "—"}</span>
                           {" · "}
@@ -4207,9 +4234,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   ]).map((item) => {
                     const isExpanded = expandedImportedSummary === item.key;
                     const cofaceFileName = cofaceImport.files[0]?.original_filename ?? null;
-                    const agriskFileName = agriskImport.files[0]?.original_filename ?? null;
                     const cofaceDocument = cofaceFileName ? step1LibraryDocuments.find((doc) => doc.original_filename === cofaceFileName) : null;
-                    const agriskDocument = agriskFileName ? step1LibraryDocuments.find((doc) => doc.original_filename === agriskFileName) : null;
                     const internalHasData = mappedInternalOpenAmount !== null || mappedInternalNotDue !== null || mappedInternalOverdue !== null || mappedInternalAvailableLimit !== null;
                     const internalNotDuePct = mappedInternalOpenAmount && mappedInternalNotDue !== null && mappedInternalOpenAmount > 0
                       ? Math.round((mappedInternalNotDue / mappedInternalOpenAmount) * 100)
