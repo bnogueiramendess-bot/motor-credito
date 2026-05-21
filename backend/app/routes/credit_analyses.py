@@ -85,6 +85,13 @@ from app.services.bu_scope import (
     resolve_analysis_business_unit,
     user_has_all_bu_scope,
 )
+from app.services.workflow_authorization import (
+    can_create_credit_request,
+    can_execute_credit_analysis,
+    can_issue_credit_opinion,
+    can_submit_credit_analysis,
+)
+from app.services.approval_matrix import resolve_required_approval_roles
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
 logger = logging.getLogger(__name__)
@@ -332,6 +339,34 @@ def _has_any_permission(current: CurrentUser, *keys: str) -> bool:
 
 def _require_any_permission_or_403(current: CurrentUser, *keys: str) -> None:
     if _has_any_permission(current, *keys):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para esta operacao.")
+
+
+def _require_can_create_credit_request_or_403(db: Session, current: CurrentUser) -> None:
+    authorization = can_create_credit_request(db, current)
+    if authorization.allowed:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para esta operacao.")
+
+
+def _require_can_execute_credit_analysis_or_403(db: Session, current: CurrentUser) -> None:
+    authorization = can_execute_credit_analysis(db, current)
+    if authorization.allowed:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para esta operacao.")
+
+
+def _require_can_issue_credit_opinion_or_403(db: Session, current: CurrentUser) -> None:
+    authorization = can_issue_credit_opinion(db, current)
+    if authorization.allowed:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para esta operacao.")
+
+
+def _require_can_submit_credit_analysis_or_403(db: Session, current: CurrentUser) -> None:
+    authorization = can_submit_credit_analysis(db, current)
+    if authorization.allowed:
         return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para esta operacao.")
 
@@ -596,10 +631,15 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
     analysis_bu = resolve_analysis_business_unit(db, analysis)
     assert_bu_in_scope(allowed_bu_names, analysis_bu, has_all_scope=has_all_scope)
 
-    can_validate = _has_any_permission(current, "credit_request_validate", "credit.analysis.execute")
+    can_validate = can_execute_credit_analysis(db, current).allowed or _has_any_permission(
+        current, "credit_request_validate", "credit.analysis.execute"
+    )
+    can_opinion = can_issue_credit_opinion(db, current).allowed or _has_any_permission(
+        current, "credit.dossier.edit", "credit.request.submit", "credit_request_submit_approval"
+    )
     can_approve = _has_any_permission(current, "credit_request_approve", "credit.approval.approve")
     can_reject = _has_any_permission(current, "credit_request_reject", "credit.approval.reject")
-    if can_validate or can_approve or can_reject or "scope:all_bu" in current.permissions:
+    if can_validate or can_opinion or can_approve or can_reject or "scope:all_bu" in current.permissions:
         return
     audit = db.scalar(
         select(AuditLog).where(
@@ -657,8 +697,9 @@ def _is_valid_email(value: str) -> bool:
 def triage_credit_analysis(
     payload: CreditAnalysisTriageRequest,
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
+    current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysisTriageResponse:
+    _require_can_create_credit_request_or_403(db, current)
     normalized_cnpj = _normalize_cnpj_or_400(payload.cnpj)
     bu_context = resolve_business_unit_context(db, current, None)
 
@@ -757,8 +798,9 @@ def triage_credit_analysis(
 def check_existing_credit_analysis(
     cnpj: str,
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
+    current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysisExistingCheckResponse:
+    _require_can_create_credit_request_or_403(db, current)
     normalized_cnpj = _normalize_cnpj_or_400(cnpj)
     customer = db.scalar(select(Customer).where(Customer.document_number == normalized_cnpj))
     if customer is None:
@@ -837,8 +879,9 @@ def check_existing_credit_analysis(
 def create_credit_analysis_draft(
     payload: CreditAnalysisDraftCreateRequest,
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
+    current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysisDraftCreateResponse:
+    _require_can_create_credit_request_or_403(db, current)
     normalized_cnpj = _normalize_cnpj_or_400(payload.cnpj)
     source = (payload.source or "").strip().lower()
     if source not in {"portfolio", "external", "manual"}:
@@ -982,8 +1025,9 @@ def create_credit_analysis_draft(
 def submit_credit_analysis_from_triage(
     payload: CreditAnalysisTriageSubmitRequest,
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
+    current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysisTriageSubmitResponse:
+    _require_can_create_credit_request_or_403(db, current)
     normalized_cnpj = _normalize_cnpj_or_400(payload.cnpj)
     if payload.suggested_limit <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Informe o limite sugerido para submeter a solicitacao.")
@@ -1552,8 +1596,9 @@ def list_credit_analysis_report_reads(
 def create_credit_analysis(
     payload: CreditAnalysisCreate,
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["credit.request.create"])),
+    current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysis:
+    _require_can_create_credit_request_or_403(db, current)
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(
@@ -1872,9 +1917,11 @@ def list_credit_analyses_monitor(
 ) -> CreditAnalysisMonitorResponse:
     page = max(page, 1)
     page_size = min(max(page_size, 1), 100)
+    can_execute_by_workflow = can_execute_credit_analysis(db, current).allowed
+    can_submit_by_workflow = can_submit_credit_analysis(db, current).allowed
     can_view_own = _has_any_permission(current, "credit_request_view_own", "credit.requests.view")
-    can_validate = _has_any_permission(current, "credit_request_validate", "credit.analysis.execute")
-    can_submit_approval = _has_any_permission(current, "credit_request_submit_approval", "credit.request.submit")
+    can_validate = can_execute_by_workflow or _has_any_permission(current, "credit_request_validate", "credit.analysis.execute")
+    can_submit_approval = can_submit_by_workflow or _has_any_permission(current, "credit_request_submit_approval", "credit.request.submit")
     can_approve = _has_any_permission(current, "credit_request_approve", "credit.approval.approve")
     can_reject = _has_any_permission(current, "credit_request_reject", "credit.approval.reject")
     can_view_bu = _has_any_permission(current, "credit_request_view_bu", "scope:all_bu")
@@ -2113,7 +2160,7 @@ def update_credit_analysis_journey_progress(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysis:
-    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    _require_can_execute_credit_analysis_or_403(db, current)
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
@@ -2159,7 +2206,7 @@ def update_credit_analysis_workspace_state(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysis:
-    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    _require_can_issue_credit_opinion_or_403(db, current)
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
@@ -2182,7 +2229,7 @@ def start_credit_analysis(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysis:
-    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    _require_can_execute_credit_analysis_or_403(db, current)
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
@@ -2458,7 +2505,7 @@ def calculate_score(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> ScoreCalculationResponse:
-    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    _require_can_execute_credit_analysis_or_403(db, current)
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
@@ -2542,7 +2589,7 @@ def calculate_decision(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ) -> DecisionCalculationResponse:
-    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    _require_can_submit_credit_analysis_or_403(db, current)
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
@@ -2567,6 +2614,25 @@ def calculate_decision(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
+
+    bu_name = resolve_analysis_business_unit(db, analysis)
+    business_unit_id = None
+    if bu_name:
+        business_unit_id = db.scalar(
+            select(BusinessUnit.id).where(
+                BusinessUnit.company_id == current.user.company_id,
+                BusinessUnit.name == bu_name,
+            )
+        )
+    approval_matrix_preview = resolve_required_approval_roles(
+        db,
+        amount=analysis.suggested_limit or Decimal("0"),
+        currency="BRL",
+        business_unit_id=business_unit_id,
+    )
+    decision_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    decision_memory["approval_matrix_preview"] = approval_matrix_preview
+    analysis.decision_memory_json = decision_memory
 
     db.add(
         DecisionEvent(

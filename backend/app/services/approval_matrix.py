@@ -5,6 +5,7 @@ from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.approval_matrix_rule import ApprovalMatrixRule
 from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
@@ -177,23 +178,32 @@ def resolve_required_approval_roles(
     amount: Decimal,
     currency: str,
     business_unit_id: int | None = None,
-) -> list[str]:
-    rules = list(
-        db.scalars(
-            select(ApprovalMatrixRule)
-            .where(
-                ApprovalMatrixRule.is_active.is_(True),
-                ApprovalMatrixRule.currency == currency.upper(),
-            )
-            .order_by(ApprovalMatrixRule.priority.asc(), ApprovalMatrixRule.id.asc())
-        ).all()
-    )
+) -> dict:
+    try:
+        rules = list(
+            db.scalars(
+                select(ApprovalMatrixRule)
+                .where(
+                    ApprovalMatrixRule.is_active.is_(True),
+                    ApprovalMatrixRule.currency == currency.upper(),
+                )
+                .order_by(ApprovalMatrixRule.priority.asc(), ApprovalMatrixRule.id.asc())
+            ).all()
+        )
+    except SQLAlchemyError:
+        return {
+            "rule_id": None,
+            "rule_name": None,
+            "required_roles": [],
+            "required_approvals": 0,
+            "requires_committee": False,
+        }
     for rule in rules:
         min_ok = rule.min_amount is None or amount >= rule.min_amount
         max_ok = rule.max_amount is None or amount <= rule.max_amount
         bu_ok = rule.business_unit_id is None or rule.business_unit_id == business_unit_id
         if min_ok and max_ok and bu_ok:
-            return [
+            role_codes = [
                 code
                 for code in db.scalars(
                     select(WorkflowRole.code)
@@ -202,7 +212,20 @@ def resolve_required_approval_roles(
                     .order_by(WorkflowRole.code.asc())
                 ).all()
             ]
-    return []
+            return {
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "required_roles": role_codes,
+                "required_approvals": rule.required_approvals,
+                "requires_committee": rule.requires_committee,
+            }
+    return {
+        "rule_id": None,
+        "rule_name": None,
+        "required_roles": [],
+        "required_approvals": 0,
+        "requires_committee": False,
+    }
 
 
 def ensure_approval_matrix_seed(db: Session) -> None:
