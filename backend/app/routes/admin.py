@@ -18,7 +18,9 @@ from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.user import User
 from app.models.user_business_unit_scope import UserBusinessUnitScope
+from app.models.user_workflow_role import UserWorkflowRole
 from app.models.user_invitation import UserInvitation
+from app.models.workflow_role import WorkflowRole
 from app.schemas.administration import (
     BusinessUnitCreate,
     BusinessUnitRead,
@@ -34,9 +36,22 @@ from app.schemas.administration import (
     RoleMatrixItem,
     UserCreate,
     UserRead,
+    UserWorkflowRoleRead,
+    UserWorkflowRolesUpdate,
     UserStatusUpdate,
     UserUpdate,
+    WorkflowRoleRead,
 )
+from app.schemas.approval_matrix import (
+    ApprovalMatrixOptionBusinessUnit,
+    ApprovalMatrixOptionWorkflowRole,
+    ApprovalMatrixOptionsRead,
+    ApprovalMatrixRuleRead,
+    ApprovalMatrixRuleRoleRead,
+    ApprovalMatrixRuleWrite,
+)
+from app.models.approval_matrix_rule import ApprovalMatrixRule
+from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
 from app.services.bootstrap_admin import (
     DEFAULT_MASTER_EMAIL,
     DEFAULT_MASTER_NAME,
@@ -51,6 +66,13 @@ from app.services.operational_reset import (
     validate_registry_coverage,
 )
 from app.services.security import generate_raw_token, hash_password, hash_token
+from app.services.workflow_roles import ensure_workflow_roles_seed
+from app.services.approval_matrix import (
+    create_approval_matrix_rule,
+    ensure_approval_matrix_seed,
+    list_approval_matrix_rules,
+    update_approval_matrix_rule,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -216,6 +238,18 @@ def _user_to_read(db: Session, user: User) -> UserRead:
             .order_by(BusinessUnit.name.asc())
         ).all()
     )
+    workflow_role_codes = list(
+        db.scalars(
+            select(WorkflowRole.code)
+            .join(UserWorkflowRole, UserWorkflowRole.workflow_role_id == WorkflowRole.id)
+            .where(
+                UserWorkflowRole.user_id == user.id,
+                WorkflowRole.is_active.is_(True),
+            )
+            .distinct()
+            .order_by(WorkflowRole.code.asc())
+        ).all()
+    )
     return UserRead(
         id=user.id,
         user_code=user.user_code,
@@ -228,6 +262,123 @@ def _user_to_read(db: Session, user: User) -> UserRead:
         first_access_pending=user.must_change_password,
         business_unit_ids=bu_ids,
         business_unit_names=bu_names,
+        workflow_role_codes=workflow_role_codes,
+    )
+
+
+def _list_user_workflow_roles(db: Session, user_id: int) -> list[UserWorkflowRoleRead]:
+    rows = db.execute(
+        select(
+            WorkflowRole.id,
+            WorkflowRole.code,
+            WorkflowRole.name,
+            WorkflowRole.description,
+            WorkflowRole.type,
+            UserWorkflowRole.business_unit_id,
+            BusinessUnit.name,
+        )
+        .join(UserWorkflowRole, UserWorkflowRole.workflow_role_id == WorkflowRole.id)
+        .outerjoin(BusinessUnit, BusinessUnit.id == UserWorkflowRole.business_unit_id)
+        .where(UserWorkflowRole.user_id == user_id)
+        .order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc(), BusinessUnit.name.asc())
+    ).all()
+    return [
+        UserWorkflowRoleRead(
+            role_id=row[0],
+            code=row[1],
+            name=row[2],
+            description=row[3],
+            type=row[4],
+            business_unit_id=row[5],
+            business_unit_name=row[6],
+        )
+        for row in rows
+    ]
+
+
+def _replace_user_workflow_roles(
+    db: Session,
+    *,
+    company_id: int,
+    target_user_id: int,
+    actor_user_id: int,
+    assignments: list,
+) -> None:
+    role_by_code = {
+        role.code: role
+        for role in db.scalars(select(WorkflowRole).where(WorkflowRole.is_active.is_(True))).all()
+    }
+    normalized_assignments: list[tuple[WorkflowRole, int | None]] = []
+    seen_pairs: set[tuple[int, int | None]] = set()
+    for assignment in assignments:
+        role = role_by_code.get(assignment.code)
+        if role is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Papel de workflow invalido: {assignment.code}.",
+            )
+
+        if assignment.business_unit_id is not None:
+            bu = db.get(BusinessUnit, assignment.business_unit_id)
+            if bu is None or bu.company_id != company_id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="BU informada e invalida.")
+
+        key = (role.id, assignment.business_unit_id)
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        normalized_assignments.append((role, assignment.business_unit_id))
+
+    db.query(UserWorkflowRole).filter(UserWorkflowRole.user_id == target_user_id).delete()
+    for role, business_unit_id in normalized_assignments:
+        db.add(
+            UserWorkflowRole(
+                user_id=target_user_id,
+                workflow_role_id=role.id,
+                business_unit_id=business_unit_id,
+                created_by_user_id=actor_user_id,
+            )
+        )
+
+
+def _approval_rule_to_read(db: Session, rule: ApprovalMatrixRule) -> ApprovalMatrixRuleRead:
+    roles = list(
+        db.execute(
+            select(WorkflowRole.id, WorkflowRole.code, WorkflowRole.name, WorkflowRole.type)
+            .join(ApprovalMatrixRuleRole, ApprovalMatrixRuleRole.workflow_role_id == WorkflowRole.id)
+            .where(ApprovalMatrixRuleRole.approval_matrix_rule_id == rule.id)
+            .order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
+        ).all()
+    )
+    business_unit_name = None
+    if rule.business_unit_id is not None:
+        business_unit_name = db.scalar(
+            select(BusinessUnit.name).where(BusinessUnit.id == rule.business_unit_id)
+        )
+    return ApprovalMatrixRuleRead(
+        id=rule.id,
+        code=rule.code,
+        name=rule.name,
+        description=rule.description,
+        is_active=rule.is_active,
+        min_amount=rule.min_amount,
+        max_amount=rule.max_amount,
+        currency=rule.currency,
+        required_approvals=rule.required_approvals,
+        requires_committee=rule.requires_committee,
+        requires_unanimous=rule.requires_unanimous,
+        business_unit_id=rule.business_unit_id,
+        business_unit_name=business_unit_name,
+        priority=rule.priority,
+        roles=[
+            ApprovalMatrixRuleRoleRead(
+                workflow_role_id=row[0],
+                workflow_role_code=row[1],
+                workflow_role_name=row[2],
+                workflow_role_type=row[3],
+            )
+            for row in roles
+        ],
     )
 
 
@@ -474,6 +625,15 @@ def invite_user(
             raise HTTPException(status_code=400, detail="Escopo de BU invalido para este usuario.")
         db.add(UserBusinessUnitScope(user_id=user.id, business_unit_id=bu_id))
 
+    ensure_workflow_roles_seed(db)
+    _replace_user_workflow_roles(
+        db,
+        company_id=current.user.company_id,
+        target_user_id=user.id,
+        actor_user_id=current.user.id,
+        assignments=payload.workflow_role_assignments,
+    )
+
     raw_token = generate_raw_token()
     db.add(
         UserInvitation(
@@ -530,6 +690,15 @@ def update_user(
         if bu is None or bu.company_id != current.user.company_id or not bu.is_active:
             raise HTTPException(status_code=400, detail="Escopo de BU invalido para este usuario.")
         db.add(UserBusinessUnitScope(user_id=user.id, business_unit_id=bu_id))
+
+    ensure_workflow_roles_seed(db)
+    _replace_user_workflow_roles(
+        db,
+        company_id=current.user.company_id,
+        target_user_id=user.id,
+        actor_user_id=current.user.id,
+        assignments=payload.workflow_role_assignments,
+    )
 
     db.commit()
     db.refresh(user)
@@ -815,3 +984,135 @@ def reset_operational_data(
             "password_reset_required": False,
         },
     }
+
+
+@router.get("/workflow-roles", response_model=list[WorkflowRoleRead])
+def list_workflow_roles(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["users:view"])),
+) -> list[WorkflowRole]:
+    ensure_workflow_roles_seed(db)
+    db.commit()
+    return list(db.scalars(select(WorkflowRole).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())).all())
+
+
+@router.get("/users/{user_id}/workflow-roles", response_model=list[UserWorkflowRoleRead])
+def list_user_workflow_roles(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["users:view"])),
+) -> list[UserWorkflowRoleRead]:
+    user = db.get(User, user_id)
+    if user is None or user.company_id != current.user.company_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado.")
+    return _list_user_workflow_roles(db, user_id)
+
+
+@router.put("/users/{user_id}/workflow-roles", response_model=list[UserWorkflowRoleRead])
+def update_user_workflow_roles(
+    user_id: int,
+    payload: UserWorkflowRolesUpdate,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["users:manage"])),
+) -> list[UserWorkflowRoleRead]:
+    user = db.get(User, user_id)
+    if user is None or user.company_id != current.user.company_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado.")
+
+    ensure_workflow_roles_seed(db)
+    _replace_user_workflow_roles(
+        db,
+        company_id=current.user.company_id,
+        target_user_id=user.id,
+        actor_user_id=current.user.id,
+        assignments=payload.assignments,
+    )
+    db.commit()
+    return _list_user_workflow_roles(db, user.id)
+
+
+@router.get("/approval-matrix/options", response_model=ApprovalMatrixOptionsRead)
+def get_approval_matrix_options(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["profiles:view"])),
+) -> ApprovalMatrixOptionsRead:
+    ensure_workflow_roles_seed(db)
+    workflow_roles = list(
+        db.scalars(
+            select(WorkflowRole).where(WorkflowRole.is_active.is_(True)).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
+        ).all()
+    )
+    business_units = list(
+        db.scalars(
+            select(BusinessUnit)
+            .where(BusinessUnit.company_id == current.user.company_id)
+            .order_by(BusinessUnit.name.asc())
+        ).all()
+    )
+    return ApprovalMatrixOptionsRead(
+        workflow_roles=[ApprovalMatrixOptionWorkflowRole.model_validate(role) for role in workflow_roles],
+        business_units=[ApprovalMatrixOptionBusinessUnit.model_validate(unit) for unit in business_units],
+    )
+
+
+@router.get("/approval-matrix", response_model=list[ApprovalMatrixRuleRead])
+def get_approval_matrix_rules(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["profiles:view"])),
+) -> list[ApprovalMatrixRuleRead]:
+    ensure_workflow_roles_seed(db)
+    ensure_approval_matrix_seed(db)
+    db.commit()
+    rules = list_approval_matrix_rules(db, company_id=current.user.company_id)
+    return [_approval_rule_to_read(db, rule) for rule in rules]
+
+
+@router.post("/approval-matrix", response_model=ApprovalMatrixRuleRead, status_code=status.HTTP_201_CREATED)
+def create_approval_matrix_rule_endpoint(
+    payload: ApprovalMatrixRuleWrite,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["profiles:manage"])),
+) -> ApprovalMatrixRuleRead:
+    ensure_workflow_roles_seed(db)
+    if payload.business_unit_id is not None:
+        bu = db.get(BusinessUnit, payload.business_unit_id)
+        if bu is None or bu.company_id != current.user.company_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="BU invalida para esta regra.")
+    duplicated = db.scalar(select(ApprovalMatrixRule.id).where(ApprovalMatrixRule.code == payload.code))
+    if duplicated is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ja existe uma regra com este codigo.")
+    try:
+        rule = create_approval_matrix_rule(db, payload=payload, created_by_user_id=current.user.id)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _approval_rule_to_read(db, rule)
+
+
+@router.put("/approval-matrix/{rule_id}", response_model=ApprovalMatrixRuleRead)
+def update_approval_matrix_rule_endpoint(
+    rule_id: int,
+    payload: ApprovalMatrixRuleWrite,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["profiles:manage"])),
+) -> ApprovalMatrixRuleRead:
+    rule = db.get(ApprovalMatrixRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Regra de aprovacao nao encontrada.")
+    if payload.business_unit_id is not None:
+        bu = db.get(BusinessUnit, payload.business_unit_id)
+        if bu is None or bu.company_id != current.user.company_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="BU invalida para esta regra.")
+    duplicated = db.scalar(
+        select(ApprovalMatrixRule.id).where(ApprovalMatrixRule.code == payload.code, ApprovalMatrixRule.id != rule_id)
+    )
+    if duplicated is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ja existe uma regra com este codigo.")
+    try:
+        updated = update_approval_matrix_rule(db, rule=rule, payload=payload)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _approval_rule_to_read(db, updated)

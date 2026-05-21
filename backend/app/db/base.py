@@ -2,6 +2,8 @@
 from app.models import (
     AnalysisDocument,
     AnalysisCommercialReference,
+    ApprovalMatrixRule,
+    ApprovalMatrixRuleRole,
     AnalysisRequestMetadata,
     AuditLog,
     ArAgingDataTotalRow,
@@ -26,6 +28,8 @@ from app.models import (
     User,
     UserBusinessUnitScope,
     UserInvitation,
+    WorkflowRole,
+    UserWorkflowRole,
 )
 
 __all__ = [
@@ -56,4 +60,8 @@ __all__ = [
     "AnalysisRequestMetadata",
     "AnalysisDocument",
     "AnalysisCommercialReference",
+    "ApprovalMatrixRule",
+    "ApprovalMatrixRuleRole",
+    "WorkflowRole",
+    "UserWorkflowRole",
 ]

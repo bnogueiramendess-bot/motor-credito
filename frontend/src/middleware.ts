@@ -9,7 +9,9 @@ const ADMIN_RULES: Array<{ prefix: string; permission: string }> = [
   { prefix: "/admin/users", permission: "users:manage" },
   { prefix: "/admin/usuarios", permission: "users:manage" },
   { prefix: "/admin/configuracoes", permission: "profiles:view" },
-  { prefix: "/admin/profiles", permission: "profiles:view" }
+  { prefix: "/admin/profiles", permission: "profiles:view" },
+  { prefix: "/admin/approval-matrix", permission: "profiles:view" },
+  { prefix: "/admin/matriz-aprovacao", permission: "profiles:view" }
 ];
 
 export function middleware(request: NextRequest) {

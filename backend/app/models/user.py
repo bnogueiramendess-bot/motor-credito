@@ -28,3 +28,6 @@ class User(Base):
     company = relationship("Company", back_populates="users")
     role = relationship("Role", back_populates="users")
     bu_scopes = relationship("UserBusinessUnitScope", back_populates="user", cascade="all, delete-orphan")
+    workflow_role_links = relationship(
+        "UserWorkflowRole", foreign_keys="UserWorkflowRole.user_id", back_populates="user", cascade="all, delete-orphan"
+    )

@@ -41,6 +41,33 @@ export type AdminUserDto = {
   first_access_pending: boolean;
   business_unit_ids: number[];
   business_unit_names: string[];
+  workflow_role_codes: string[];
+};
+
+export type WorkflowRoleType = "operational" | "governance" | "approval";
+
+export type WorkflowRoleDto = {
+  id: number;
+  code: string;
+  name: string;
+  description: string;
+  type: WorkflowRoleType;
+  is_active: boolean;
+};
+
+export type UserWorkflowRoleDto = {
+  role_id: number;
+  code: string;
+  name: string;
+  description: string;
+  type: WorkflowRoleType;
+  business_unit_id: number | null;
+  business_unit_name: string | null;
+};
+
+export type WorkflowRoleAssignmentPayload = {
+  code: string;
+  business_unit_id: number | null;
 };
 
 export type InviteUserPayload = {
@@ -49,6 +76,7 @@ export type InviteUserPayload = {
   phone: string;
   profile_id: number;
   business_unit_ids: number[];
+  workflow_role_assignments?: WorkflowRoleAssignmentPayload[];
 };
 
 export type InviteUserResponse = {
@@ -61,6 +89,7 @@ export type UpdateAdminUserPayload = {
   phone: string;
   profile_id: number;
   business_unit_ids: number[];
+  workflow_role_assignments?: WorkflowRoleAssignmentPayload[];
 };
 
 export type ResetOperationalDataResponse = {
@@ -130,6 +159,52 @@ export type UpsertAdminProfilePayload = {
   permission_keys: string[];
 };
 
+export type ApprovalMatrixRuleRoleDto = {
+  workflow_role_id: number;
+  workflow_role_code: string;
+  workflow_role_name: string;
+  workflow_role_type: WorkflowRoleType;
+};
+
+export type ApprovalMatrixRuleDto = {
+  id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  min_amount: string | null;
+  max_amount: string | null;
+  currency: string;
+  required_approvals: number;
+  requires_committee: boolean;
+  requires_unanimous: boolean;
+  business_unit_id: number | null;
+  business_unit_name: string | null;
+  priority: number;
+  roles: ApprovalMatrixRuleRoleDto[];
+};
+
+export type ApprovalMatrixRuleWritePayload = {
+  code: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  min_amount: string | null;
+  max_amount: string | null;
+  currency: string;
+  required_approvals: number;
+  requires_committee: boolean;
+  requires_unanimous: boolean;
+  business_unit_id: number | null;
+  priority: number;
+  workflow_role_codes: string[];
+};
+
+export type ApprovalMatrixOptionsDto = {
+  workflow_roles: Array<{ id: number; code: string; name: string; type: WorkflowRoleType }>;
+  business_units: Array<{ id: number; code: string; name: string }>;
+};
+
 export async function listAdminUsers() {
   return apiClient.get<AdminUserDto[]>("/api/admin/users");
 }
@@ -171,8 +246,23 @@ export async function inviteAdminUser(payload: InviteUserPayload) {
   return apiClient.post<InviteUserResponse, InviteUserPayload>("/api/admin/users/invite", payload);
 }
 
+export async function listWorkflowRoles() {
+  return apiClient.get<WorkflowRoleDto[]>("/api/admin/workflow-roles");
+}
+
 export async function updateAdminUser(id: number, payload: UpdateAdminUserPayload) {
   return apiClient.patch<AdminUserDto, UpdateAdminUserPayload>(`/api/admin/users/${id}`, payload);
+}
+
+export async function listUserWorkflowRoles(userId: number) {
+  return apiClient.get<UserWorkflowRoleDto[]>(`/api/admin/users/${userId}/workflow-roles`);
+}
+
+export async function updateUserWorkflowRoles(userId: number, assignments: WorkflowRoleAssignmentPayload[]) {
+  return apiClient.put<UserWorkflowRoleDto[], { assignments: WorkflowRoleAssignmentPayload[] }>(
+    `/api/admin/users/${userId}/workflow-roles`,
+    { assignments }
+  );
 }
 
 export async function updateAdminUserStatus(id: number, isActive: boolean) {
@@ -212,4 +302,20 @@ export async function updateAdminProfile(id: number, payload: UpsertAdminProfile
 
 export async function updateAdminProfileStatus(id: number, status: ProfileStatus) {
   return apiClient.patch<AdminProfileDto, { status: ProfileStatus }>(`/api/admin/profiles/${id}/status`, { status });
+}
+
+export async function listApprovalMatrixRules() {
+  return apiClient.get<ApprovalMatrixRuleDto[]>("/api/admin/approval-matrix");
+}
+
+export async function getApprovalMatrixOptions() {
+  return apiClient.get<ApprovalMatrixOptionsDto>("/api/admin/approval-matrix/options");
+}
+
+export async function createApprovalMatrixRule(payload: ApprovalMatrixRuleWritePayload) {
+  return apiClient.post<ApprovalMatrixRuleDto, ApprovalMatrixRuleWritePayload>("/api/admin/approval-matrix", payload);
+}
+
+export async function updateApprovalMatrixRule(id: number, payload: ApprovalMatrixRuleWritePayload) {
+  return apiClient.put<ApprovalMatrixRuleDto, ApprovalMatrixRuleWritePayload>(`/api/admin/approval-matrix/${id}`, payload);
 }

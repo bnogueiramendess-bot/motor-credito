@@ -37,6 +37,10 @@ from app.models.audit_log import AuditLog
 from app.models.analysis_request_metadata import AnalysisRequestMetadata
 from app.models.analysis_document import AnalysisDocument
 from app.models.analysis_commercial_reference import AnalysisCommercialReference
+from app.models.approval_matrix_rule import ApprovalMatrixRule
+from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
+from app.models.workflow_role import WorkflowRole
+from app.models.user_workflow_role import UserWorkflowRole
 
 __all__ = [
     "ActorType",
@@ -75,4 +79,8 @@ __all__ = [
     "AnalysisRequestMetadata",
     "AnalysisDocument",
     "AnalysisCommercialReference",
+    "ApprovalMatrixRule",
+    "ApprovalMatrixRuleRole",
+    "WorkflowRole",
+    "UserWorkflowRole",
 ]

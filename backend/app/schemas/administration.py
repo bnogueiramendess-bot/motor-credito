@@ -81,6 +81,11 @@ class BusinessUnitRead(BaseModel):
     is_active: bool
 
 
+class UserWorkflowRoleAssignmentInput(BaseModel):
+    code: str
+    business_unit_id: int | None = None
+
+
 class UserCreate(BaseModel):
     full_name: str
     email: EmailStr
@@ -88,6 +93,7 @@ class UserCreate(BaseModel):
     profile_id: int | None = None
     role: str | None = None
     business_unit_ids: list[int]
+    workflow_role_assignments: list[UserWorkflowRoleAssignmentInput] = []
 
 
 class UserUpdate(BaseModel):
@@ -95,6 +101,7 @@ class UserUpdate(BaseModel):
     phone: str
     profile_id: int
     business_unit_ids: list[int]
+    workflow_role_assignments: list[UserWorkflowRoleAssignmentInput] = []
 
 
 class UserStatusUpdate(BaseModel):
@@ -120,6 +127,32 @@ class UserRead(BaseModel):
     first_access_pending: bool
     business_unit_ids: list[int]
     business_unit_names: list[str]
+    workflow_role_codes: list[str] = []
+
+
+class WorkflowRoleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    name: str
+    description: str
+    type: str
+    is_active: bool
+
+
+class UserWorkflowRoleRead(BaseModel):
+    role_id: int
+    code: str
+    name: str
+    description: str
+    type: str
+    business_unit_id: int | None
+    business_unit_name: str | None
+
+
+class UserWorkflowRolesUpdate(BaseModel):
+    assignments: list[UserWorkflowRoleAssignmentInput]
 
 
 class RoleMatrixItem(BaseModel):

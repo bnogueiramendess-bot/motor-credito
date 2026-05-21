@@ -16,6 +16,8 @@ from app.routes.health import router as health_router
 from app.routes.auth import router as auth_router
 from app.services.credit_policy import ensure_active_policy
 from app.services.bootstrap_admin import ensure_admin_seed
+from app.services.workflow_roles import ensure_workflow_roles_seed
+from app.services.approval_matrix import ensure_approval_matrix_seed
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.include_router(health_router)
@@ -34,5 +36,7 @@ app.include_router(admin_router, dependencies=[Depends(get_current_user)])
 def bootstrap_credit_policy() -> None:
     with SessionLocal() as db:
         ensure_admin_seed(db)
+        ensure_workflow_roles_seed(db)
+        ensure_approval_matrix_seed(db)
         ensure_active_policy(db)
         db.commit()

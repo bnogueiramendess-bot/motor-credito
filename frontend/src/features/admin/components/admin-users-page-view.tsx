@@ -1,9 +1,9 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Copy, KeyRound, Mail, Pencil, Power, UserPlus, Users } from "lucide-react";
 
-import { AdminProfileDto, AdminUserDto, BusinessUnitDto, InviteUserPayload } from "@/features/admin/api/admin.api";
+import { AdminProfileDto, AdminUserDto, InviteUserPayload, WorkflowRoleDto } from "@/features/admin/api/admin.api";
 import { useAdminProfilesQuery } from "@/features/admin/hooks/use-admin-profiles-query";
 import { useAdminUsersQuery } from "@/features/admin/hooks/use-admin-users-query";
 import { useBusinessUnitsQuery } from "@/features/admin/hooks/use-business-units-query";
@@ -11,6 +11,7 @@ import { useInviteAdminUserMutation } from "@/features/admin/hooks/use-invite-ad
 import { useRegenerateAdminUserInviteTokenMutation } from "@/features/admin/hooks/use-regenerate-admin-user-invite-token-mutation";
 import { useUpdateAdminUserMutation } from "@/features/admin/hooks/use-update-admin-user-mutation";
 import { useUpdateAdminUserStatusMutation } from "@/features/admin/hooks/use-update-admin-user-status-mutation";
+import { useWorkflowRolesQuery } from "@/features/admin/hooks/use-workflow-roles-query";
 import { ApiError } from "@/shared/lib/http/http-client";
 import { cn } from "@/shared/lib/utils";
 
@@ -31,12 +32,14 @@ export function AdminUsersPageView() {
   const updateUserMutation = useUpdateAdminUserMutation();
   const updateUserStatusMutation = useUpdateAdminUserStatusMutation();
   const regenerateTokenMutation = useRegenerateAdminUserInviteTokenMutation();
+  const workflowRolesQuery = useWorkflowRolesQuery();
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [profileId, setProfileId] = useState<number | null>(null);
   const [selectedBuIds, setSelectedBuIds] = useState<number[]>([]);
+  const [selectedWorkflowRoleCodes, setSelectedWorkflowRoleCodes] = useState<string[]>([]);
   const [lastInviteToken, setLastInviteToken] = useState<string | null>(null);
   const [lastInviteEmail, setLastInviteEmail] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
@@ -54,6 +57,14 @@ export function AdminUsersPageView() {
     () => (businessUnitsQuery.data ?? []).filter((unit) => unit.is_active),
     [businessUnitsQuery.data]
   );
+  const workflowRolesByType = useMemo(
+    () => ({
+      operational: (workflowRolesQuery.data ?? []).filter((role) => role.type === "operational"),
+      governance: (workflowRolesQuery.data ?? []).filter((role) => role.type === "governance"),
+      approval: (workflowRolesQuery.data ?? []).filter((role) => role.type === "approval")
+    }),
+    [workflowRolesQuery.data]
+  );
 
   useEffect(() => {
     if (profileId !== null) return;
@@ -67,6 +78,42 @@ export function AdminUsersPageView() {
       current.includes(businessUnitId)
         ? current.filter((id) => id !== businessUnitId)
         : [...current, businessUnitId]
+    );
+  }
+
+  function toggleWorkflowRole(roleCode: string) {
+    setSelectedWorkflowRoleCodes((current) =>
+      current.includes(roleCode)
+        ? current.filter((code) => code !== roleCode)
+        : [...current, roleCode]
+    );
+  }
+
+  function renderWorkflowRoleGroup(title: string, roles: WorkflowRoleDto[]) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">{title}</p>
+        {roles.length === 0 ? <p className="text-sm text-slate-500">Nenhum papel disponível.</p> : null}
+        <div className="grid gap-2 md:grid-cols-2">
+          {roles.map((role) => {
+            const selected = selectedWorkflowRoleCodes.includes(role.code);
+            return (
+              <button
+                key={role.code}
+                type="button"
+                onClick={() => toggleWorkflowRole(role.code)}
+                className={cn(
+                  "rounded-lg border px-3 py-2 text-left text-sm",
+                  selected ? "border-slate-900 bg-slate-100" : "border-slate-300"
+                )}
+              >
+                <p className="font-medium text-slate-900">{role.name}</p>
+                <p className="text-xs text-slate-600">{role.description}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     );
   }
 
@@ -104,7 +151,8 @@ export function AdminUsersPageView() {
             full_name: fullName.trim(),
             phone: phone.trim(),
             profile_id: profileId,
-            business_unit_ids: selectedBuIds
+            business_unit_ids: selectedBuIds,
+            workflow_role_assignments: selectedWorkflowRoleCodes.map((code) => ({ code, business_unit_id: null }))
           }
         });
         setFeedbackMessage("Usuário atualizado com sucesso.");
@@ -114,7 +162,8 @@ export function AdminUsersPageView() {
           email: email.trim().toLowerCase(),
           phone: phone.trim(),
           profile_id: profileId,
-          business_unit_ids: selectedBuIds
+          business_unit_ids: selectedBuIds,
+          workflow_role_assignments: selectedWorkflowRoleCodes.map((code) => ({ code, business_unit_id: null }))
         };
         const response = await inviteMutation.mutateAsync(payload);
         setLastInviteToken(response.invitation_token);
@@ -125,6 +174,7 @@ export function AdminUsersPageView() {
       setEmail("");
       setPhone("");
       setSelectedBuIds([]);
+      setSelectedWorkflowRoleCodes([]);
       setOpenDrawer(false);
       setEditingUserId(null);
       setDrawerMode("create");
@@ -140,6 +190,7 @@ export function AdminUsersPageView() {
     setEmail("");
     setPhone("");
     setSelectedBuIds([]);
+    setSelectedWorkflowRoleCodes([]);
     setProfileId(activeProfiles[0]?.id ?? null);
     setOpenDrawer(true);
   }
@@ -151,6 +202,7 @@ export function AdminUsersPageView() {
     setEmail(user.email);
     setPhone(user.phone ?? "");
     setSelectedBuIds(user.business_unit_ids);
+    setSelectedWorkflowRoleCodes(user.workflow_role_codes);
     const matchedProfile = allProfiles.find((profile) => profile.name === user.profile_name);
     setProfileId(matchedProfile?.id ?? activeProfiles[0]?.id ?? null);
     setOpenDrawer(true);
@@ -353,6 +405,24 @@ export function AdminUsersPageView() {
                     </div>
                   </div>
                 </div>
+
+                <div className="space-y-2 rounded-lg border border-slate-300 p-3">
+                  <p className="text-sm font-medium text-slate-700">Papéis no Workflow</p>
+                  <p className="text-xs text-slate-500">
+                    Defina os papéis operacionais da pessoa no fluxo de crédito. Esse vínculo não altera o perfil RBAC.
+                  </p>
+                  {workflowRolesQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
+                  {workflowRolesQuery.isError ? (
+                    <p className="text-sm text-rose-700">Não foi possível carregar os papéis do workflow.</p>
+                  ) : null}
+                  {!workflowRolesQuery.isLoading && !workflowRolesQuery.isError ? (
+                    <div className="space-y-4">
+                      {renderWorkflowRoleGroup("Operacionais", workflowRolesByType.operational)}
+                      {renderWorkflowRoleGroup("Governança", workflowRolesByType.governance)}
+                      {renderWorkflowRoleGroup("Aprovação", workflowRolesByType.approval)}
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
@@ -391,6 +461,7 @@ export function AdminUsersPageView() {
                   <th className="px-3 py-2">E-mail</th>
                   <th className="px-3 py-2">Telefone</th>
                   <th className="px-3 py-2">Perfil</th>
+                  <th className="px-3 py-2">Papéis no Workflow</th>
                   <th className="px-3 py-2">Unidade de negócio</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Ações</th>
@@ -405,6 +476,9 @@ export function AdminUsersPageView() {
                     <td className="px-3 py-2">{user.email}</td>
                     <td className="px-3 py-2">{user.phone ?? "-"}</td>
                     <td className="px-3 py-2">{user.profile_name}</td>
+                    <td className="px-3 py-2">
+                      {user.workflow_role_codes.length > 0 ? user.workflow_role_codes.join(", ") : "Sem vínculo"}
+                    </td>
                     <td className="px-3 py-2">{user.business_unit_names.length > 0 ? user.business_unit_names.join(", ") : "Sem vínculo"}</td>
                     <td className="px-3 py-2">
                       <span
@@ -462,3 +536,4 @@ export function AdminUsersPageView() {
     </section>
   );
 }
+

@@ -343,6 +343,11 @@ export function AppTopbar() {
                         Gestão de Perfis
                       </Link>
                     ) : null}
+                    {canViewProfiles ? (
+                      <Link href="/admin/approval-matrix" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
+                        Matriz de Aprovação
+                      </Link>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
