@@ -37,8 +37,8 @@ function getAgingTone(days: number): string {
 }
 
 function mapActionLabel(actions: string[]): string {
-  if (actions.includes("start_analysis")) return "Iniciar Análise";
   if (actions.includes("continue_analysis")) return "Continuar Análise";
+  if (actions.includes("start_analysis")) return "Iniciar Análise";
   if (actions.includes("submit_approval")) return "Submeter para aprovação";
   if (actions.includes("review_decision")) return "Revisar decisão";
   if (actions.includes("view_dossier")) return "Ver dossiê";

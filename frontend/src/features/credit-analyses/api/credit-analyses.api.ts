@@ -1,6 +1,8 @@
 import { apiClient } from "@/shared/lib/http/http-client";
 
 import {
+  CreditAnalysisJourneyProgressUpdateRequest,
+  CreditAnalysisWorkspaceStateUpdateRequest,
   CreditAnalysisQueueOptionsResponse,
   CreditAnalysisMonitorResponse,
   CreditAnalysisOperationalQueueResponse,
@@ -79,4 +81,18 @@ export async function getCreditAnalysisDetail(analysisId: number) {
 
 export async function startCreditAnalysis(analysisId: number) {
   return apiClient.post(`/api/credit-analyses/${analysisId}/start`, {});
+}
+
+export async function updateCreditAnalysisJourneyProgress(
+  analysisId: number,
+  payload: CreditAnalysisJourneyProgressUpdateRequest
+) {
+  return apiClient.put(`/api/credit-analyses/${analysisId}/journey-progress`, payload);
+}
+
+export async function updateCreditAnalysisWorkspaceState(
+  analysisId: number,
+  payload: CreditAnalysisWorkspaceStateUpdateRequest
+) {
+  return apiClient.put(`/api/credit-analyses/${analysisId}/workspace-state`, payload);
 }

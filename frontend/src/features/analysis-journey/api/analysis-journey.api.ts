@@ -17,7 +17,8 @@ import {
   AnalysisDocumentDto,
   CreditAnalysisExistingCheckResponse,
   CommercialReference,
-  CreateCommercialReferencePayload
+  CreateCommercialReferencePayload,
+  AnalysisReportReadSummaryDto
 } from "@/features/analysis-journey/api/contracts";
 import { CustomerDto } from "@/features/credit-analyses/api/contracts";
 
@@ -139,7 +140,7 @@ function toBase64(file: File) {
   });
 }
 
-export async function readAgriskReport(file: File, customerDocumentNumber: string) {
+export async function readAgriskReport(file: File, customerDocumentNumber: string, analysisId?: number | null) {
   const fileContentBase64 = await toBase64(file);
   const response = await fetch("/api/analysis-journey/agrisk-read", {
     method: "POST",
@@ -149,6 +150,7 @@ export async function readAgriskReport(file: File, customerDocumentNumber: strin
       mime_type: file.type || "application/pdf",
       file_size: file.size,
       customer_document_number: customerDocumentNumber,
+      analysis_id: analysisId ?? null,
       file_content_base64: fileContentBase64
     })
   });
@@ -161,7 +163,11 @@ export async function readAgriskReport(file: File, customerDocumentNumber: strin
   return (await response.json()) as AgriskReportReadResponse;
 }
 
-export async function readCofaceReport(file: File, customerDocumentNumber: string) {
+export async function getAgriskReportRead(readId: number) {
+  return apiClient.get<AgriskReportReadResponse>(`/api/analysis-journey/agrisk-read/${readId}`);
+}
+
+export async function readCofaceReport(file: File, customerDocumentNumber: string, analysisId?: number | null) {
   const fileContentBase64 = await toBase64(file);
   const response = await fetch("/api/analysis-journey/coface-read", {
     method: "POST",
@@ -171,6 +177,7 @@ export async function readCofaceReport(file: File, customerDocumentNumber: strin
       mime_type: file.type || "application/pdf",
       file_size: file.size,
       customer_document_number: customerDocumentNumber,
+      analysis_id: analysisId ?? null,
       file_content_base64: fileContentBase64
     })
   });
@@ -181,6 +188,14 @@ export async function readCofaceReport(file: File, customerDocumentNumber: strin
   }
 
   return (await response.json()) as CofaceReportReadResponse;
+}
+
+export async function listAnalysisReportReads(analysisId: number) {
+  return apiClient.get<AnalysisReportReadSummaryDto[]>(`/api/credit-analyses/${analysisId}/report-reads`);
+}
+
+export async function getCofaceReportRead(readId: number) {
+  return apiClient.get<CofaceReportReadResponse>(`/api/analysis-journey/coface-read/${readId}`);
 }
 
 

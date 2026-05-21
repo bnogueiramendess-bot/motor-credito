@@ -25,6 +25,7 @@ class AgriskReportReadCreate(BaseModel):
     file_size: int = Field(ge=0)
     customer_document_number: str
     file_content_base64: str
+    analysis_id: int | None = None
 
 
 class CofaceReportReadCreate(BaseModel):
@@ -45,6 +46,7 @@ class CofaceReportReadCreate(BaseModel):
     file_size: int = Field(ge=0)
     customer_document_number: str
     file_content_base64: str
+    analysis_id: int | None = None
 
 
 class AgriskReportReadResponse(BaseModel):

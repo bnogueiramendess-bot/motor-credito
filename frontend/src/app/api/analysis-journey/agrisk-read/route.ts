@@ -8,6 +8,7 @@ type AgriskReadRequestPayload = {
   mime_type: string;
   file_size: number;
   customer_document_number: string;
+  analysis_id?: number | null;
   file_content_base64: string;
 };
 
@@ -38,4 +39,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ detail: "Falha ao processar o relatório AgRisk." }, { status: 500 });
   }
 }
-

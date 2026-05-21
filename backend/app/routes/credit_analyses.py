@@ -27,6 +27,7 @@ from app.models.analysis_request_metadata import AnalysisRequestMetadata
 from app.models.analysis_document import AnalysisDocument
 from app.models.analysis_commercial_reference import AnalysisCommercialReference
 from app.models.score_result import ScoreResult
+from app.models.credit_report_read import CreditReportRead
 from app.models.user_business_unit_scope import UserBusinessUnitScope
 from app.schemas.credit_analysis import (
     CreditAnalysisCreate,
@@ -38,6 +39,9 @@ from app.schemas.credit_analysis import (
     CreditAnalysisMonitorItem,
     CreditAnalysisMonitorKpis,
     CreditAnalysisMonitorResponse,
+    CreditAnalysisJourneyProgressUpdateRequest,
+    CreditAnalysisWorkspaceStateUpdateRequest,
+    CreditAnalysisReportReadSummary,
     CreditAnalysisQueueOption,
     CreditAnalysisQueueOptionsResponse,
     CreditAnalysisQueueResponse,
@@ -362,6 +366,84 @@ def _current_status_value(analysis: CreditAnalysis) -> str:
     if analysis.analysis_status == AnalysisStatus.CREATED:
         return "pending"
     return "in_progress"
+
+
+def _clamp_journey_step(step: int | None) -> int | None:
+    if step is None:
+        return None
+    return max(2, min(4, int(step)))
+
+
+def _get_journey_progress(analysis: CreditAnalysis) -> tuple[int | None, int | None]:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    raw_progress = memory.get("journey_progress")
+    progress = raw_progress if isinstance(raw_progress, dict) else {}
+    current = _clamp_journey_step(progress.get("current_journey_step")) if progress else None
+    raw_last = progress.get("last_completed_journey_step") if progress else None
+    last = max(1, min(4, int(raw_last))) if isinstance(raw_last, int) else None
+    return current, last
+
+
+def _set_journey_progress(analysis: CreditAnalysis, *, current_step: int | None, last_completed_step: int | None) -> None:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    progress = memory.get("journey_progress") if isinstance(memory.get("journey_progress"), dict) else {}
+    if current_step is not None:
+        progress["current_journey_step"] = _clamp_journey_step(current_step)
+    if last_completed_step is not None:
+        progress["last_completed_journey_step"] = max(1, min(4, int(last_completed_step)))
+    memory["journey_progress"] = progress
+    analysis.decision_memory_json = memory
+
+
+def _merge_workspace_state(analysis: CreditAnalysis, patch: dict) -> None:
+    if not isinstance(patch, dict):
+        return
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    current_state = memory.get("workspace_state")
+    workspace_state = current_state if isinstance(current_state, dict) else {}
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(workspace_state.get(key), dict):
+            merged = dict(workspace_state.get(key) or {})
+            merged.update(value)
+            workspace_state[key] = merged
+        else:
+            workspace_state[key] = value
+    memory["workspace_state"] = workspace_state
+    analysis.decision_memory_json = memory
+
+
+def _derive_journey_step_from_state(db: Session, analysis: CreditAnalysis) -> int:
+    if analysis.final_decision is not None or analysis.analysis_status == AnalysisStatus.COMPLETED:
+        return 4
+    if analysis.submitted_for_approval_at is not None or analysis.motor_result is not None:
+        return 4
+
+    has_score = db.scalar(select(ScoreResult.id).where(ScoreResult.credit_analysis_id == analysis.id).limit(1)) is not None
+    has_external_data = db.scalar(select(ExternalDataEntry.id).where(ExternalDataEntry.credit_analysis_id == analysis.id).limit(1)) is not None
+    has_documents = db.scalar(select(AnalysisDocument.id).where(AnalysisDocument.credit_analysis_id == analysis.id).limit(1)) is not None
+
+    if has_score or (analysis.analyst_notes or "").strip() or analysis.analysis_started_at is not None:
+        return 3
+    if has_external_data or has_documents:
+        return 2
+    return 2
+
+
+def _resolve_persisted_journey_step(db: Session, analysis: CreditAnalysis) -> int:
+    derived = _derive_journey_step_from_state(db, analysis)
+    current, last = _get_journey_progress(analysis)
+    persisted = current or _clamp_journey_step(last)
+    if persisted is None:
+        return derived
+    return max(derived, persisted)
+
+
+def _attach_journey_progress_fields(db: Session, analysis: CreditAnalysis) -> None:
+    current, last = _get_journey_progress(analysis)
+    derived = _derive_journey_step_from_state(db, analysis)
+    resolved = max(current or 0, derived)
+    setattr(analysis, "current_journey_step", resolved)
+    setattr(analysis, "last_completed_journey_step", last if last is not None else max(1, resolved - 1))
 
 
 def _resolve_owner_role_for_status(status_value: str) -> str:
@@ -930,7 +1012,11 @@ def submit_credit_analysis_from_triage(
                 ),
                 "has_recent_analysis": recent_analysis is not None,
                 "business_unit": selected_bu_name,
-            }
+            },
+            "journey_progress": {
+                "current_journey_step": 2,
+                "last_completed_journey_step": 1,
+            },
         },
     )
     db.add(analysis)
@@ -968,14 +1054,6 @@ def submit_credit_analysis_from_triage(
         )
     )
 
-
-def _resolve_decision_date(analysis: CreditAnalysis) -> datetime | None:
-    return (
-        analysis.approved_at
-        or analysis.rejected_at
-        or analysis.completed_at
-        or analysis.created_at
-    )
     db.add(
         AuditLog(
             actor_user_id=current.user.id,
@@ -1017,6 +1095,15 @@ def _resolve_decision_date(analysis: CreditAnalysis) -> datetime | None:
         customer_id=customer.id,
         status=analysis.analysis_status,
         reused_existing=False,
+    )
+
+
+def _resolve_decision_date(analysis: CreditAnalysis) -> datetime | None:
+    return (
+        analysis.approved_at
+        or analysis.rejected_at
+        or analysis.completed_at
+        or analysis.created_at
     )
 
 
@@ -1302,6 +1389,70 @@ def delete_analysis_commercial_reference(
 
     db.delete(reference)
     db.commit()
+
+
+@router.get("/{analysis_id}/report-reads", response_model=list[CreditAnalysisReportReadSummary])
+def list_credit_analysis_report_reads(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> list[CreditAnalysisReportReadSummary]:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    links = memory.get("report_links") if isinstance(memory.get("report_links"), dict) else {}
+    read_ids: list[int] = []
+    for source in ("agrisk", "coface"):
+        item = links.get(source)
+        if isinstance(item, dict) and isinstance(item.get("read_id"), int):
+            read_ids.append(int(item["read_id"]))
+
+    reads: list[CreditReportRead] = []
+    if read_ids:
+        reads = list(
+            db.scalars(
+                select(CreditReportRead)
+                .where(CreditReportRead.id.in_(read_ids))
+                .order_by(CreditReportRead.created_at.desc(), CreditReportRead.id.desc())
+            ).all()
+        )
+
+    customer = db.get(Customer, analysis.customer_id)
+    if customer is not None and not reads:
+        reads = list(
+            db.scalars(
+                select(CreditReportRead)
+                .where(CreditReportRead.customer_document_number == customer.document_number)
+                .order_by(CreditReportRead.created_at.desc(), CreditReportRead.id.desc())
+                .limit(20)
+            ).all()
+        )
+    return [
+        CreditAnalysisReportReadSummary(
+            id=entry.id,
+            credit_analysis_id=analysis_id,
+            analysis_document_id=(
+                links.get(entry.source_type).get("analysis_document_id")
+                if isinstance(links.get(entry.source_type), dict)
+                else None
+            ),
+            source_type=entry.source_type,
+            status=entry.status,
+            original_filename=entry.original_filename,
+            mime_type=entry.mime_type,
+            file_size=entry.file_size,
+            report_document_number=entry.report_document_number,
+            is_document_match=entry.is_document_match,
+            validation_message=entry.validation_message,
+            warnings=entry.warnings_json or [],
+            read_payload=entry.read_payload_json or {},
+            created_at=entry.created_at,
+        )
+        for entry in reads
+    ]
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1377,6 +1528,7 @@ def list_credit_analyses(
             if exc.status_code == status.HTTP_403_FORBIDDEN:
                 continue
             raise
+        _attach_journey_progress_fields(db, analysis)
         scoped.append(analysis)
     return scoped
 
@@ -1767,6 +1919,7 @@ def list_credit_analyses_monitor(
             current_status=status_value,
             status_label=_status_label(status_value),
             workflow_stage=stage,
+            current_journey_step=_resolve_persisted_journey_step(db, analysis),
             suggested_limit=analysis.suggested_limit,
             total_limit=portfolio[2] or Decimal("0"),
             approved_limit=analysis.final_limit,
@@ -1856,6 +2009,77 @@ def get_credit_analysis(
             detail="Credit analysis not found.",
         )
     _enforce_technical_access_or_403(db, current, analysis)
+    _attach_journey_progress_fields(db, analysis)
+    return analysis
+
+
+@router.put("/{analysis_id}/journey-progress", response_model=CreditAnalysisRead, status_code=status.HTTP_200_OK)
+def update_credit_analysis_journey_progress(
+    analysis_id: int,
+    payload: CreditAnalysisJourneyProgressUpdateRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysis:
+    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    if analysis.final_decision is not None or analysis.analysis_status == AnalysisStatus.COMPLETED or analysis.motor_result is not None:
+        _set_journey_progress(
+            analysis,
+            current_step=4,
+            last_completed_step=4 if analysis.final_decision is not None else 3,
+        )
+        db.commit()
+        db.refresh(analysis)
+        _attach_journey_progress_fields(db, analysis)
+        return analysis
+
+    current_step = _clamp_journey_step(payload.current_journey_step)
+    last_completed = payload.last_completed_journey_step
+    if last_completed is not None:
+        last_completed = max(1, min(4, int(last_completed)))
+
+    derived_step = _derive_journey_step_from_state(db, analysis)
+    persisted_current, persisted_last = _get_journey_progress(analysis)
+    previous_current = persisted_current or derived_step
+    previous_last = persisted_last or max(1, previous_current - 1)
+
+    next_current = max(previous_current, current_step or previous_current, derived_step)
+    next_last = max(previous_last, last_completed or previous_last, max(1, next_current - 1))
+    if next_last > next_current:
+        next_last = next_current
+
+    _set_journey_progress(analysis, current_step=next_current, last_completed_step=next_last)
+    db.commit()
+    db.refresh(analysis)
+    _attach_journey_progress_fields(db, analysis)
+    return analysis
+
+
+@router.put("/{analysis_id}/workspace-state", response_model=CreditAnalysisRead, status_code=status.HTTP_200_OK)
+def update_credit_analysis_workspace_state(
+    analysis_id: int,
+    payload: CreditAnalysisWorkspaceStateUpdateRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysis:
+    _require_any_permission_or_403(current, "credit_request_validate", "credit.analysis.execute", "scope:all_bu")
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    if payload.analyst_notes is not None:
+        analysis.analyst_notes = payload.analyst_notes
+    if isinstance(payload.workspace_state, dict):
+        _merge_workspace_state(analysis, payload.workspace_state)
+
+    db.commit()
+    db.refresh(analysis)
+    _attach_journey_progress_fields(db, analysis)
     return analysis
 
 
@@ -1878,6 +2102,12 @@ def start_credit_analysis(
         transition_at = datetime.now(timezone.utc)
         previous_status = _current_status_value(analysis)
         analysis.analysis_status = AnalysisStatus.IN_PROGRESS
+        persisted_current, persisted_last = _get_journey_progress(analysis)
+        _set_journey_progress(
+            analysis,
+            current_step=max(_clamp_journey_step(persisted_current) or 2, 2),
+            last_completed_step=max((persisted_last or 1), 1),
+        )
         analysis.claimed_at = transition_at
         analysis.analysis_started_at = analysis.analysis_started_at or transition_at
         _apply_owner_transition(
@@ -2265,6 +2495,8 @@ def calculate_decision(
     )
     if previous_motor_result is None:
         transition_at = datetime.now(timezone.utc)
+        _, persisted_last = _get_journey_progress(analysis)
+        _set_journey_progress(analysis, current_step=4, last_completed_step=max((persisted_last or 1), 3))
         analysis.submitted_for_approval_at = analysis.submitted_for_approval_at or transition_at
         _apply_owner_transition(
             analysis,
@@ -2383,6 +2615,8 @@ def apply_analysis_final_decision(
         analysis.approved_at = analysis.approved_at or decision_timestamp
     elif analysis.final_decision == FinalDecision.REJECTED:
         analysis.rejected_at = analysis.rejected_at or decision_timestamp
+    _, persisted_last = _get_journey_progress(analysis)
+    _set_journey_progress(analysis, current_step=4, last_completed_step=max((persisted_last or 1), 4))
     _apply_owner_transition(
         analysis,
         new_status="approved" if analysis.final_decision == FinalDecision.APPROVED else "rejected",

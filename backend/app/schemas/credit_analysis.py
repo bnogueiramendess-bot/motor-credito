@@ -46,6 +46,8 @@ class CreditAnalysisRead(BaseModel):
     analyst_notes: str | None
     decision_memory_json: dict | None
     decision_calculated_at: datetime | None
+    current_journey_step: int | None = None
+    last_completed_journey_step: int | None = None
     assigned_analyst_name: str | None
     current_owner_user_id: int | None = None
     current_owner_role: str | None = None
@@ -218,6 +220,7 @@ class CreditAnalysisMonitorItem(BaseModel):
     current_status: str
     status_label: str
     workflow_stage: str
+    current_journey_step: int | None = None
     suggested_limit: Decimal | None = None
     total_limit: Decimal | None = None
     approved_limit: Decimal | None = None
@@ -248,3 +251,30 @@ class CreditAnalysisMonitorResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class CreditAnalysisJourneyProgressUpdateRequest(BaseModel):
+    current_journey_step: int | None = None
+    last_completed_journey_step: int | None = None
+
+
+class CreditAnalysisWorkspaceStateUpdateRequest(BaseModel):
+    analyst_notes: str | None = None
+    workspace_state: dict | None = None
+
+
+class CreditAnalysisReportReadSummary(BaseModel):
+    id: int
+    credit_analysis_id: int | None = None
+    analysis_document_id: int | None = None
+    source_type: str
+    status: str
+    original_filename: str
+    mime_type: str
+    file_size: int
+    report_document_number: str | None = None
+    is_document_match: bool
+    validation_message: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    read_payload: dict = Field(default_factory=dict)
+    created_at: datetime

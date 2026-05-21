@@ -8,6 +8,7 @@ type CofaceReadRequestPayload = {
   mime_type: string;
   file_size: number;
   customer_document_number: string;
+  analysis_id?: number | null;
   file_content_base64: string;
 };
 

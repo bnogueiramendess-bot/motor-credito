@@ -67,7 +67,10 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     return _strip_nul_chars(extracted) or ""
 
 
-def create_coface_report_read(db: Session, payload: CofaceReportReadCreate) -> CreditReportRead:
+def create_coface_report_read(
+    db: Session,
+    payload: CofaceReportReadCreate,
+) -> CreditReportRead:
     normalized_customer_document = normalize_document_digits(payload.customer_document_number)
 
     entry = CreditReportRead(

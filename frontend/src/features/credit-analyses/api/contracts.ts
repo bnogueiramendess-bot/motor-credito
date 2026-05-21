@@ -122,6 +122,8 @@ export type CreditAnalysisDto = {
   analyst_notes: string | null;
   decision_memory_json: Record<string, unknown> | null;
   decision_calculated_at: string | null;
+  current_journey_step?: number | null;
+  last_completed_journey_step?: number | null;
   assigned_analyst_name: string | null;
   current_owner_user_id?: number | null;
   current_owner_role?: string | null;
@@ -255,6 +257,7 @@ export type CreditAnalysisMonitorItemDto = {
   current_status: string;
   status_label: string;
   workflow_stage: "commercial_submitted" | "financial_review" | "pending_approval" | "decided" | "returned" | string;
+  current_journey_step?: number | null;
   suggested_limit: number | string | null;
   total_limit: number | string | null;
   approved_limit: number | string | null;
@@ -267,6 +270,16 @@ export type CreditAnalysisMonitorItemDto = {
   stage_aging_days: number;
   next_responsible_role: "comercial" | "analista_financeiro" | "aprovador" | string;
   available_actions: string[];
+};
+
+export type CreditAnalysisJourneyProgressUpdateRequest = {
+  current_journey_step?: number | null;
+  last_completed_journey_step?: number | null;
+};
+
+export type CreditAnalysisWorkspaceStateUpdateRequest = {
+  analyst_notes?: string | null;
+  workspace_state?: Record<string, unknown> | null;
 };
 
 export type CreditAnalysisMonitorKpisDto = {

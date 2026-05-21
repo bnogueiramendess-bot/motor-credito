@@ -98,6 +98,8 @@ export type AgriskImportStatus = ReportImportStatus;
 
 export type AgriskReportReadResponse = {
   id: number;
+  credit_analysis_id?: number | null;
+  analysis_document_id?: number | null;
   source_type: "agrisk";
   status: ReportImportStatus;
   original_filename: string;
@@ -167,6 +169,8 @@ export type AgriskReportReadResponse = {
 
 export type CofaceReportReadResponse = {
   id: number;
+  credit_analysis_id?: number | null;
+  analysis_document_id?: number | null;
   source_type: "coface";
   status: ReportImportStatus;
   original_filename: string;
@@ -367,4 +371,21 @@ export type CreateCommercialReferencePayload = {
   name: string;
   phone: string | null;
   email: string | null;
+};
+
+export type AnalysisReportReadSummaryDto = {
+  id: number;
+  credit_analysis_id: number | null;
+  analysis_document_id: number | null;
+  source_type: string;
+  status: string;
+  original_filename: string;
+  mime_type: string;
+  file_size: number;
+  report_document_number: string | null;
+  is_document_match: boolean;
+  validation_message: string | null;
+  warnings: string[];
+  read_payload: Record<string, unknown>;
+  created_at: string;
 };

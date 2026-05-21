@@ -30,9 +30,11 @@ from app.routes.credit_analyses import (
     list_credit_analysis_events,
     list_credit_analyses_monitor,
     start_credit_analysis,
+    update_credit_analysis_workspace_state,
 )
 from app.models.enums import FinalDecision, AnalysisStatus
 from app.schemas.final_decision import FinalDecisionApplyRequest
+from app.schemas.credit_analysis import CreditAnalysisWorkspaceStateUpdateRequest
 from app.services.security import hash_password
 
 
@@ -236,6 +238,48 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         with SessionLocal() as db:
             response = list_credit_analyses_monitor(db=db, current=analyst)
         self.assertIn("continue_analysis", response.items[0].available_actions)
+
+    def test_monitor_returns_persisted_journey_step_for_continue(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.step@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.decision_memory_json = {
+                "journey_progress": {"current_journey_step": 4, "last_completed_journey_step": 3}
+            }
+            db.commit()
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=analyst)
+        self.assertIn("continue_analysis", response.items[0].available_actions)
+        self.assertEqual(response.items[0].current_journey_step, 4)
+
+    def test_workspace_state_and_analyst_notes_persist_in_backend(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.workspace@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            updated = update_credit_analysis_workspace_state(
+                analysis_id=analysis_id,
+                payload=CreditAnalysisWorkspaceStateUpdateRequest(
+                    analyst_notes="Teste",
+                    workspace_state={
+                        "manual_configured": True,
+                        "manual_panel": {"scoreSource": "Serasa", "scoreValue": 700},
+                        "imports": {"agrisk": {"read_id": 10, "status": "valid"}},
+                    },
+                ),
+                db=db,
+                current=analyst,
+            )
+            self.assertEqual(updated.analyst_notes, "Teste")
+            self.assertIsInstance(updated.decision_memory_json, dict)
+            assert isinstance(updated.decision_memory_json, dict)
+            ws = updated.decision_memory_json.get("workspace_state")
+            self.assertIsInstance(ws, dict)
+            assert isinstance(ws, dict)
+            self.assertTrue(bool(ws.get("manual_configured")))
 
     def test_approver_sees_pending_approval(self) -> None:
         bu_id, run_id = self._setup_base()

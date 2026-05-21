@@ -75,7 +75,10 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     return _strip_nul_chars(extracted) or ""
 
 
-def create_agrisk_report_read(db: Session, payload: AgriskReportReadCreate) -> CreditReportRead:
+def create_agrisk_report_read(
+    db: Session,
+    payload: AgriskReportReadCreate,
+) -> CreditReportRead:
     normalized_customer_document = normalize_document_digits(payload.customer_document_number)
 
     entry = CreditReportRead(
