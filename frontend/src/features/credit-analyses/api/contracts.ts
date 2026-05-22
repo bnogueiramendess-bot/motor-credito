@@ -136,6 +136,7 @@ export type CreditAnalysisDto = {
   submitted_for_approval_at?: string | null;
   approved_at?: string | null;
   rejected_at?: string | null;
+  available_actions?: string[];
   created_at: string;
   completed_at: string | null;
 };

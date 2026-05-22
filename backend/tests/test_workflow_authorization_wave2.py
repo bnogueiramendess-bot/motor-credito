@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from app.services.approval_matrix import resolve_required_approval_roles
-from app.services.workflow_authorization import can_approve_credit_decision, can_execute_credit_analysis
+from app.models.enums import AnalysisStatus
+from app.services.workflow_authorization import can_execute_approval_action, can_execute_credit_analysis
 
 
 @dataclass
@@ -27,6 +28,10 @@ class DummyAnalysis:
     final_limit: Decimal | None
     suggested_limit: Decimal | None
     requested_limit: Decimal | None
+    current_limit: Decimal | None = Decimal("0")
+    final_decision: object | None = None
+    analysis_status: AnalysisStatus = AnalysisStatus.IN_PROGRESS
+    motor_result: object | None = object()
 
 
 @dataclass
@@ -148,7 +153,7 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
                 return_value={"rule_id": 1, "rule_name": "Faixa 1-5MM", "required_roles": ["CREDIT_FINANCE_DIRECTOR"], "required_approvals": 1, "requires_committee": False},
             ),
         ):
-            result = can_approve_credit_decision(db=object(), current=current, analysis=analysis)  # type: ignore[arg-type]
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertEqual(result.authorization_source, "legacy_permission")
 
@@ -164,7 +169,7 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
                 return_value={"rule_id": 2, "rule_name": "Faixa 5-10MM", "required_roles": ["CREDIT_GROUP_CFO"], "required_approvals": 1, "requires_committee": False},
             ),
         ):
-            result = can_approve_credit_decision(db=object(), current=current, analysis=analysis)  # type: ignore[arg-type]
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertEqual(result.authorization_source, "approval_matrix")
 
@@ -180,7 +185,7 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
                 return_value={"rule_id": 2, "rule_name": "Faixa 5-10MM", "required_roles": ["CREDIT_GROUP_CFO"], "required_approvals": 1, "requires_committee": False},
             ),
         ):
-            result = can_approve_credit_decision(db=object(), current=current, analysis=analysis)  # type: ignore[arg-type]
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
         self.assertFalse(result.allowed)
         self.assertEqual(result.authorization_source, "denied")
 
@@ -196,7 +201,7 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
                 return_value={"rule_id": 3, "rule_name": "Faixa >10MM", "required_roles": ["CREDIT_CEO"], "required_approvals": 1, "requires_committee": False},
             ),
         ):
-            result = can_approve_credit_decision(db=object(), current=current, analysis=analysis)  # type: ignore[arg-type]
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertTrue(result.legacy_fallback_used)
         self.assertEqual(result.authorization_source, "legacy_permission")
@@ -213,9 +218,48 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
                 return_value={"rule_id": 3, "rule_name": "Faixa >10MM", "required_roles": ["CREDIT_CEO"], "required_approvals": 1, "requires_committee": False},
             ),
         ):
-            result = can_approve_credit_decision(db=object(), current=current, analysis=analysis)  # type: ignore[arg-type]
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
         self.assertFalse(result.allowed)
         self.assertEqual(result.authorization_source, "denied")
+
+    def test_reject_and_request_changes_follow_same_canonical_authorization(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=10), permissions=set())
+        analysis = DummyAnalysis(final_limit=None, suggested_limit=Decimal("1000000"), requested_limit=Decimal("1000000"))
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={"rule_id": 1, "rule_name": "Faixa 0-1MM", "required_roles": ["CREDIT_FINANCE_HEAD"], "required_approvals": 1, "requires_committee": False},
+            ),
+        ):
+            reject_result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="reject")  # type: ignore[arg-type]
+            changes_result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="request_changes")  # type: ignore[arg-type]
+        self.assertTrue(reject_result.allowed)
+        self.assertTrue(changes_result.allowed)
+
+    def test_status_invalid_blocks_canonical_actions(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=11), permissions={"credit.approval.approve"})
+        analysis = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("1000000"),
+            requested_limit=Decimal("1000000"),
+            analysis_status=AnalysisStatus.CREATED,
+            motor_result=None,
+        )
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]):
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
+        self.assertFalse(result.allowed)
+
+    def test_user_outside_bu_is_blocked(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=12), permissions={"credit.approval.approve"})
+        analysis = DummyAnalysis(final_limit=None, suggested_limit=Decimal("1000000"), requested_limit=Decimal("1000000"))
+        with (
+            patch("app.services.workflow_authorization._can_view_in_scope", return_value=False),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
+        ):
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
+        self.assertFalse(result.allowed)
 
 
 if __name__ == "__main__":

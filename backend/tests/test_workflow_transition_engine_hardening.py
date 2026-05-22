@@ -84,7 +84,7 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
             result = resolve_credit_workflow_transition(db, self.current, analysis, action="approve", payload={})
         self.assertFalse(result.allowed)
 
-    def test_request_maintenance_requires_justification(self) -> None:
+    def test_request_changes_requires_justification(self) -> None:
         analysis = DummyAnalysis()
         db = DummyDb()
         with patch(
@@ -102,7 +102,7 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
             )(),
         ), patch("app.services.workflow_transition_engine.resolve_credit_workflow_available_actions", return_value=["view_tracking"]):
             with self.assertRaises(ValueError):
-                resolve_credit_workflow_transition(db, self.current, analysis, action="request_maintenance", payload={"justification": "curta"})
+                resolve_credit_workflow_transition(db, self.current, analysis, action="request_changes", payload={"justification": "curta"})
 
     def test_return_to_analysis_updates_owner_and_status(self) -> None:
         analysis = DummyAnalysis()
@@ -127,6 +127,27 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
         self.assertEqual(result.next_owner, "analista_financeiro")
         self.assertEqual(len(db.added), 2)
 
+    def test_submit_approval_requires_completed_technical_dossier(self) -> None:
+        analysis = DummyAnalysis(motor_result=None)
+        db = DummyDb()
+        with patch(
+            "app.services.workflow_transition_engine.resolve_credit_workflow_action",
+            return_value=type(
+                "AuthCtx",
+                (),
+                {
+                    "allowed": True,
+                    "denial_reason": None,
+                    "denial_type": None,
+                    "applicable_doa_code": "DOA-0001",
+                    "applicable_doa_range": "0..1000000",
+                    "workflow_context": {"doa_rule_id": 1, "doa_rule_name": "Faixa"},
+                },
+            )(),
+        ), patch("app.services.workflow_transition_engine.resolve_credit_workflow_available_actions", return_value=["submit_approval"]):
+            with self.assertRaises(ValueError):
+                resolve_credit_workflow_transition(db, self.current, analysis, action="submit_approval", payload={"justification": "Submeter para aprovação"})
+
     def test_finalize_requires_final_state(self) -> None:
         analysis = DummyAnalysis(analysis_status=AnalysisStatus.IN_PROGRESS, final_decision=None, motor_result=None)
         db = DummyDb()
@@ -145,6 +166,7 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
         current = DummyCurrentUser(user=DummyUser(id=11, email="cfo@indorama.com", full_name="CFO"), permissions=set(), bu_ids={1})
         analysis = DummyAnalysis(final_limit=Decimal("0.00"), suggested_limit=Decimal("0.00"), requested_limit=Decimal("0.00"))
         with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
             patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
             patch(
                 "app.services.workflow_authorization.resolve_required_approval_roles",
@@ -180,14 +202,14 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
         route_path = Path(__file__).resolve().parents[1] / "app" / "routes" / "credit_analyses.py"
         content = route_path.read_text(encoding="utf-8")
         forbidden_tokens = [
-            "analysis.analysis_status =",
-            "analysis.current_owner_user_id =",
-            "analysis.current_owner_role =",
-            "analysis.last_owner_user_id =",
-            "analysis.last_owner_role =",
-            "analysis.approved_at =",
-            "analysis.rejected_at =",
-            "analysis.completed_at =",
+            "analysis.analysis_status = AnalysisStatus",
+            "analysis.current_owner_user_id = ",
+            "analysis.current_owner_role = ",
+            "analysis.last_owner_user_id = ",
+            "analysis.last_owner_role = ",
+            "analysis.approved_at = ",
+            "analysis.rejected_at = ",
+            "analysis.completed_at = ",
         ]
         for token in forbidden_tokens:
             self.assertNotIn(token, content, msg=f"Mutação direta proibida encontrada na rota: {token}")

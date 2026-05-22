@@ -60,6 +60,7 @@ class CreditAnalysisRead(BaseModel):
     submitted_for_approval_at: datetime | None = None
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
+    available_actions: list[str] = Field(default_factory=list)
     created_at: datetime
     completed_at: datetime | None
 

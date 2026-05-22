@@ -134,7 +134,10 @@ def resolve_credit_workflow_transition(
     previous_status = _status_value(analysis)
     previous_stage = _stage_for_status(previous_status)
     previous_owner = analysis.current_owner_role
-    bu_name = resolve_analysis_business_unit(db, analysis)
+    try:
+        bu_name = resolve_analysis_business_unit(db, analysis)
+    except Exception:
+        bu_name = None
 
     authorization = resolve_credit_workflow_action(
         db,
@@ -157,7 +160,8 @@ def resolve_credit_workflow_transition(
             timeline_event="authorization_denied",
             notifications=[],
             available_actions=resolve_credit_workflow_available_actions(db, current, analysis=analysis, business_unit=bu_name),
-            workflow_context=authorization.workflow_context | {"denial_reason": authorization.denial_reason},
+            workflow_context=authorization.workflow_context
+            | {"denial_reason": authorization.denial_reason, "denial_type": getattr(authorization, "denial_type", None)},
         )
 
     transition_at = datetime.now(timezone.utc)
@@ -180,16 +184,18 @@ def resolve_credit_workflow_transition(
         analysis.analysis_started_at = analysis.analysis_started_at or transition_at
         analysis.claimed_at = transition_at
         timeline_event = "analysis_started"
-    elif action in {"generate_preliminary_decision", "submit_for_approval"}:
+    elif action in {"generate_preliminary_decision", "submit_for_approval", "submit_approval"}:
+        if analysis.motor_result is None or analysis.decision_calculated_at is None:
+            raise ValueError("A submissao para aprovacao exige dossie tecnico concluido.")
         next_status = "in_approval"
         next_owner_user_id = None
         next_owner_role = _owner_for_status(next_status)
         analysis.submitted_for_approval_at = analysis.submitted_for_approval_at or transition_at
         timeline_event = "analysis_submitted_for_approval"
-    elif action == "request_maintenance":
+    elif action == "request_changes":
         justification = str(payload.get("justification") or "").strip()
         if len(justification) < 10:
-            raise ValueError("Solicitacao de manutencao exige justificativa com pelo menos 10 caracteres.")
+            raise ValueError("Devolucao para ajustes exige justificativa com pelo menos 10 caracteres.")
         next_status = "in_progress"
         next_owner_user_id = None
         next_owner_role = _owner_for_status(next_status)

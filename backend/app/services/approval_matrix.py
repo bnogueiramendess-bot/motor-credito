@@ -210,7 +210,7 @@ def resolve_required_approval_roles(
                 .order_by(ApprovalMatrixRule.priority.asc(), ApprovalMatrixRule.id.asc())
             ).all()
         )
-    except SQLAlchemyError:
+    except Exception:
         return {
             "rule_id": None,
             "rule_code": None,
@@ -236,7 +236,7 @@ def resolve_required_approval_roles(
             ]
             return {
                 "rule_id": rule.id,
-                "rule_code": rule.code,
+                "rule_code": getattr(rule, "code", None),
                 "rule_name": rule.name,
                 "rule_range": (
                     f"{rule.min_amount if rule.min_amount is not None else '-inf'}.."

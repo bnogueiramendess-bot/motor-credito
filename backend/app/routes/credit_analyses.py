@@ -119,7 +119,7 @@ class WorkflowActionResponse(BaseModel):
     workflow_context: dict
 
 LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
-    "credit.request.create": ("credit.request.create",),
+    "credit.request.create": ("credit.request.create", "credit_request_submit", "credit.requests.submit"),
     "credit.requests.view": ("credit.requests.view", "credit_request_view_own"),
     "credit.analysis.execute": ("credit.analysis.execute", "credit_request_validate"),
     "credit.request.submit": ("credit.request.submit", "credit_request_submit_approval"),
@@ -501,7 +501,8 @@ def _set_journey_progress(analysis: CreditAnalysis, *, current_step: int | None,
 def _merge_workspace_state(analysis: CreditAnalysis, patch: dict) -> None:
     if not isinstance(patch, dict):
         return
-    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    base_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    memory = dict(base_memory)
     current_state = memory.get("workspace_state")
     workspace_state = current_state if isinstance(current_state, dict) else {}
     for key, value in patch.items():
@@ -547,6 +548,15 @@ def _attach_journey_progress_fields(db: Session, analysis: CreditAnalysis) -> No
     resolved = max(current or 0, derived)
     setattr(analysis, "current_journey_step", resolved)
     setattr(analysis, "last_completed_journey_step", last if last is not None else max(1, resolved - 1))
+
+
+def _attach_available_actions_field(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
+    bu_name = resolve_analysis_business_unit(db, analysis)
+    setattr(
+        analysis,
+        "available_actions",
+        resolve_credit_workflow_available_actions(db, current, analysis=analysis, business_unit=bu_name),
+    )
 
 
 def _extract_coface_coverage_limit(analysis: CreditAnalysis, db: Session, customer: Customer | None) -> Decimal | None:
@@ -652,7 +662,7 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
         resolve_credit_workflow_action(db, current, action="submit_approval", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="approve", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="reject", analysis=analysis, business_unit=analysis_bu).allowed,
-        resolve_credit_workflow_action(db, current, action="request_maintenance", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="request_changes", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="return_to_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_dossier", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_result", analysis=analysis, business_unit=analysis_bu).allowed,
@@ -663,6 +673,16 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Usuário sem autorização explícita para acessar esta etapa técnica do workflow.",
     )
+
+
+def _enforce_detail_read_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
+    if _has_any_permission(current, "credit_request_view_bu", "scope:all_bu"):
+        allowed_bu_names = get_user_allowed_business_units(db, current)
+        has_all_scope = user_has_all_bu_scope(current)
+        analysis_bu = resolve_analysis_business_unit(db, analysis)
+        assert_bu_in_scope(allowed_bu_names, analysis_bu, has_all_scope=has_all_scope)
+        return
+    _enforce_technical_access_or_403(db, current, analysis)
 
 
 def _analysis_documents_storage_root() -> Path:
@@ -1845,6 +1865,7 @@ def list_credit_analyses_monitor(
     page = max(page, 1)
     page_size = min(max(page_size, 1), 100)
     can_view_own = _has_any_permission(current, "credit_request_view_own", "credit.requests.view")
+    can_view_bu = _has_any_permission(current, "credit_request_view_bu", "scope:all_bu")
     if not can_view_own and not current.bu_ids and "scope:all_bu" not in current.permissions:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para visualizar o monitor de solicitacoes.")
 
@@ -1922,11 +1943,7 @@ def list_credit_analyses_monitor(
             requester_email = str(audit_metadata.get("requested_by") or "").strip().lower() or None
             requester_name = requester_email
 
-        if can_view_own and requester_email == current.user.email.strip().lower():
-            requester_only = True
-        else:
-            requester_only = False
-        if requester_only:
+        if can_view_own and not can_view_bu:
             if requester_email != current.user.email.strip().lower():
                 continue
 
@@ -2059,9 +2076,10 @@ def get_credit_analysis(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_detail_read_access_or_403(db, current, analysis)
     _attach_journey_progress_fields(db, analysis)
     _attach_recommendation_classification(db, analysis)
+    _attach_available_actions_field(db, current, analysis)
     return analysis
 
 
@@ -2463,9 +2481,6 @@ def calculate_decision(
             detail="Credit analysis not found.",
         )
     _enforce_technical_access_or_403(db, current, analysis)
-    previous_motor_result = analysis.motor_result
-    previous_status = _current_status_value(analysis)
-
     score_result = db.scalar(select(ScoreResult.id).where(ScoreResult.credit_analysis_id == analysis_id))
     if score_result is None:
         raise HTTPException(
@@ -2518,20 +2533,6 @@ def calculate_decision(
             },
         )
     )
-    if previous_motor_result is None:
-        transition = resolve_credit_workflow_transition(
-            db,
-            current,
-            analysis,
-            action="submit_for_approval",
-            payload={
-                "justification": "Analise submetida para aprovacao apos calculo do motor.",
-                "motor_result": analysis.motor_result.value if analysis.motor_result is not None else None,
-            },
-        )
-        if not transition.allowed:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao.")
-
     try:
         db.commit()
     except IntegrityError as exc:
@@ -2660,20 +2661,32 @@ def execute_workflow_action(
     _enforce_technical_access_or_403(db, current, analysis)
 
     action = (payload.action or "").strip().lower()
-    if action not in {"request_maintenance", "return_to_analysis", "finalize"}:
+    if action not in {"submit_approval", "submit_for_approval", "request_changes", "request_maintenance", "return_to_analysis", "finalize"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ação de workflow inválida para este endpoint.")
+
+    action_aliases = {
+        "request_maintenance": "request_changes",
+        "submit_for_approval": "submit_approval",
+    }
+    normalized_action = action_aliases.get(action, action)
 
     try:
         transition = resolve_credit_workflow_transition(
             db,
             current,
             analysis,
-            action=action,
+            action=normalized_action,
             payload={"justification": payload.justification},
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if not transition.allowed:
+        denial_type = transition.workflow_context.get("denial_type")
+        if denial_type == "invalid_status":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=transition.workflow_context.get("denial_reason") or "Status atual nao permite esta transicao.",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=transition.workflow_context.get("denial_reason") or "Sem permissão para esta transição.",

@@ -24,6 +24,8 @@ DEFAULT_CLIENTS_PERMISSIONS = {
 }
 DEFAULT_CREDIT_WORKFLOW_PERMISSIONS = {
     "credit.dashboard.view",
+    "credit_request_view_own",
+    "credit_request_submit",
 }
 
 ADMIN_CONTROLLED_PERMISSIONS = {

@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { CalendarDays, CheckCircle2, ChevronDown, ChevronsLeft, ChevronsRight, Clock3, Filter, FlaskConical, Hourglass, Search, Undo2, UserRoundCheck } from "lucide-react";
@@ -13,7 +13,6 @@ import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use
 import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
-import { getEffectivePermissions } from "@/shared/lib/auth/permissions";
 
 function mapNextStep(workflowStage: string): string {
   if (workflowStage === "financial_review") return "Em análise financeira";
@@ -39,7 +38,9 @@ function mapActionLabel(actions: string[]): string {
   if (actions.includes("continue_analysis")) return "Continuar Análise";
   if (actions.includes("start_analysis")) return "Iniciar Análise";
   if (actions.includes("submit_approval")) return "Submeter para aprovação";
-  if (actions.includes("review_decision")) return "Revisar decisão";
+  if (actions.includes("approve")) return "Aprovar / decidir";
+  if (actions.includes("reject")) return "Rejeitar";
+  if (actions.includes("request_changes")) return "Devolver para ajustes";
   if (actions.includes("view_dossier")) return "Ver dossiê";
   if (actions.includes("view_result")) return "Ver resultado";
   return "Acompanhar status";
@@ -133,16 +134,6 @@ export function MonitorPageView() {
   );
   const monitorQuery = useCreditAnalysesMonitorQuery(params);
   const optionsQuery = useCreditAnalysesMonitorOptionsQuery(businessUnitContext || undefined);
-  const [permissions, setPermissions] = useState<string[] | null>(null);
-
-  useEffect(() => {
-    setPermissions(getEffectivePermissions());
-  }, []);
-
-  if (permissions === null) {
-    return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando permissões...</div>;
-  }
-
   if (monitorQuery.isLoading) {
     return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando monitor de solicitações...</div>;
   }
@@ -278,7 +269,7 @@ export function MonitorPageView() {
                       Acesso não autorizado
                     </button>
                   ) : null}
-                  {item.available_actions.length > 0 && item.available_actions.includes("view_tracking") && !item.available_actions.some((action) => ["start_analysis", "continue_analysis", "submit_approval", "review_decision", "view_dossier", "view_result"].includes(action)) ? (
+                  {item.available_actions.length > 0 && item.available_actions.includes("view_tracking") && !item.available_actions.some((action) => ["start_analysis", "continue_analysis", "submit_approval", "approve", "reject", "request_changes", "view_dossier", "view_result"].includes(action)) ? (
                     <button type="button" disabled title="O dossiê será disponibilizado após a conclusão da análise." className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-medium text-[#94A3B8]">
                       Acompanhar status <ChevronDown className="ml-2 h-4 w-4" />
                     </button>

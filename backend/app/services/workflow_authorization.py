@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import CurrentUser
+from app.models.business_unit import BusinessUnit
 from app.models.credit_analysis import CreditAnalysis
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
@@ -21,13 +22,14 @@ from app.services.bu_scope import (
 )
 
 LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
-    "credit.request.create": ("credit.request.create",),
+    "credit.request.create": ("credit.request.create", "credit_request_submit", "credit.requests.submit"),
     "credit.analysis.execute": ("credit.analysis.execute", "credit_request_validate"),
     "credit.dossier.edit": ("credit.dossier.edit",),
     "credit.request.submit": ("credit.request.submit", "credit_request_submit_approval"),
     "credit.approval.approve": ("credit.approval.approve", "credit_request_approve"),
     "credit.approval.reject": ("credit.approval.reject", "credit_request_reject"),
-    "credit.requests.view": ("credit.requests.view", "credit_request_view_own"),
+    "credit.requests.view": ("credit.requests.view", "credit_request_view_own", "credit_request_view_bu", "scope:all_bu"),
+    "clients.dossier.view": ("clients.dossier.view", "credit_request_view_own", "credit.requests.view"),
 }
 
 ACTION_POLICIES: dict[str, dict] = {
@@ -44,7 +46,7 @@ ACTION_POLICIES: dict[str, dict] = {
     },
     "save_technical_analysis": {
         "workflow_roles": ("CREDIT_OPINION",),
-        "legacy_permissions": ("credit.dossier.edit",),
+        "legacy_permissions": ("credit.dossier.edit", "credit.analysis.execute"),
         "statuses": {"in_progress"},
     },
     "import_technical_reports": {
@@ -75,7 +77,7 @@ ACTION_POLICIES: dict[str, dict] = {
     },
     "approve": {"workflow_roles": (), "legacy_permissions": ("credit.approval.approve",), "statuses": {"in_approval"}},
     "reject": {"workflow_roles": (), "legacy_permissions": ("credit.approval.reject",), "statuses": {"in_approval"}},
-    "request_maintenance": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_approval"}},
+    "request_changes": {"workflow_roles": (), "legacy_permissions": ("credit.approval.reject",), "statuses": {"in_approval"}},
     "return_to_analysis": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_approval"}},
     "finalize": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"approved", "rejected"}},
     "view_result": {"workflow_roles": (), "legacy_permissions": ("credit.requests.view",), "statuses": {"approved", "rejected"}},
@@ -96,7 +98,9 @@ MONITOR_ACTION_TO_WORKFLOW_ACTION = {
     "start_analysis": "start_analysis",
     "continue_analysis": "continue_analysis",
     "submit_approval": "submit_approval",
-    "review_decision": "approve",
+    "approve": "approve",
+    "reject": "reject",
+    "request_changes": "request_changes",
     "view_result": "view_result",
     "view_dossier": "view_dossier",
     "view_tracking": "view_tracking",
@@ -107,6 +111,7 @@ MONITOR_ACTION_TO_WORKFLOW_ACTION = {
 class WorkflowAuthorizationContext:
     allowed: bool
     denial_reason: str | None
+    denial_type: str | None
     applicable_doa_code: str | None
     applicable_doa_range: str | None
     available_actions: list[str]
@@ -134,11 +139,15 @@ class ApprovalDecisionAuthorizationResult:
 
 
 def _current_status_value(analysis: CreditAnalysis) -> str:
-    if analysis.final_decision is not None:
-        return "approved" if analysis.final_decision.value == "approved" else "rejected"
-    if analysis.analysis_status.value == "in_progress" and analysis.motor_result is not None:
+    final_decision = getattr(analysis, "final_decision", None)
+    if final_decision is not None:
+        final_value = getattr(final_decision, "value", str(final_decision))
+        return "approved" if final_value == "approved" else "rejected"
+    analysis_status = getattr(analysis, "analysis_status", None)
+    status_value = getattr(analysis_status, "value", str(analysis_status) if analysis_status is not None else "in_progress")
+    if status_value == "in_progress" and getattr(analysis, "motor_result", None) is not None:
         return "in_approval"
-    if analysis.analysis_status.value == "created":
+    if status_value == "created":
         return "pending"
     return "in_progress"
 
@@ -152,6 +161,31 @@ def _resolve_analysis_amount(analysis: CreditAnalysis | None, requested_amount: 
         if candidate is not None:
             return Decimal(candidate)
     return Decimal("0")
+
+
+def _resolve_business_unit_id(db: Session, current: CurrentUser, business_unit: str | None) -> int | None:
+    if not business_unit:
+        return None
+    try:
+        return db.scalar(
+            select(BusinessUnit.id).where(
+                BusinessUnit.company_id == current.user.company_id,
+                BusinessUnit.name == business_unit,
+                BusinessUnit.is_active.is_(True),
+            )
+        )
+    except Exception:
+        return None
+
+
+def _is_zero_financial_impact(analysis: CreditAnalysis | None) -> bool:
+    if analysis is None:
+        return False
+    proposed = analysis.final_limit if analysis.final_limit is not None else analysis.suggested_limit
+    current_limit = getattr(analysis, "current_limit", None)
+    if proposed is None or current_limit is None:
+        return False
+    return Decimal(proposed) == Decimal(current_limit)
 
 
 def _has_legacy_permission(current: CurrentUser, permission_key: str) -> bool:
@@ -171,7 +205,7 @@ def _list_user_workflow_role_codes(db: Session, user_id: int) -> list[str]:
                 .order_by(WorkflowRole.code.asc())
             ).all()
         )
-    except SQLAlchemyError:
+    except Exception:
         return []
 
 
@@ -197,6 +231,7 @@ def resolve_credit_workflow_action(
         return WorkflowAuthorizationContext(
             allowed=False,
             denial_reason=f"Acao de workflow nao reconhecida: {action}.",
+            denial_type="unknown_action",
             applicable_doa_code=None,
             applicable_doa_range=None,
             available_actions=[],
@@ -208,6 +243,7 @@ def resolve_credit_workflow_action(
         return WorkflowAuthorizationContext(
             allowed=False,
             denial_reason=f"Acao {action} nao permitida para o status atual.",
+            denial_type="invalid_status",
             applicable_doa_code=None,
             applicable_doa_range=None,
             available_actions=[],
@@ -219,6 +255,7 @@ def resolve_credit_workflow_action(
             return WorkflowAuthorizationContext(
                 allowed=False,
                 denial_reason="Usuario fora do escopo da unidade de negocio.",
+                denial_type="forbidden",
                 applicable_doa_code=None,
                 applicable_doa_range=None,
                 available_actions=[],
@@ -230,14 +267,23 @@ def resolve_credit_workflow_action(
     legacy_permissions = list(policy.get("legacy_permissions") or [])
 
     amount = _resolve_analysis_amount(analysis, requested_amount)
-    matrix_resolution = resolve_required_approval_roles(db, amount=amount, currency="BRL", business_unit_id=None)
+    business_unit_id = _resolve_business_unit_id(db, current, business_unit)
+    matrix_amount = amount
+    if action in {"approve", "request_changes"} and _is_zero_financial_impact(analysis):
+        matrix_amount = Decimal("0.00")
+    matrix_resolution = resolve_required_approval_roles(
+        db,
+        amount=matrix_amount,
+        currency="BRL",
+        business_unit_id=business_unit_id,
+    )
 
     allowed_by_role = any(code in user_role_codes for code in configured_roles) if configured_roles else False
     allowed_by_legacy = any(_has_legacy_permission(current, key) for key in legacy_permissions) if legacy_permissions else False
     authorization_source = "denied"
     applicable_roles = configured_roles
 
-    if action in {"approve", "reject", "request_maintenance", "return_to_analysis", "finalize"}:
+    if action in {"approve", "reject", "request_changes", "return_to_analysis", "finalize"}:
         required_roles = list(matrix_resolution.get("required_roles") or [])
         applicable_roles = required_roles
         matched_roles = [code for code in required_roles if code in user_role_codes]
@@ -262,6 +308,7 @@ def resolve_credit_workflow_action(
     return WorkflowAuthorizationContext(
         allowed=allowed,
         denial_reason=denial_reason,
+        denial_type=None if allowed else "forbidden",
         applicable_doa_code=matrix_resolution.get("rule_code"),
         applicable_doa_range=matrix_resolution.get("rule_range"),
         available_actions=[],
@@ -270,6 +317,8 @@ def resolve_credit_workflow_action(
             "status": status_value,
             "authorization_source": authorization_source,
             "requested_amount": str(amount),
+            "matrix_amount": str(matrix_amount),
+            "zero_financial_impact": _is_zero_financial_impact(analysis),
             "applicable_roles": applicable_roles,
             "matched_roles": [code for code in applicable_roles if code in user_role_codes],
             "user_workflow_roles": user_role_codes,
@@ -298,17 +347,6 @@ def resolve_credit_workflow_available_actions(
         )
         if resolution.allowed:
             available.append(monitor_action)
-
-    if "review_decision" in available:
-        rejection_resolution = resolve_credit_workflow_action(
-            db,
-            current,
-            action="reject",
-            analysis=analysis,
-            business_unit=business_unit,
-        )
-        if not rejection_resolution.allowed:
-            available.remove("review_decision")
 
     return sorted(set(available))
 
@@ -358,12 +396,16 @@ def _build_approval_result(
     *,
     action: str,
 ) -> ApprovalDecisionAuthorizationResult:
+    try:
+        business_unit = resolve_analysis_business_unit(db, analysis)
+    except Exception:
+        business_unit = None
     resolution = resolve_credit_workflow_action(
         db,
         current,
         action=action,
         analysis=analysis,
-        business_unit=resolve_analysis_business_unit(db, analysis),
+        business_unit=business_unit,
     )
     return ApprovalDecisionAuthorizationResult(
         allowed=resolution.allowed,
@@ -384,3 +426,29 @@ def can_approve_credit_decision(db: Session, current: CurrentUser, analysis: Cre
 
 def can_reject_credit_decision(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> ApprovalDecisionAuthorizationResult:
     return _build_approval_result(db, current, analysis, action="reject")
+
+
+def can_request_changes_credit_decision(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> ApprovalDecisionAuthorizationResult:
+    return _build_approval_result(db, current, analysis, action="request_changes")
+
+
+def can_execute_approval_action(
+    db: Session,
+    current: CurrentUser,
+    analysis: CreditAnalysis,
+    *,
+    action: str,
+) -> ApprovalDecisionAuthorizationResult:
+    if action not in {"approve", "reject", "request_changes"}:
+        return ApprovalDecisionAuthorizationResult(
+            allowed=False,
+            authorization_source="denied",
+            matched_role_codes=[],
+            required_role_codes=[],
+            approval_matrix_rule_id=None,
+            approval_matrix_rule_name=None,
+            reason=f"Acao de aprovacao nao suportada: {action}.",
+            enforcement_enabled=settings.credit_approval_matrix_enforcement_enabled,
+            legacy_fallback_used=False,
+        )
+    return _build_approval_result(db, current, analysis, action=action)

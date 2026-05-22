@@ -7,7 +7,7 @@ import { Building2, ChevronDown, FileUp, Settings, Users } from "lucide-react";
 
 import { OperationalResetDialog } from "@/features/admin/components/operational-reset-dialog";
 import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
-import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
+import { getEffectivePermissions, hasAnyPermission, hasPermission } from "@/shared/lib/auth/permissions";
 import { OPEN_AGING_IMPORT_DRAWER_EVENT } from "@/shared/lib/events";
 import { getCurrentUserDisplayName, getCurrentUserLoginName } from "@/shared/lib/auth/current-user";
 import { cn } from "@/shared/lib/utils";
@@ -17,6 +17,7 @@ type NavItem = {
   href?: string;
   label?: string;
   permission?: string;
+  permissionAny?: string[];
 };
 
 type NavGroup = {
@@ -45,9 +46,24 @@ const navGroups: NavGroup[] = [
       { type: "link", href: "/motor-credito/dashboard", label: "Dashboard", permission: "credit.dashboard.view" },
       { type: "link", href: "/motor-credito/regras", label: "Regras", permission: "credit.policy.view" },
       { type: "divider" },
-      { type: "link", href: "/analises/nova", label: "+ Nova análise", permission: "credit.request.create" },
-      { type: "link", href: "/analises/monitor", label: "Monitor de Solicitações", permission: "credit.requests.view" },
-      { type: "link", href: "/analises", label: "Localizar análise", permission: "credit.requests.view" }
+      {
+        type: "link",
+        href: "/analises/nova",
+        label: "+ Nova análise",
+        permissionAny: ["credit.request.create", "credit.requests.submit", "credit_request_submit"],
+      },
+      {
+        type: "link",
+        href: "/analises/monitor",
+        label: "Monitor de Solicitações",
+        permissionAny: ["credit.requests.view", "credit_request_view_own", "credit_request_view_bu"],
+      },
+      {
+        type: "link",
+        href: "/analises",
+        label: "Localizar análise",
+        permissionAny: ["credit.requests.view", "credit_request_view_own", "credit_request_view_bu"],
+      }
     ]
   }
 ];
@@ -188,7 +204,12 @@ export function AppTopbar() {
       navGroups
         .map((group) => ({
           ...group,
-          items: group.items.filter((item) => !item.permission || hasPermission(item.permission, permissions))
+          items: group.items.filter((item) => {
+            if (item.permissionAny && item.permissionAny.length > 0) {
+              return hasAnyPermission(item.permissionAny, permissions);
+            }
+            return !item.permission || hasPermission(item.permission, permissions);
+          })
         }))
         .filter((group) => group.items.some((item) => item.type !== "divider")),
     [permissions]

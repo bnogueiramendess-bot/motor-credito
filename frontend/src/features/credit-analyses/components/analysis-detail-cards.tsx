@@ -14,7 +14,6 @@ import { KpiCard } from "@/features/credit-analysis/dossier/components/kpi-card"
 import { RatingCard } from "@/features/credit-analysis/dossier/components/rating-card";
 import { RecommendationBanner } from "@/features/credit-analysis/dossier/components/recommendation-banner";
 import { Timeline } from "@/features/credit-analysis/dossier/components/timeline";
-import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 import { Button } from "@/shared/components/ui/button";
 import { Card } from "@/shared/components/ui/card";
 
@@ -64,10 +63,11 @@ function noInfo(value: string | null | undefined, fallback = "Dados não dispon�
 }
 
 export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
-  const permissions = getEffectivePermissions();
-  const canApprove = hasPermission("credit.approval.approve", permissions);
-  const canReject = hasPermission("credit.approval.reject", permissions);
   const { analysis, customer, score, decision, final_decision: finalDecision, events } = data;
+  const availableActions = analysis.available_actions ?? [];
+  const canApprove = availableActions.includes("approve");
+  const canReject = availableActions.includes("reject");
+  const canRequestChanges = availableActions.includes("request_changes");
 
   const resolvedDecision = decisionPill(
     resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result)
@@ -374,6 +374,14 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
               <Button variant="outline" className="h-auto rounded-lg border-[#D7E1EC] px-5 py-2.5 text-[13px] font-medium text-[#102033]">
                 Solicitar exceção
               </Button>
+              {canRequestChanges ? (
+                <button
+                  type="button"
+                  className="rounded-lg bg-[#6B7280] px-5 py-2.5 text-[13px] font-medium text-white transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
+                >
+                  Devolver para ajustes
+                </button>
+              ) : null}
               {canReject ? (
                 <button
                   type="button"
@@ -387,7 +395,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
                   type="button"
                   className="rounded-lg bg-[#E8B83A] px-5 py-2.5 text-[13px] font-medium text-[#102033] transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
                 >
-                  Concluir decisão 
+                  Aprovar
                 </button>
               ) : null}
             </div>

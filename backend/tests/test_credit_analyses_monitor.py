@@ -25,7 +25,9 @@ from app.models.role_permission import RolePermission
 from app.models.user import User
 from app.models.user_business_unit_scope import UserBusinessUnitScope
 from app.routes.credit_analyses import (
+    WorkflowActionRequest,
     apply_analysis_final_decision,
+    execute_workflow_action,
     get_credit_analysis,
     get_score_result,
     list_credit_analysis_events,
@@ -239,6 +241,34 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
                 get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
         self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_requester_submit_permission_does_not_grant_submit_approval_or_direct_execution(self) -> None:
+        bu_id, run_id = self._setup_base()
+        requester = self._create_user(
+            "solicitante.submit@indorama.com",
+            ["credit_request_view_own", "credit_request_submit"],
+            bu_id,
+        )
+        analysis_id = self._create_analysis(run_id, "solicitante.submit@indorama.com", status="in_progress")
+
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=requester)
+        self.assertEqual(response.total, 1)
+        self.assertNotIn("submit_approval", response.items[0].available_actions)
+        self.assertNotIn("continue_analysis", response.items[0].available_actions)
+        self.assertNotIn("approve", response.items[0].available_actions)
+        self.assertNotIn("reject", response.items[0].available_actions)
+        self.assertNotIn("request_changes", response.items[0].available_actions)
+
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as ctx:
+                execute_workflow_action(
+                    analysis_id=analysis_id,
+                    payload=WorkflowActionRequest(action="submit_approval", justification="Tentativa indevida"),
+                    db=db,
+                    current=requester,
+                )
+        self.assertEqual(ctx.exception.status_code, 403)
+
     def test_user_with_explicit_technical_authorization_receives_technical_action_and_access(self) -> None:
         bu_id, run_id = self._setup_base()
         analyst = self._create_user("analista.autorizado@indorama.com", ["credit_request_validate"], bu_id)
@@ -428,7 +458,9 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         self.assertGreaterEqual(response.total, 1)
         self.assertEqual(response.items[0].workflow_stage, "pending_approval")
         self.assertEqual(response.items[0].current_status, "in_approval")
-        self.assertIn("review_decision", response.items[0].available_actions)
+        self.assertIn("approve", response.items[0].available_actions)
+        self.assertIn("reject", response.items[0].available_actions)
+        self.assertIn("request_changes", response.items[0].available_actions)
 
     def test_commercial_gets_view_dossier_only_after_approved_or_rejected(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -651,9 +683,11 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         analysis_id = self._create_analysis(run_id, "comercial.b@indorama.com", bu_name="Additives")
         with SessionLocal() as db:
             detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=master)
-            events = list_credit_analysis_events(analysis_id=analysis_id, db=db, current=master)
         self.assertEqual(detail.id, analysis_id)
-        self.assertIsInstance(events, list)
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as ctx:
+                list_credit_analysis_events(analysis_id=analysis_id, db=db, current=master)
+        self.assertEqual(ctx.exception.status_code, 403)
 
     def test_get_credit_analysis_uses_latest_valid_run_for_customer_not_global_latest(self) -> None:
         bu_id, customer_run_id = self._setup_base()
