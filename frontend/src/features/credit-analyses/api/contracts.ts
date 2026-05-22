@@ -260,6 +260,8 @@ export type CreditAnalysisMonitorItemDto = {
   workflow_stage: "commercial_submitted" | "financial_review" | "pending_approval" | "decided" | "returned" | string;
   current_journey_step?: number | null;
   requested_limit: number | string | null;
+  recommended_limit?: number | string | null;
+  financial_impact?: number | string | null;
   suggested_limit: number | string | null;
   total_limit: number | string | null;
   approved_limit: number | string | null;
@@ -271,6 +273,8 @@ export type CreditAnalysisMonitorItemDto = {
   aging_days: number;
   stage_aging_days: number;
   next_responsible_role: "comercial" | "analista_financeiro" | "aprovador" | string;
+  applicable_doa_code?: string | null;
+  applicable_doa_range?: string | null;
   available_actions: string[];
 };
 
@@ -297,6 +301,21 @@ export type CreditAnalysisMonitorKpisDto = {
 export type CreditAnalysisMonitorResponse = {
   items: CreditAnalysisMonitorItemDto[];
   kpis: CreditAnalysisMonitorKpisDto;
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type CreditAnalysisApprovalQueueKpisDto = {
+  total: number;
+  awaiting_approval: number;
+  overdue_sla: number;
+  high_value: number;
+};
+
+export type CreditAnalysisApprovalQueueResponse = {
+  items: CreditAnalysisMonitorItemDto[];
+  kpis: CreditAnalysisApprovalQueueKpisDto;
   total: number;
   page: number;
   page_size: number;

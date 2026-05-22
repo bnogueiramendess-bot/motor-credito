@@ -63,7 +63,8 @@ const navGroups: NavGroup[] = [
         href: "/analises",
         label: "Localizar análise",
         permissionAny: ["credit.requests.view", "credit_request_view_own", "credit_request_view_bu"],
-      }
+      },
+      { type: "link", href: "/analises/fila-aprovacao", label: "Fila de Aprovação", permission: "credit.approval.queue.view" }
     ]
   }
 ];
@@ -106,6 +107,7 @@ function isSubmenuItemActive(pathname: string, groupId: string, href: string) {
     if (href === "/analises/nova") return pathname === "/analises/nova";
     if (href === "/analises/monitor") return pathname === "/analises/monitor";
     if (href === "/analises") return pathname === "/analises" || /^\/analises\/\d+$/.test(pathname);
+    if (href === "/analises/fila-aprovacao") return pathname.startsWith("/analises/fila-aprovacao");
   }
   return isActivePath(pathname, href);
 }
@@ -134,6 +136,9 @@ function resolveTopbarMeta(pathname: string): { title: string; subtitle: string 
   }
   if (pathname.startsWith("/analises/monitor")) {
     return { title: "Monitor de Solicitações", subtitle: "Acompanhamento operacional do workflow" };
+  }
+  if (pathname.startsWith("/analises/fila-aprovacao")) {
+    return { title: "Fila de Aprovação", subtitle: "Pendências e decisões por alçada" };
   }
   if (/^\/analises\/\d+$/.test(pathname)) {
     return { title: "Análise de Crédito", subtitle: "Detalhamento da decisão" };

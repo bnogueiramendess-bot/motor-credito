@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import uuid
 import unittest
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import delete, or_, select
@@ -24,6 +25,8 @@ from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.user import User
 from app.models.user_business_unit_scope import UserBusinessUnitScope
+from app.models.user_workflow_role import UserWorkflowRole
+from app.models.workflow_role import WorkflowRole
 from app.routes.credit_analyses import (
     WorkflowActionRequest,
     apply_analysis_final_decision,
@@ -31,6 +34,7 @@ from app.routes.credit_analyses import (
     get_credit_analysis,
     get_score_result,
     list_credit_analysis_events,
+    list_credit_analyses_approval_queue,
     list_credit_analyses_monitor,
     start_credit_analysis,
     update_credit_analysis_workspace_state,
@@ -43,7 +47,7 @@ from app.services.security import hash_password
 
 class CreditAnalysesMonitorTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.created: dict[str, list[int]] = {k: [] for k in ["rows", "runs", "audits", "analyses", "customers", "report_reads", "scopes", "users", "role_permissions", "roles", "permissions", "bus", "companies"]}
+        self.created: dict[str, list[int]] = {k: [] for k in ["rows", "runs", "audits", "analyses", "customers", "report_reads", "scopes", "user_workflow_roles", "users", "role_permissions", "roles", "permissions", "bus", "companies"]}
         self.company_id: int | None = None
         self._run_suffix = uuid.uuid4().hex[:8]
         self._email_map: dict[str, str] = {}
@@ -75,6 +79,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
                 db.execute(delete(Customer).where(Customer.id.in_(self.created["customers"])))
             if self.created["scopes"]:
                 db.execute(delete(UserBusinessUnitScope).where(UserBusinessUnitScope.id.in_(self.created["scopes"])))
+            if self.created["user_workflow_roles"]:
+                db.execute(delete(UserWorkflowRole).where(UserWorkflowRole.id.in_(self.created["user_workflow_roles"])))
             if self.created["users"]:
                 db.execute(delete(User).where(User.id.in_(self.created["users"])))
             if self.created["role_permissions"]:
@@ -167,6 +173,19 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
                 is_administrator=False,
                 can_import_ar_aging=False,
             )
+
+    def _attach_workflow_role(self, user_id: int, workflow_role_code: str) -> None:
+        with SessionLocal() as db:
+            role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == workflow_role_code, WorkflowRole.is_active.is_(True)))
+            if role is None:
+                role = WorkflowRole(code=workflow_role_code, name=workflow_role_code, is_active=True)
+                db.add(role)
+                db.flush()
+            link = UserWorkflowRole(user_id=user_id, workflow_role_id=role.id)
+            db.add(link)
+            db.flush()
+            self.created["user_workflow_roles"].append(link.id)
+            db.commit()
 
     def _resolve_email(self, logical_email: str) -> str:
         if logical_email in self._email_map:
@@ -535,6 +554,107 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         bu_values = {item.business_unit for item in response.items}
         self.assertIn("Fertilizer", bu_values)
         self.assertIn("Additives", bu_values)
+
+    def test_approval_queue_denies_requester_with_only_operational_submit(self) -> None:
+        bu_id, run_id = self._setup_base()
+        requester = self._create_user("requester.queue@indorama.com", ["credit_request_view_own", "credit_request_submit"], bu_id)
+        self._create_analysis(run_id, "requester.queue@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as ctx:
+                list_credit_analyses_approval_queue(db=db, current=requester)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_approval_queue_allows_analyst_linked_to_submitted_analysis(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.queue@indorama.com", ["credit_request_validate", "credit_request_submit_approval"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.queue@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = MotorResult.MANUAL_REVIEW
+            analysis.decision_calculated_at = datetime.now()
+            analysis.analysis_status = AnalysisStatus.IN_PROGRESS
+            analysis.current_owner_user_id = None
+            analysis.current_owner_role = "aprovador"
+            analysis.last_owner_user_id = analyst.user.id
+            analysis.last_owner_role = "analista_financeiro"
+            db.commit()
+        with SessionLocal() as db:
+            response = list_credit_analyses_approval_queue(db=db, current=analyst)
+        self.assertGreaterEqual(response.total, 1)
+        self.assertEqual(response.items[0].current_status, "in_approval")
+        self.assertNotIn("approve", response.items[0].available_actions)
+
+    def test_approval_queue_allows_eligible_approver_and_hides_out_of_scope(self) -> None:
+        bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()
+        approver = self._create_user("aprovador.queue@indorama.com", ["credit_request_approve", "credit_request_reject"], bu_a_id)
+        analysis_a = self._create_analysis(run_id, "comercial.a@indorama.com", status="in_progress", bu_name="Fertilizer")
+        self._create_analysis(run_id, "comercial.b@indorama.com", status="in_progress", bu_name="Additives")
+        with SessionLocal() as db:
+            target = db.get(CreditAnalysis, analysis_a)
+            assert target is not None
+            target.motor_result = MotorResult.MANUAL_REVIEW
+            target.decision_calculated_at = datetime.now()
+            db.commit()
+            for analysis in db.scalars(select(CreditAnalysis).where(CreditAnalysis.id != analysis_a)).all():
+                analysis.motor_result = MotorResult.MANUAL_REVIEW
+                analysis.decision_calculated_at = datetime.now()
+            db.commit()
+        with SessionLocal() as db:
+            response = list_credit_analyses_approval_queue(db=db, current=approver)
+        self.assertEqual(response.total, 1)
+        self.assertIn("approve", response.items[0].available_actions)
+        self.assertIn("reject", response.items[0].available_actions)
+
+    def test_approval_queue_shows_final_recommended_limit_and_zero_financial_impact_for_maintenance(self) -> None:
+        bu_id, run_id = self._setup_base()
+        approver = self._create_user("finance.head@indorama.com", [], bu_id)
+        self._attach_workflow_role(approver.user.id, "CREDIT_FINANCE_HEAD")
+        analysis_id = self._create_analysis(run_id, "comercial.manutencao@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = MotorResult.MANUAL_REVIEW
+            analysis.decision_calculated_at = datetime.now()
+            analysis.requested_limit = Decimal("5000000")
+            analysis.current_limit = Decimal("4500000")
+            analysis.suggested_limit = Decimal("0")
+            base_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+            memory = dict(base_memory)
+            memory["recommendation_classification"] = {
+                "code": "maintain_current_limit",
+                "final_suggested_limit": "4500000.00",
+                "current_approved_limit": "4500000.00",
+            }
+            analysis.decision_memory_json = memory
+            row = db.scalar(select(ArAgingDataTotalRow).where(ArAgingDataTotalRow.cnpj_normalized == db.get(Customer, analysis.customer_id).document_number).limit(1))
+            assert row is not None
+            row.raw_payload_json = {"approved_credit_amount": "4500000.00", "col_17": "0"}
+            db.commit()
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 1,
+                    "rule_code": "DOA-0001",
+                    "rule_name": "Faixa 0",
+                    "rule_range": "0.00..1000000.00",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            with SessionLocal() as db:
+                response = list_credit_analyses_approval_queue(db=db, current=approver)
+        self.assertEqual(response.total, 1)
+        self.assertEqual(response.items[0].requested_limit, Decimal("5000000"))
+        self.assertEqual(response.items[0].recommended_limit, Decimal("4500000.00"))
+        self.assertEqual(response.items[0].financial_impact, Decimal("0.00"))
+        self.assertEqual(response.items[0].applicable_doa_code, "DOA-0001")
+        self.assertIn("approve", response.items[0].available_actions)
 
     def test_bu_scope_blocks_final_decision_outside_scope(self) -> None:
         bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()

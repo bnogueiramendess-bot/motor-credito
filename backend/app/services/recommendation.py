@@ -30,6 +30,9 @@ def _build_classification_payload(
     final_suggested: Decimal,
     is_existing_customer: bool,
 ) -> dict[str, object]:
+    financial_impact = None
+    if current_approved is not None:
+        financial_impact = str(_money(final_suggested - current_approved))
     return {
         "code": code,
         "label": label,
@@ -40,6 +43,7 @@ def _build_classification_payload(
         "coface_coverage_limit": str(coface_coverage) if coface_coverage is not None else None,
         "engine_recommended_limit": str(engine_recommended),
         "final_suggested_limit": str(final_suggested),
+        "financial_impact": financial_impact,
         "is_existing_customer": is_existing_customer,
     }
 
@@ -98,6 +102,7 @@ def classify_recommendation(
         and requested > current_approved
         and final_suggested <= current_approved
     ):
+        maintenance_limit = current_approved
         return _build_classification_payload(
             code="maintain_current_limit",
             label="Manutenção do limite atual recomendada",
@@ -106,7 +111,7 @@ def classify_recommendation(
             current_approved=current_approved,
             coface_coverage=coface_coverage,
             engine_recommended=engine_recommended,
-            final_suggested=final_suggested,
+            final_suggested=maintenance_limit,
             is_existing_customer=is_existing_customer,
         )
 

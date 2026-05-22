@@ -5,6 +5,7 @@ import {
   CreditAnalysisWorkspaceStateUpdateRequest,
   CreditAnalysisQueueOptionsResponse,
   CreditAnalysisMonitorResponse,
+  CreditAnalysisApprovalQueueResponse,
   CreditAnalysisOperationalQueueResponse,
   CreditAnalysisDetailApiResponse,
   CreditAnalysisListApiResponse
@@ -68,6 +69,28 @@ export async function getCreditAnalysesMonitor(params: MonitorParams = {}) {
   });
   const suffix = qs.toString();
   return apiClient.get<CreditAnalysisMonitorResponse>(`/api/credit-analyses/monitor${suffix ? `?${suffix}` : ""}`);
+}
+
+export type ApprovalQueueParams = {
+  q?: string;
+  status_filter?: string;
+  bu?: string;
+  aging?: string;
+  assigned_analyst?: string;
+  page?: number;
+  page_size?: number;
+  business_unit_context?: string;
+};
+
+export async function getCreditAnalysesApprovalQueue(params: ApprovalQueueParams = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && `${value}`.trim() !== "") {
+      qs.set(key, String(value));
+    }
+  });
+  const suffix = qs.toString();
+  return apiClient.get<CreditAnalysisApprovalQueueResponse>(`/api/credit-analyses/approval-queue${suffix ? `?${suffix}` : ""}`);
 }
 
 export async function getCreditAnalysesMonitorOptions(businessUnitContext?: string) {

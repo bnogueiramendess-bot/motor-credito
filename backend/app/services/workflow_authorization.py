@@ -157,7 +157,12 @@ def _resolve_analysis_amount(analysis: CreditAnalysis | None, requested_amount: 
         return requested_amount
     if analysis is None:
         return Decimal("0")
+    # Prioriza o primeiro valor positivo para não colapsar alçada em 0 quando
+    # há limite sugerido/final zerado, mas solicitação original com valor.
     for candidate in (analysis.final_limit, analysis.suggested_limit, analysis.requested_limit):
+        if candidate is not None and Decimal(candidate) > Decimal("0"):
+            return Decimal(candidate)
+    for candidate in (analysis.requested_limit, analysis.suggested_limit, analysis.final_limit):
         if candidate is not None:
             return Decimal(candidate)
     return Decimal("0")
@@ -182,10 +187,32 @@ def _is_zero_financial_impact(analysis: CreditAnalysis | None) -> bool:
     if analysis is None:
         return False
     proposed = analysis.final_limit if analysis.final_limit is not None else analysis.suggested_limit
-    current_limit = getattr(analysis, "current_limit", None)
-    if proposed is None or current_limit is None:
+    effective_current_limit = getattr(analysis, "current_limit", None)
+    if isinstance(getattr(analysis, "decision_memory_json", None), dict):
+        classification = analysis.decision_memory_json.get("recommendation_classification")
+        if isinstance(classification, dict) and classification.get("final_suggested_limit") is not None:
+            try:
+                proposed = Decimal(str(classification.get("final_suggested_limit")))
+            except Exception:
+                pass
+        if (
+            isinstance(classification, dict)
+            and (effective_current_limit is None or Decimal(effective_current_limit) <= Decimal("0"))
+            and classification.get("current_approved_limit") is not None
+        ):
+            try:
+                effective_current_limit = Decimal(str(classification.get("current_approved_limit")))
+            except Exception:
+                pass
+    if proposed is None or effective_current_limit is None:
         return False
-    return Decimal(proposed) == Decimal(current_limit)
+    proposed_value = Decimal(proposed)
+    current_value = Decimal(effective_current_limit)
+    # "Manutenção do limite atual" exige limite atual e proposto positivos e iguais.
+    # Evita confundir ausência de recomendação (0) com impacto financeiro real zero.
+    if proposed_value <= Decimal("0") or current_value <= Decimal("0"):
+        return False
+    return proposed_value == current_value
 
 
 def _has_legacy_permission(current: CurrentUser, permission_key: str) -> bool:
@@ -387,6 +414,27 @@ def can_submit_credit_analysis(db: Session, current: CurrentUser) -> WorkflowAut
         authorization_source=resolution.workflow_context.get("authorization_source", "denied"),
         workflow_role_matched=next(iter(resolution.workflow_context.get("matched_roles", [])), None),
     )
+
+
+def can_view_approval_queue(db: Session, current: CurrentUser) -> WorkflowAuthorizationResult:
+    workflow_role_codes = _list_user_workflow_role_codes(db, current.user.id)
+    non_requester_workflow_roles = [code for code in workflow_role_codes if code != "CREDIT_REQUESTER"]
+    if non_requester_workflow_roles:
+        return WorkflowAuthorizationResult(
+            allowed=True,
+            authorization_source="workflow_role",
+            workflow_role_matched=non_requester_workflow_roles[0],
+        )
+
+    for action in ("continue_analysis", "submit_approval", "approve", "reject", "request_changes"):
+        resolution = resolve_credit_workflow_action(db, current, action=action)
+        if resolution.allowed:
+            return WorkflowAuthorizationResult(
+                allowed=True,
+                authorization_source=resolution.workflow_context.get("authorization_source", "denied"),
+                workflow_role_matched=next(iter(resolution.workflow_context.get("matched_roles", [])), None),
+            )
+    return WorkflowAuthorizationResult(allowed=False, authorization_source="denied", workflow_role_matched=None)
 
 
 def _build_approval_result(

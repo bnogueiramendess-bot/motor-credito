@@ -40,6 +40,7 @@ from app.core.security import (
     ADMINISTRATOR_BASE_PERMISSIONS,
 )
 from app.services.permission_catalog import PROFILE_PERMISSION_CATALOG
+from app.services.workflow_authorization import can_view_approval_queue
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -64,6 +65,17 @@ def _build_user_context(db: Session, user: User) -> UserContextResponse:
     if is_administrator:
         effective_permissions.update(ADMIN_CONTROLLED_PERMISSIONS)
     bu_ids = list(db.scalars(select(UserBusinessUnitScope.business_unit_id).where(UserBusinessUnitScope.user_id == user.id)).all())
+
+    current = CurrentUser(
+        user=user,
+        permissions=set(effective_permissions),
+        bu_ids=set(bu_ids),
+        is_administrator=is_administrator,
+        can_import_ar_aging=can_import_ar_aging,
+    )
+    if can_view_approval_queue(db, current).allowed:
+        effective_permissions.add("credit.approval.queue.view")
+
     return UserContextResponse(
         id=user.id,
         full_name=user.full_name,

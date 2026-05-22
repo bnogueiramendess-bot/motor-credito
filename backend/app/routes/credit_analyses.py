@@ -40,6 +40,8 @@ from app.schemas.credit_analysis import (
     CreditAnalysisMonitorItem,
     CreditAnalysisMonitorKpis,
     CreditAnalysisMonitorResponse,
+    CreditAnalysisApprovalQueueKpis,
+    CreditAnalysisApprovalQueueResponse,
     CreditAnalysisJourneyProgressUpdateRequest,
     CreditAnalysisWorkspaceStateUpdateRequest,
     CreditAnalysisReportReadSummary,
@@ -90,6 +92,7 @@ from app.services.workflow_authorization import (
     can_execute_credit_analysis,
     can_issue_credit_opinion,
     can_submit_credit_analysis,
+    can_view_approval_queue,
     resolve_credit_workflow_action,
     resolve_credit_workflow_available_actions,
 )
@@ -393,6 +396,13 @@ def _require_can_submit_credit_analysis_or_403(db: Session, current: CurrentUser
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para esta operacao.")
 
 
+def _require_can_view_approval_queue_or_403(db: Session, current: CurrentUser) -> None:
+    authorization = can_view_approval_queue(db, current)
+    if authorization.allowed:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para visualizar a fila de aprovacao.")
+
+
 def _resolve_workflow_stage(status_value: str) -> str:
     if status_value in {"pending"}:
         return "commercial_submitted"
@@ -469,6 +479,51 @@ def _resolve_monitor_requested_limit_with_legacy_context(
                 return candidate
 
     return direct
+
+
+def _resolve_recommended_limit_from_memory(analysis: CreditAnalysis) -> Decimal | None:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    classification = memory.get("recommendation_classification") if isinstance(memory.get("recommendation_classification"), dict) else {}
+    raw_final = classification.get("final_suggested_limit") if isinstance(classification, dict) else None
+    if raw_final is not None:
+        parsed = _to_decimal_or_none(raw_final)
+        if parsed is not None:
+            return parsed
+    if isinstance(classification, dict) and classification.get("code") == "maintain_current_limit":
+        raw_current = classification.get("current_approved_limit")
+        parsed_current = _to_decimal_or_none(raw_current)
+        if parsed_current is not None and parsed_current > Decimal("0"):
+            return parsed_current
+    if (
+        analysis.current_limit is not None
+        and analysis.current_limit > Decimal("0")
+        and analysis.requested_limit is not None
+        and analysis.requested_limit > analysis.current_limit
+        and analysis.suggested_limit is not None
+        and analysis.suggested_limit <= Decimal("0")
+    ):
+        # Fallback para manter semântica de manutenção quando memória/classificação
+        # ainda não foi persistida no registro.
+        return analysis.current_limit
+    return analysis.suggested_limit
+
+
+def _resolve_financial_impact(analysis: CreditAnalysis) -> Decimal | None:
+    recommended = _resolve_recommended_limit_from_memory(analysis)
+    if recommended is None:
+        return None
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    classification = memory.get("recommendation_classification") if isinstance(memory.get("recommendation_classification"), dict) else {}
+    if isinstance(classification, dict):
+        parsed_impact = _to_decimal_or_none(classification.get("financial_impact"))
+        if parsed_impact is not None:
+            return parsed_impact
+        parsed_current = _to_decimal_or_none(classification.get("current_approved_limit"))
+        if parsed_current is not None:
+            return recommended - parsed_current
+    if analysis.current_limit is None:
+        return None
+    return recommended - analysis.current_limit
 
 
 def _clamp_journey_step(step: int | None) -> int | None:
@@ -626,6 +681,14 @@ def _resolve_current_approved_limit(db: Session, customer: Customer | None) -> D
 
 
 def _attach_recommendation_classification(db: Session, analysis: CreditAnalysis) -> None:
+    classification = _resolve_recommendation_classification(db, analysis)
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    updated_memory = dict(memory)
+    updated_memory["recommendation_classification"] = classification
+    analysis.decision_memory_json = updated_memory
+
+
+def _resolve_recommendation_classification(db: Session, analysis: CreditAnalysis) -> dict[str, object]:
     customer = db.get(Customer, analysis.customer_id)
     memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
     triage = memory.get("triage_submission") if isinstance(memory.get("triage_submission"), dict) else {}
@@ -636,7 +699,7 @@ def _attach_recommendation_classification(db: Session, analysis: CreditAnalysis)
         or (current_approved_limit is not None and current_approved_limit > Decimal("0"))
     )
 
-    classification = classify_recommendation(
+    return classify_recommendation(
         requested_limit=analysis.requested_limit,
         engine_recommended_limit=analysis.suggested_limit,
         coface_coverage_limit=_extract_coface_coverage_limit(analysis, db, customer),
@@ -644,10 +707,6 @@ def _attach_recommendation_classification(db: Session, analysis: CreditAnalysis)
         is_existing_customer=is_existing_customer,
         motor_result=analysis.motor_result,
     )
-
-    updated_memory = dict(memory)
-    updated_memory["recommendation_classification"] = classification
-    analysis.decision_memory_json = updated_memory
 
 
 def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
@@ -1988,6 +2047,8 @@ def list_credit_analyses_monitor(
                 triage_data=triage_data,
                 audit_metadata=audit_metadata,
             ),
+            recommended_limit=_resolve_recommended_limit_from_memory(analysis),
+            financial_impact=_resolve_financial_impact(analysis),
             suggested_limit=analysis.suggested_limit,
             total_limit=portfolio[2] or Decimal("0"),
             approved_limit=analysis.final_limit,
@@ -2062,6 +2123,189 @@ def list_credit_analyses_monitor_options(
     current: CurrentUser = Depends(get_current_user),
 ) -> CreditAnalysisQueueOptionsResponse:
     return list_credit_analyses_queue_options(business_unit_context=business_unit_context, db=db, current=current)
+
+
+@router.get("/approval-queue", response_model=CreditAnalysisApprovalQueueResponse)
+def list_credit_analyses_approval_queue(
+    q: str | None = None,
+    status_filter: str | None = None,
+    bu: str | None = None,
+    business_unit_context: str | None = None,
+    aging: str | None = None,
+    assigned_analyst: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysisApprovalQueueResponse:
+    _require_can_view_approval_queue_or_403(db, current)
+
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    bu_context = resolve_business_unit_context(db, current, business_unit_context)
+    scoped_bu_names = bu_context.effective_bu_names
+    has_all_scope = bu_context.has_all_scope
+
+    query = (
+        select(CreditAnalysis, Customer)
+        .join(Customer, Customer.id == CreditAnalysis.customer_id)
+        .order_by(CreditAnalysis.current_stage_started_at.desc(), CreditAnalysis.id.desc())
+    )
+    rows = db.execute(query).all()
+
+    items: list[CreditAnalysisMonitorItem] = []
+    now = datetime.now(timezone.utc)
+    for analysis, customer in rows:
+        status_value = _current_status_value(analysis)
+        if status_value != "in_approval":
+            continue
+
+        # Preserva classificação já persistida; recalcula apenas quando ausente.
+        memory_snapshot = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+        classification_snapshot = memory_snapshot.get("recommendation_classification") if isinstance(memory_snapshot.get("recommendation_classification"), dict) else None
+        if not classification_snapshot:
+            _attach_recommendation_classification(db, analysis)
+
+        latest_run_id = db.scalar(
+            select(ArAgingDataTotalRow.import_run_id)
+            .join(ArAgingImportRun, ArAgingImportRun.id == ArAgingDataTotalRow.import_run_id)
+            .where(
+                ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+                ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
+            )
+            .order_by(ArAgingDataTotalRow.import_run_id.desc())
+            .limit(1)
+        )
+        if latest_run_id is None:
+            portfolio = (None, None, Decimal("0"))
+        else:
+            portfolio_base = db.execute(
+                select(
+                    func.max(ArAgingDataTotalRow.bu_normalized),
+                    func.max(ArAgingDataTotalRow.economic_group_normalized),
+                ).where(
+                    ArAgingDataTotalRow.import_run_id == latest_run_id,
+                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+                )
+            ).one()
+            group_keys_subquery = (
+                select(ArAgingDataTotalRow.economic_group_normalized)
+                .where(
+                    ArAgingDataTotalRow.import_run_id == latest_run_id,
+                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
+                    ArAgingDataTotalRow.economic_group_normalized.is_not(None),
+                )
+                .distinct()
+            )
+            approved_credit_total = db.scalar(
+                select(func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0)).where(
+                    ArAgingGroupConsolidatedRow.import_run_id == latest_run_id,
+                    ArAgingGroupConsolidatedRow.economic_group_normalized.in_(group_keys_subquery),
+                )
+            )
+            portfolio = (portfolio_base[0], portfolio_base[1], approved_credit_total or Decimal("0"))
+        bu_name = portfolio[0]
+        triage_data = {}
+        if isinstance(analysis.decision_memory_json, dict):
+            triage_data = (analysis.decision_memory_json.get("triage_submission") or {}) if isinstance(analysis.decision_memory_json.get("triage_submission"), dict) else {}
+        if not bu_name and isinstance(triage_data, dict):
+            bu_name = triage_data.get("business_unit")
+        if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
+            continue
+
+        available_actions = resolve_credit_workflow_available_actions(
+            db,
+            current,
+            analysis=analysis,
+            business_unit=bu_name,
+        )
+        approval_resolution = resolve_credit_workflow_action(
+            db,
+            current,
+            action="approve",
+            analysis=analysis,
+            business_unit=bu_name,
+        )
+        can_decide = any(action in {"approve", "reject", "request_changes"} for action in available_actions)
+        technical_linked_to_user = (
+            analysis.last_owner_user_id == current.user.id
+            or analysis.current_owner_user_id == current.user.id
+            or (analysis.assigned_analyst_name or "").strip().lower()
+            in {(current.user.full_name or "").strip().lower(), current.user.email.strip().lower()}
+        )
+        if not can_decide and not technical_linked_to_user:
+            continue
+
+        stage = _resolve_workflow_stage(status_value)
+        aging_days = max((now - analysis.created_at).days, 0)
+        stage_start = analysis.current_stage_started_at or analysis.created_at
+        stage_aging_days = max((now - stage_start).days, 0)
+
+        item = CreditAnalysisMonitorItem(
+            analysis_id=analysis.id,
+            protocol=analysis.protocol_number,
+            customer_name=customer.company_name,
+            cnpj=customer.document_number,
+            economic_group=portfolio[1],
+            business_unit=bu_name,
+            requester_name=None,
+            assigned_analyst_name=analysis.assigned_analyst_name,
+            current_owner_user_id=analysis.current_owner_user_id,
+            current_owner_role=analysis.current_owner_role,
+            approver_name=None,
+            current_status=status_value,
+            status_label=_status_label(status_value),
+            workflow_stage=stage,
+            current_journey_step=_resolve_persisted_journey_step(db, analysis),
+            requested_limit=analysis.requested_limit,
+            recommended_limit=_resolve_recommended_limit_from_memory(analysis),
+            financial_impact=_resolve_financial_impact(analysis),
+            suggested_limit=analysis.suggested_limit,
+            total_limit=portfolio[2] or Decimal("0"),
+            approved_limit=analysis.final_limit,
+            is_new_customer=not bool(bu_name),
+            is_early_review_request=bool(triage_data.get("is_early_review_request")),
+            has_recent_analysis=bool(triage_data.get("has_recent_analysis")),
+            created_at=analysis.created_at,
+            updated_at=analysis.created_at,
+            aging_days=aging_days,
+            stage_aging_days=stage_aging_days,
+            next_responsible_role="aprovador",
+            applicable_doa_code=approval_resolution.applicable_doa_code,
+            applicable_doa_range=approval_resolution.applicable_doa_range,
+            available_actions=sorted(set(available_actions)),
+        )
+        items.append(item)
+
+    def _match(item: CreditAnalysisMonitorItem) -> bool:
+        if q:
+            needle = q.strip().lower()
+            if needle not in (f"{item.customer_name} {item.cnpj or ''} {item.protocol}".lower()):
+                return False
+        if status_filter and item.current_status != status_filter:
+            return False
+        if bu and (item.business_unit or "") != bu:
+            return False
+        if assigned_analyst and assigned_analyst.lower() not in (item.assigned_analyst_name or "").lower():
+            return False
+        if aging:
+            if aging == "over_5" and item.stage_aging_days <= 5:
+                return False
+            if aging == "over_10" and item.stage_aging_days <= 10:
+                return False
+        return True
+
+    filtered = [item for item in items if _match(item)]
+    kpis = CreditAnalysisApprovalQueueKpis(
+        total=len(filtered),
+        awaiting_approval=len(filtered),
+        overdue_sla=sum(1 for item in filtered if item.stage_aging_days > 5),
+        high_value=sum(1 for item in filtered if (item.suggested_limit or Decimal("0")) >= Decimal("1000000")),
+    )
+    total = len(filtered)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return CreditAnalysisApprovalQueueResponse(items=filtered[start:end], kpis=kpis, total=total, page=page, page_size=page_size)
 
 
 @router.get("/{analysis_id}", response_model=CreditAnalysisRead)
@@ -2505,14 +2749,26 @@ def calculate_decision(
                 BusinessUnit.name == bu_name,
             )
         )
+    recommendation_classification = _resolve_recommendation_classification(db, analysis)
+    recommended_final = _to_decimal_or_none(recommendation_classification.get("final_suggested_limit"))
+    preview_amount = recommended_final if recommended_final is not None else (analysis.suggested_limit or Decimal("0"))
+    if (
+        recommended_final is not None
+        and analysis.current_limit is not None
+        and recommended_final > Decimal("0")
+        and analysis.current_limit > Decimal("0")
+        and recommended_final == analysis.current_limit
+    ):
+        preview_amount = Decimal("0")
     approval_matrix_preview = resolve_required_approval_roles(
         db,
-        amount=analysis.suggested_limit or Decimal("0"),
+        amount=preview_amount,
         currency="BRL",
         business_unit_id=business_unit_id,
     )
     decision_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
     decision_memory["approval_matrix_preview"] = approval_matrix_preview
+    decision_memory["recommendation_classification"] = recommendation_classification
     analysis.decision_memory_json = decision_memory
 
     db.add(

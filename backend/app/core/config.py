@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     database_url: str
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    credit_approval_matrix_enforcement_enabled: bool = False
+    credit_approval_matrix_enforcement_enabled: bool = True
     credit_approval_legacy_fallback_enabled: bool = True
 
     model_config = SettingsConfigDict(

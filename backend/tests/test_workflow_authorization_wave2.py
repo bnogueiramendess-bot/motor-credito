@@ -5,9 +5,16 @@ from decimal import Decimal
 import unittest
 from unittest.mock import patch
 
+from app.core.config import settings
 from app.services.approval_matrix import resolve_required_approval_roles
 from app.models.enums import AnalysisStatus
-from app.services.workflow_authorization import can_execute_approval_action, can_execute_credit_analysis
+from app.services.workflow_authorization import (
+    can_execute_approval_action,
+    can_execute_credit_analysis,
+    can_view_approval_queue,
+    resolve_credit_workflow_action,
+    resolve_credit_workflow_available_actions,
+)
 
 
 @dataclass
@@ -32,6 +39,7 @@ class DummyAnalysis:
     final_decision: object | None = None
     analysis_status: AnalysisStatus = AnalysisStatus.IN_PROGRESS
     motor_result: object | None = object()
+    decision_memory_json: dict | None = None
 
 
 @dataclass
@@ -68,6 +76,9 @@ class DummySession:
 
 
 class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
+    def test_doa_enforcement_is_enabled_by_default(self) -> None:
+        self.assertTrue(settings.credit_approval_matrix_enforcement_enabled)
+
     def test_user_with_credit_analyst_role_can_execute_analysis(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=1), permissions=set())
         with patch(
@@ -260,6 +271,206 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
         ):
             result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
         self.assertFalse(result.allowed)
+
+    def test_can_view_approval_queue_denies_requester_permissions(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=13), permissions={"credit_request_view_own", "credit_request_submit"})
+        with patch(
+            "app.services.workflow_authorization.resolve_credit_workflow_action",
+            return_value=type("Ctx", (), {"allowed": False, "workflow_context": {"authorization_source": "denied", "matched_roles": []}})(),
+        ):
+            result = can_view_approval_queue(db=object(), current=current)  # type: ignore[arg-type]
+        self.assertFalse(result.allowed)
+
+    def test_can_view_approval_queue_allows_technical_capability(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=14), permissions={"credit_request_validate"})
+        contexts = [
+            type("Ctx", (), {"allowed": True, "workflow_context": {"authorization_source": "legacy_permission", "matched_roles": []}})(),
+        ]
+        with patch("app.services.workflow_authorization.resolve_credit_workflow_action", side_effect=contexts):
+            result = can_view_approval_queue(db=object(), current=current)  # type: ignore[arg-type]
+        self.assertTrue(result.allowed)
+
+    def test_can_view_approval_queue_allows_non_requester_workflow_role(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=15), permissions=set())
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_GROUP_CFO"]):
+            result = can_view_approval_queue(db=object(), current=current)  # type: ignore[arg-type]
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.authorization_source, "workflow_role")
+
+    def test_positive_requested_limit_with_suggested_zero_uses_positive_amount_for_approve(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=16), permissions=set())
+        analysis = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("0"),
+            requested_limit=Decimal("5000000"),
+            current_limit=Decimal("0"),
+        )
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch("app.services.workflow_authorization._can_view_in_scope", return_value=True),
+            patch("app.services.workflow_authorization._resolve_business_unit_id", return_value=1),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 101,
+                    "rule_code": "DOA-0006",
+                    "rule_name": "Faixa 5MM",
+                    "rule_range": "5000000..10000000",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            resolution = resolve_credit_workflow_action(
+                db=object(),  # type: ignore[arg-type]
+                current=current,
+                action="approve",
+                analysis=analysis,
+                business_unit="Additives",
+            )
+            actions = resolve_credit_workflow_available_actions(
+                db=object(),  # type: ignore[arg-type]
+                current=current,
+                analysis=analysis,
+                business_unit="Additives",
+            )
+        self.assertTrue(resolution.allowed)
+        self.assertEqual(resolution.workflow_context.get("requested_amount"), "5000000")
+        self.assertEqual(resolution.workflow_context.get("matrix_amount"), "5000000")
+        self.assertIn("approve", actions)
+
+    def test_reject_uses_same_positive_amount_base_with_suggested_zero(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=17), permissions=set())
+        analysis = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("0"),
+            requested_limit=Decimal("5000000"),
+            current_limit=Decimal("0"),
+        )
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch("app.services.workflow_authorization._can_view_in_scope", return_value=True),
+            patch("app.services.workflow_authorization._resolve_business_unit_id", return_value=1),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 102,
+                    "rule_code": "DOA-0006",
+                    "rule_name": "Faixa 5MM",
+                    "rule_range": "5000000..10000000",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            resolution = resolve_credit_workflow_action(
+                db=object(),  # type: ignore[arg-type]
+                current=current,
+                action="reject",
+                analysis=analysis,
+                business_unit="Additives",
+            )
+        self.assertTrue(resolution.allowed)
+        self.assertEqual(resolution.workflow_context.get("requested_amount"), "5000000")
+        self.assertEqual(resolution.workflow_context.get("matrix_amount"), "5000000")
+
+    def test_real_limit_maintenance_is_the_only_case_that_forces_zero_range(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=18), permissions=set())
+        analysis = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("4500000"),
+            requested_limit=Decimal("5000000"),
+            current_limit=Decimal("4500000"),
+        )
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch("app.services.workflow_authorization._can_view_in_scope", return_value=True),
+            patch("app.services.workflow_authorization._resolve_business_unit_id", return_value=1),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 103,
+                    "rule_code": "DOA-0001",
+                    "rule_name": "Faixa 0",
+                    "rule_range": "0..1000000",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            approve_resolution = resolve_credit_workflow_action(
+                db=object(),  # type: ignore[arg-type]
+                current=current,
+                action="approve",
+                analysis=analysis,
+                business_unit="Additives",
+            )
+            reject_resolution = resolve_credit_workflow_action(
+                db=object(),  # type: ignore[arg-type]
+                current=current,
+                action="reject",
+                analysis=analysis,
+                business_unit="Additives",
+            )
+        self.assertEqual(approve_resolution.workflow_context.get("requested_amount"), "4500000")
+        self.assertEqual(approve_resolution.workflow_context.get("matrix_amount"), "0.00")
+        self.assertEqual(reject_resolution.workflow_context.get("requested_amount"), "4500000")
+        self.assertEqual(reject_resolution.workflow_context.get("matrix_amount"), "4500000")
+
+    def test_maintenance_uses_recommendation_classification_final_limit_not_suggested_zero(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=19), permissions=set())
+        analysis = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("0"),
+            requested_limit=Decimal("5000000"),
+            current_limit=Decimal("4500000"),
+        )
+        analysis.decision_memory_json = {"recommendation_classification": {"final_suggested_limit": "4500000.00"}}
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch("app.services.workflow_authorization._can_view_in_scope", return_value=True),
+            patch("app.services.workflow_authorization._resolve_business_unit_id", return_value=1),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 104,
+                    "rule_code": "DOA-0001",
+                    "rule_name": "Faixa 0",
+                    "rule_range": "0..1000000",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            approve_resolution = resolve_credit_workflow_action(
+                db=object(),  # type: ignore[arg-type]
+                current=current,
+                action="approve",
+                analysis=analysis,
+                business_unit="Additives",
+            )
+            reject_resolution = resolve_credit_workflow_action(
+                db=object(),  # type: ignore[arg-type]
+                current=current,
+                action="reject",
+                analysis=analysis,
+                business_unit="Additives",
+            )
+        self.assertEqual(approve_resolution.workflow_context.get("requested_amount"), "5000000")
+        self.assertEqual(approve_resolution.workflow_context.get("matrix_amount"), "0.00")
+        self.assertEqual(reject_resolution.workflow_context.get("matrix_amount"), "5000000")
 
 
 if __name__ == "__main__":

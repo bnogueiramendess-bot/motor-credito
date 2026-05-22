@@ -8,6 +8,7 @@ const LEGACY_PERMISSION_COMPATIBILITY: Record<string, string[]> = {
   "credit.request.submit": ["credit_request_submit_approval"],
   "credit.approval.approve": ["credit_request_approve"],
   "credit.approval.reject": ["credit_request_reject"],
+  "credit.approval.queue.view": ["credit_request_validate", "credit_request_submit_approval", "credit_request_approve", "credit_request_reject", "credit.analysis.execute", "credit.request.submit", "credit.approval.approve", "credit.approval.reject"],
   "credit.analysis.execute": ["credit_request_validate"],
 };
 

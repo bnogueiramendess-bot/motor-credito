@@ -223,6 +223,8 @@ class CreditAnalysisMonitorItem(BaseModel):
     workflow_stage: str
     current_journey_step: int | None = None
     requested_limit: Decimal | None = None
+    recommended_limit: Decimal | None = None
+    financial_impact: Decimal | None = None
     suggested_limit: Decimal | None = None
     total_limit: Decimal | None = None
     approved_limit: Decimal | None = None
@@ -234,6 +236,8 @@ class CreditAnalysisMonitorItem(BaseModel):
     aging_days: int
     stage_aging_days: int = 0
     next_responsible_role: str
+    applicable_doa_code: str | None = None
+    applicable_doa_range: str | None = None
     available_actions: list[str]
 
 
@@ -250,6 +254,21 @@ class CreditAnalysisMonitorKpis(BaseModel):
 class CreditAnalysisMonitorResponse(BaseModel):
     items: list[CreditAnalysisMonitorItem]
     kpis: CreditAnalysisMonitorKpis
+    total: int
+    page: int
+    page_size: int
+
+
+class CreditAnalysisApprovalQueueKpis(BaseModel):
+    total: int = 0
+    awaiting_approval: int = 0
+    overdue_sla: int = 0
+    high_value: int = 0
+
+
+class CreditAnalysisApprovalQueueResponse(BaseModel):
+    items: list[CreditAnalysisMonitorItem]
+    kpis: CreditAnalysisApprovalQueueKpis
     total: int
     page: int
     page_size: int
