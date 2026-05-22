@@ -45,6 +45,8 @@ class UserContextResponse(BaseModel):
     company_id: int
     allowed_bu_ids: list[int]
     permissions: list[str]
+    is_administrator: bool = False
+    can_import_ar_aging: bool = False
 
 
 class BusinessUnitContextItem(BaseModel):

@@ -22,6 +22,8 @@ PROFILE_PERMISSION_CATALOG: dict[str, str] = {
     "users:manage": "Gerenciar usuarios.",
     "profiles:view": "Visualizar perfis.",
     "profiles:manage": "Gerenciar perfis.",
+    "approval.matrix:view": "Visualizar matriz de aprovacao.",
+    "approval.matrix:manage": "Gerenciar matriz de aprovacao.",
     "audit:view": "Visualizar auditoria.",
     "scope:all_bu": "Acesso total as unidades de negocio.",
 }

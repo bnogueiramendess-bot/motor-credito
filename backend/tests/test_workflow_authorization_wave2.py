@@ -65,28 +65,40 @@ class DummySession:
 class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
     def test_user_with_credit_analyst_role_can_execute_analysis(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=1), permissions=set())
-        with patch("app.services.workflow_authorization._has_workflow_role", return_value=True):
+        with patch(
+            "app.services.workflow_authorization.resolve_credit_workflow_action",
+            return_value=type("Ctx", (), {"allowed": True, "workflow_context": {"authorization_source": "workflow_role", "matched_roles": ["CREDIT_ANALYST"]}})(),
+        ):
             result = can_execute_credit_analysis(db=object(), current=current)  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertEqual(result.authorization_source, "workflow_role")
 
     def test_legacy_permission_still_allows_execute_analysis(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=2), permissions={"credit.analysis.execute"})
-        with patch("app.services.workflow_authorization._has_workflow_role", return_value=False):
+        with patch(
+            "app.services.workflow_authorization.resolve_credit_workflow_action",
+            return_value=type("Ctx", (), {"allowed": True, "workflow_context": {"authorization_source": "legacy_permission", "matched_roles": []}})(),
+        ):
             result = can_execute_credit_analysis(db=object(), current=current)  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertEqual(result.authorization_source, "legacy_permission")
 
     def test_user_without_workflow_role_and_without_legacy_permission_is_blocked(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=3), permissions=set())
-        with patch("app.services.workflow_authorization._has_workflow_role", return_value=False):
+        with patch(
+            "app.services.workflow_authorization.resolve_credit_workflow_action",
+            return_value=type("Ctx", (), {"allowed": False, "workflow_context": {"authorization_source": "denied", "matched_roles": []}})(),
+        ):
             result = can_execute_credit_analysis(db=object(), current=current)  # type: ignore[arg-type]
         self.assertFalse(result.allowed)
         self.assertEqual(result.authorization_source, "denied")
 
     def test_user_with_multiple_workflow_roles_is_supported(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=4), permissions=set())
-        with patch("app.services.workflow_authorization._has_workflow_role", side_effect=lambda *_args, **_kwargs: _args[2] == "CREDIT_ANALYST"):
+        with patch(
+            "app.services.workflow_authorization.resolve_credit_workflow_action",
+            return_value=type("Ctx", (), {"allowed": True, "workflow_context": {"authorization_source": "workflow_role", "matched_roles": ["CREDIT_ANALYST"]}})(),
+        ):
             result = can_execute_credit_analysis(db=object(), current=current)  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertEqual(result.workflow_role_matched, "CREDIT_ANALYST")

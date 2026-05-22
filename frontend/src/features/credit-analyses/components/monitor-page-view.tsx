@@ -13,8 +13,7 @@ import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use
 import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
-import { PermissionDeniedState } from "@/shared/components/states/permission-denied-state";
-import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
+import { getEffectivePermissions } from "@/shared/lib/auth/permissions";
 
 function mapNextStep(workflowStage: string): string {
   if (workflowStage === "financial_review") return "Em análise financeira";
@@ -122,6 +121,9 @@ export function MonitorPageView() {
     onSuccess: (_, analysisId) => {
       router.push(`/analises/${analysisId}/workspace`);
     },
+    onError: () => {
+      alert("Você não possui autorização para iniciar esta análise.");
+    },
     onSettled: () => setStartingAnalysisId(null),
   });
 
@@ -139,15 +141,6 @@ export function MonitorPageView() {
 
   if (permissions === null) {
     return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando permissões...</div>;
-  }
-
-  const canViewRequests = hasPermission("credit.requests.view", permissions);
-  const canExecuteAnalysis = hasPermission("credit.analysis.execute", permissions);
-  const canSubmitRequest = hasPermission("credit.request.submit", permissions);
-  const canViewDossier = hasPermission("clients.dossier.view", permissions);
-
-  if (!canViewRequests) {
-    return <PermissionDeniedState />;
   }
 
   if (monitorQuery.isLoading) {
@@ -267,7 +260,7 @@ export function MonitorPageView() {
                 <span key={`${item.analysis_id}-${label}`} className="whitespace-nowrap rounded-full border border-[#D7E1EC] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-medium text-[#475569]">{label}</span>
               ))}
                 </div>
-                <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">{formatCurrencyNoCents(item.suggested_limit ?? 0)}</div>
+                <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">{formatCurrencyNoCents(item.requested_limit ?? item.suggested_limit ?? 0)}</div>
                 <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">
                   {item.is_new_customer
                     ? (item.approved_limit != null ? formatCurrencyNoCents(item.approved_limit) : "-")
@@ -280,12 +273,17 @@ export function MonitorPageView() {
                 <div className={`whitespace-nowrap text-[12px] font-semibold ${getAgingTone(item.aging_days)}`}>{item.aging_days} dia(s)</div>
                 <div className="truncate whitespace-nowrap text-[12px] font-medium text-[#0F172A]">{mapNextStep(item.workflow_stage)}</div>
                 <div className="flex justify-start xl:justify-end">
-                  {item.available_actions.includes("view_tracking") && !item.available_actions.some((action) => ["start_analysis", "continue_analysis", "submit_approval", "review_decision", "view_dossier", "view_result"].includes(action)) ? (
+                  {item.available_actions.length === 0 ? (
+                    <button type="button" disabled className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-medium text-[#94A3B8]">
+                      Acesso não autorizado
+                    </button>
+                  ) : null}
+                  {item.available_actions.length > 0 && item.available_actions.includes("view_tracking") && !item.available_actions.some((action) => ["start_analysis", "continue_analysis", "submit_approval", "review_decision", "view_dossier", "view_result"].includes(action)) ? (
                     <button type="button" disabled title="O dossiê será disponibilizado após a conclusão da análise." className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-medium text-[#94A3B8]">
                       Acompanhar status <ChevronDown className="ml-2 h-4 w-4" />
                     </button>
-                  ) : (
-                    item.available_actions.includes("start_analysis") && canExecuteAnalysis ? (
+                  ) : item.available_actions.length > 0 ? (
+                    item.available_actions.includes("start_analysis") ? (
                       <button
                         type="button"
                         onClick={() => {
@@ -298,29 +296,18 @@ export function MonitorPageView() {
                         {startAnalysisMutation.isPending && startingAnalysisId === item.analysis_id ? "Iniciando..." : mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />
                       </button>
                     ) : (
-                      (item.available_actions.includes("continue_analysis") && !canExecuteAnalysis) ||
-                      (item.available_actions.includes("start_analysis") && !canExecuteAnalysis) ||
-                      (item.available_actions.includes("submit_approval") && !canSubmitRequest) ||
-                      ((item.available_actions.includes("view_dossier") || item.available_actions.includes("view_result")) && !canViewDossier) ? (
-                        <button type="button" disabled className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-medium text-[#94A3B8]">
-                          Acompanhar status <ChevronDown className="ml-2 h-4 w-4" />
-                        </button>
-                      ) : (
                       <Link
                         href={
                           item.available_actions.includes("continue_analysis")
-                            ? canExecuteAnalysis
-                              ? `/analises/${item.analysis_id}/workspace`
-                              : `/analises/${item.analysis_id}`
+                            ? `/analises/${item.analysis_id}/workspace`
                             : `/analises/${item.analysis_id}`
                         }
                         className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#1D4ED8] hover:bg-[#F8FAFC]"
                       >
                         {mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />
                       </Link>
-                      )
                     )
-                  )}
+                  ) : null}
                 </div>
               </article>
             ))}

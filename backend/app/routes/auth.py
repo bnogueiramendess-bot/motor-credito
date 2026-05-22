@@ -33,18 +33,36 @@ from app.services.security import (
     hash_token,
     verify_password,
 )
+from app.core.security import (
+    DEFAULT_CLIENTS_PERMISSIONS,
+    DEFAULT_CREDIT_WORKFLOW_PERMISSIONS,
+    ADMIN_CONTROLLED_PERMISSIONS,
+    ADMINISTRATOR_BASE_PERMISSIONS,
+)
+from app.services.permission_catalog import PROFILE_PERMISSION_CATALOG
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _build_user_context(db: Session, user: User) -> UserContextResponse:
-    permissions = list(
+    role_permissions = set(
         db.scalars(
             select(Permission.key)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
             .where(RolePermission.role_id == user.role_id)
         ).all()
     )
+    is_administrator = (
+        user.role.name == "administrador_master"
+        or ADMINISTRATOR_BASE_PERMISSIONS.issubset(role_permissions)
+        or set(PROFILE_PERMISSION_CATALOG.keys()).issubset(role_permissions)
+    )
+    can_import_ar_aging = "clients.aging.import" in role_permissions
+    effective_permissions = set(role_permissions)
+    effective_permissions.update(DEFAULT_CLIENTS_PERMISSIONS)
+    effective_permissions.update(DEFAULT_CREDIT_WORKFLOW_PERMISSIONS)
+    if is_administrator:
+        effective_permissions.update(ADMIN_CONTROLLED_PERMISSIONS)
     bu_ids = list(db.scalars(select(UserBusinessUnitScope.business_unit_id).where(UserBusinessUnitScope.user_id == user.id)).all())
     return UserContextResponse(
         id=user.id,
@@ -53,7 +71,9 @@ def _build_user_context(db: Session, user: User) -> UserContextResponse:
         role=user.role.name,
         company_id=user.company_id,
         allowed_bu_ids=bu_ids,
-        permissions=permissions,
+        permissions=sorted(effective_permissions),
+        is_administrator=is_administrator,
+        can_import_ar_aging=can_import_ar_aging,
     )
 
 

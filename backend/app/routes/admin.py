@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -81,6 +82,9 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 REQUIRED_CONFIRMATION = "RESET_OPERATIONAL_DATA"
 
 SYSTEM_PROFILE_NAMES = {"administrador_master"}
+ADMINISTRATOR_PROFILE_NAME = "administrador"
+AR_AGING_IMPORT_PERMISSION_KEY = "clients.aging.import"
+STANDARD_USER_ROLE_NAME = "usuario_padrao"
 
 
 class ResetOperationalDataRequest(BaseModel):
@@ -238,6 +242,137 @@ def _role_to_profile_read(db: Session, role: Role) -> ProfileRead:
     )
 
 
+def _role_has_full_access(db: Session, role_id: int) -> bool:
+    role_permission_keys = set(
+        db.scalars(
+            select(Permission.key)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == role_id)
+        ).all()
+    )
+    return set(PROFILE_PERMISSION_CATALOG.keys()).issubset(role_permission_keys)
+
+
+def _role_has_permission(db: Session, role_id: int, permission_key: str) -> bool:
+    found = db.scalar(
+        select(RolePermission.id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .where(RolePermission.role_id == role_id, Permission.key == permission_key)
+        .limit(1)
+    )
+    return found is not None
+
+
+def _get_or_create_role_with_extra_permissions(
+    db: Session,
+    *,
+    company_id: int,
+    base_role: Role,
+    extra_permission_keys: list[str],
+) -> Role:
+    _ensure_permissions_exist(db)
+    key_suffix = "_".join(sorted(extra_permission_keys)).replace(".", "_").replace(":", "_")
+    digest = hashlib.sha1(key_suffix.encode("utf-8")).hexdigest()[:6].upper()
+    code = f"PERF-X-{base_role.id}-{digest}"
+    role = db.scalar(select(Role).where(Role.company_id == company_id, Role.code == code))
+    if role is None:
+        role = Role(
+            company_id=company_id,
+            code=code,
+            name=f"{base_role.name} + AR Aging Import",
+            description=f"Perfil derivado de {base_role.name} com permissões adicionais específicas.",
+            is_active=True,
+            is_system=True,
+        )
+        db.add(role)
+        db.flush()
+
+    role.is_active = True
+    role.is_system = True
+    db.query(RolePermission).filter(RolePermission.role_id == role.id).delete()
+
+    base_permission_keys = list(
+        db.scalars(
+            select(Permission.key)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == base_role.id)
+        ).all()
+    )
+    target_keys = sorted(set(base_permission_keys + extra_permission_keys))
+    permissions = list(db.scalars(select(Permission).where(Permission.key.in_(target_keys))).all())
+    for permission in permissions:
+        db.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    db.flush()
+    return role
+
+
+def _get_or_create_administrator_role(db: Session, company_id: int) -> Role:
+    _ensure_permissions_exist(db)
+    admin_role = db.scalar(
+        select(Role).where(
+            Role.company_id == company_id,
+            Role.name.in_([ADMINISTRATOR_PROFILE_NAME, "administrador_master"]),
+        )
+    )
+    if admin_role is None:
+        admin_role = Role(
+            company_id=company_id,
+            code=_next_profile_code(db, company_id),
+            name=ADMINISTRATOR_PROFILE_NAME,
+            description="Perfil administrativo com acesso integral à plataforma.",
+            is_active=True,
+            is_system=True,
+        )
+        db.add(admin_role)
+        db.flush()
+
+    admin_role.is_active = True
+    admin_role.is_system = True
+    permission_by_key = {
+        permission.key: permission
+        for permission in db.scalars(select(Permission).where(Permission.key.in_(PROFILE_PERMISSION_CATALOG.keys()))).all()
+    }
+    existing_keys = set(
+        db.scalars(
+            select(Permission.key)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == admin_role.id)
+        ).all()
+    )
+    for key in PROFILE_PERMISSION_CATALOG.keys():
+        if key in existing_keys:
+            continue
+        permission = permission_by_key.get(key)
+        if permission is None:
+            continue
+        db.add(RolePermission(role_id=admin_role.id, permission_id=permission.id))
+    db.flush()
+    return admin_role
+
+
+def _get_or_create_standard_user_role(db: Session, company_id: int) -> Role:
+    role = db.scalar(
+        select(Role).where(
+            Role.company_id == company_id,
+            Role.name == STANDARD_USER_ROLE_NAME,
+        )
+    )
+    if role is None:
+        role = Role(
+            company_id=company_id,
+            code=_next_profile_code(db, company_id),
+            name=STANDARD_USER_ROLE_NAME,
+            description="Papel técnico padrão para usuários sem privilégios administrativos.",
+            is_active=True,
+            is_system=True,
+        )
+        db.add(role)
+        db.flush()
+    role.is_active = True
+    role.is_system = True
+    return role
+
+
 def _user_to_read(db: Session, user: User) -> UserRead:
     bu_ids = list(db.scalars(select(UserBusinessUnitScope.business_unit_id).where(UserBusinessUnitScope.user_id == user.id)).all())
     bu_names = list(
@@ -274,6 +409,8 @@ def _user_to_read(db: Session, user: User) -> UserRead:
         email=user.email,
         phone=user.phone,
         profile_name=user.role.name,
+        is_administrator=_role_has_full_access(db, user.role_id),
+        can_import_ar_aging=_role_has_permission(db, user.role_id, AR_AGING_IMPORT_PERMISSION_KEY),
         is_active=user.is_active,
         first_access_pending=user.must_change_password,
         business_unit_ids=bu_ids,
@@ -601,7 +738,9 @@ def invite_user(
         raise HTTPException(status_code=400, detail="Dominio de email nao permitido.")
 
     role: Role | None = None
-    if payload.profile_id is not None:
+    if payload.is_administrator:
+        role = _get_or_create_administrator_role(db, current.user.company_id)
+    elif payload.profile_id is not None:
         role = db.scalar(
             select(Role).where(
                 Role.id == payload.profile_id,
@@ -617,8 +756,17 @@ def invite_user(
                 Role.is_active.is_(True),
             )
         )
+    if role is None and not payload.is_administrator:
+        role = _get_or_create_standard_user_role(db, current.user.company_id)
     if role is None:
-        raise HTTPException(status_code=400, detail="Perfil invalido.")
+        raise HTTPException(status_code=400, detail="Configuração de acesso inválida.")
+    if payload.can_import_ar_aging and not payload.is_administrator:
+        role = _get_or_create_role_with_extra_permissions(
+            db,
+            company_id=current.user.company_id,
+            base_role=role,
+            extra_permission_keys=[AR_AGING_IMPORT_PERMISSION_KEY],
+        )
 
     existing_user = db.scalar(select(User).where(User.email == email))
     if existing_user is not None:
@@ -690,15 +838,27 @@ def update_user(
     if user is None or user.company_id != current.user.company_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado.")
 
-    role = db.scalar(
-        select(Role).where(
-            Role.id == payload.profile_id,
-            Role.company_id == current.user.company_id,
-            Role.is_active.is_(True),
+    if payload.is_administrator:
+        role = _get_or_create_administrator_role(db, current.user.company_id)
+    elif payload.profile_id is not None:
+        role = db.scalar(
+            select(Role).where(
+                Role.id == payload.profile_id,
+                Role.company_id == current.user.company_id,
+                Role.is_active.is_(True),
+            )
         )
-    )
+    else:
+        role = _get_or_create_standard_user_role(db, current.user.company_id)
     if role is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Perfil invalido.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Configuração de acesso inválida.")
+    if payload.can_import_ar_aging and not payload.is_administrator:
+        role = _get_or_create_role_with_extra_permissions(
+            db,
+            company_id=current.user.company_id,
+            base_role=role,
+            extra_permission_keys=[AR_AGING_IMPORT_PERMISSION_KEY],
+        )
 
     user.full_name = payload.full_name.strip()
     user.phone = payload.phone.strip()
@@ -1062,7 +1222,7 @@ def update_user_workflow_roles(
 @router.get("/approval-matrix/options", response_model=ApprovalMatrixOptionsRead)
 def get_approval_matrix_options(
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["profiles:view"])),
+    current: CurrentUser = Depends(require_permissions(["approval.matrix:view"])),
 ) -> ApprovalMatrixOptionsRead:
     workflow_roles = []
     if _table_exists(db, "workflow_roles"):
@@ -1092,7 +1252,7 @@ def get_approval_matrix_options(
 @router.get("/approval-matrix", response_model=list[ApprovalMatrixRuleRead])
 def get_approval_matrix_rules(
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["profiles:view"])),
+    current: CurrentUser = Depends(require_permissions(["approval.matrix:view"])),
 ) -> list[ApprovalMatrixRuleRead]:
     if not _table_exists(db, "approval_matrix_rules"):
         return []
@@ -1111,7 +1271,7 @@ def get_approval_matrix_rules(
 def create_approval_matrix_rule_endpoint(
     payload: ApprovalMatrixRuleWrite,
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["profiles:manage"])),
+    current: CurrentUser = Depends(require_permissions(["approval.matrix:manage"])),
 ) -> ApprovalMatrixRuleRead:
     if not _table_exists(db, "approval_matrix_rules") or not _table_exists(db, "approval_matrix_rule_roles"):
         raise HTTPException(
@@ -1139,7 +1299,7 @@ def create_approval_matrix_rule_endpoint(
 @router.get("/approval-matrix/next-code")
 def get_approval_matrix_next_code(
     db: Session = Depends(get_db),
-    _: CurrentUser = Depends(require_permissions(["profiles:view"])),
+    _: CurrentUser = Depends(require_permissions(["approval.matrix:view"])),
 ) -> dict[str, str]:
     if not _table_exists(db, "approval_matrix_rules"):
         return {"code": "DOA-0001"}
@@ -1151,7 +1311,7 @@ def update_approval_matrix_rule_endpoint(
     rule_id: int,
     payload: ApprovalMatrixRuleWrite,
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(require_permissions(["profiles:manage"])),
+    current: CurrentUser = Depends(require_permissions(["approval.matrix:manage"])),
 ) -> ApprovalMatrixRuleRead:
     if not _table_exists(db, "approval_matrix_rules") or not _table_exists(db, "approval_matrix_rule_roles"):
         raise HTTPException(

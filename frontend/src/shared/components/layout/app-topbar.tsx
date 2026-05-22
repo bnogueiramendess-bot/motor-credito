@@ -69,6 +69,14 @@ function getRoleFromCookie() {
   }
 }
 
+function readBooleanCookie(name: string): boolean {
+  if (typeof document === "undefined") return false;
+  const cookie = document.cookie.split("; ").find((item) => item.startsWith(`${name}=`));
+  if (!cookie) return false;
+  const value = cookie.split("=")[1] ?? "";
+  return decodeURIComponent(value).trim().toLowerCase() === "true";
+}
+
 function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
@@ -156,20 +164,23 @@ export function AppTopbar() {
   const [currentUserRole, setCurrentUserRole] = useState("");
   const [currentUserName, setCurrentUserName] = useState("Usuário");
   const [currentLoginName, setCurrentLoginName] = useState("Usuário");
+  const [isAdministrator, setIsAdministrator] = useState(false);
+  const [canImportArAging, setCanImportArAging] = useState(false);
 
   useEffect(() => {
     setPermissions(getPermissionsFromCookie());
     setCurrentUserRole(getRoleFromCookie());
     setCurrentUserName(toFirstAndSecondName(getCurrentUserDisplayName()));
     setCurrentLoginName(getCurrentUserLoginName());
+    setIsAdministrator(readBooleanCookie("gcc_is_administrator"));
+    setCanImportArAging(readBooleanCookie("gcc_can_import_ar_aging"));
   }, []);
 
-  const canManageCompany = hasPermission("company:manage", permissions);
-  const canManageBusinessUnits = hasPermission("bu:manage", permissions);
-  const canManageUsers = hasPermission("users:manage", permissions);
-  const canViewProfiles = hasPermission("profiles:view", permissions);
-  const canImportAging = hasPermission("clients.aging.import", permissions);
-  const canViewImportsHistory = hasPermission("clients.imports.history.view", permissions);
+  const canManageCompany = isAdministrator;
+  const canManageBusinessUnits = isAdministrator;
+  const canManageUsers = isAdministrator;
+  const canImportAging = canImportArAging;
+  const canViewImportsHistory = canImportArAging;
   const canResetBase = currentUserRole === "administrador_master";
 
   const visibleNavGroups = useMemo(
@@ -338,12 +349,7 @@ export function AppTopbar() {
                     <Link href="/admin/users" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
                       Gestão de Usuários
                     </Link>
-                    {canViewProfiles ? (
-                      <Link href="/admin/profiles" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
-                        Gestão de Perfis
-                      </Link>
-                    ) : null}
-                    {canViewProfiles ? (
+                    {isAdministrator ? (
                       <Link href="/admin/approval-matrix" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
                         Matriz de Aprovação
                       </Link>
@@ -390,7 +396,7 @@ export function AppTopbar() {
               ) : null}
             </div>
 
-            {(canImportAging || canViewImportsHistory) ? (
+            {canImportAging ? (
               <button
                 type="button"
                 onClick={() => setIsImportDrawerOpen(true)}

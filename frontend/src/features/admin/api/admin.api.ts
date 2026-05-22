@@ -37,6 +37,8 @@ export type AdminUserDto = {
   email: string;
   phone: string | null;
   profile_name: string;
+  is_administrator: boolean;
+  can_import_ar_aging: boolean;
   is_active: boolean;
   first_access_pending: boolean;
   business_unit_ids: number[];
@@ -74,7 +76,9 @@ export type InviteUserPayload = {
   full_name: string;
   email: string;
   phone: string;
-  profile_id: number;
+  profile_id: number | null;
+  is_administrator?: boolean;
+  can_import_ar_aging?: boolean;
   business_unit_ids: number[];
   workflow_role_assignments?: WorkflowRoleAssignmentPayload[];
 };
@@ -87,7 +91,9 @@ export type InviteUserResponse = {
 export type UpdateAdminUserPayload = {
   full_name: string;
   phone: string;
-  profile_id: number;
+  profile_id: number | null;
+  is_administrator?: boolean;
+  can_import_ar_aging?: boolean;
   business_unit_ids: number[];
   workflow_role_assignments?: WorkflowRoleAssignmentPayload[];
 };

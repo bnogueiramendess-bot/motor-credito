@@ -1,5 +1,5 @@
-import { AdminProfilesPageView } from "@/features/admin/components/admin-profiles-page-view";
+import { redirect } from "next/navigation";
 
 export default function AdminProfilesPage() {
-  return <AdminProfilesPageView />;
+  redirect("/admin/users");
 }

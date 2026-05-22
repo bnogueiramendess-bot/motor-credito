@@ -1,11 +1,10 @@
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.credit_analysis import CreditAnalysis
-from app.models.enums import AnalysisStatus, FinalDecision
+from app.models.enums import FinalDecision
 from app.models.score_result import ScoreResult
 from app.schemas.final_decision import FinalDecisionApplyRequest
 
@@ -68,8 +67,6 @@ def apply_final_decision(
 
     analysis.final_decision = payload.final_decision
     analysis.final_limit = final_limit
-    analysis.analysis_status = AnalysisStatus.COMPLETED
-    analysis.completed_at = datetime.now(timezone.utc)
     analysis.assigned_analyst_name = payload.analyst_name
     analysis.analyst_notes = payload.analyst_notes
 

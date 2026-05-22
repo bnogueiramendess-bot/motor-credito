@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import Numeric, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -69,7 +70,6 @@ from app.schemas.analysis_request import (
     AnalysisRequestMetadataRead,
     AnalysisRequestMetadataUpsert,
 )
-from app.services.final_decision import FinalDecisionError, apply_final_decision
 from app.services.protocol import generate_protocol_number
 from app.services.decision import DecisionCalculationError, calculate_and_apply_decision
 from app.services.score import ScoreCalculationError, calculate_and_upsert_score
@@ -90,13 +90,33 @@ from app.services.workflow_authorization import (
     can_execute_credit_analysis,
     can_issue_credit_opinion,
     can_submit_credit_analysis,
-    can_approve_credit_decision,
-    can_reject_credit_decision,
+    resolve_credit_workflow_action,
+    resolve_credit_workflow_available_actions,
 )
 from app.services.approval_matrix import resolve_required_approval_roles
+from app.services.workflow_transition_engine import resolve_credit_workflow_transition
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
 logger = logging.getLogger(__name__)
+
+
+class WorkflowActionRequest(BaseModel):
+    action: str
+    justification: str | None = None
+
+
+class WorkflowActionResponse(BaseModel):
+    analysis_id: int
+    current_status: str
+    next_status: str
+    current_owner: str | None = None
+    next_owner: str | None = None
+    current_stage: str
+    next_stage: str
+    timeline_event: str
+    audit_event: str
+    available_actions: list[str]
+    workflow_context: dict
 
 LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
     "credit.request.create": ("credit.request.create",),
@@ -406,6 +426,51 @@ def _current_status_value(analysis: CreditAnalysis) -> str:
     return "in_progress"
 
 
+def _resolve_monitor_requested_limit(analysis: CreditAnalysis) -> Decimal | None:
+    if analysis.requested_limit is not None and analysis.requested_limit > Decimal("0"):
+        return analysis.requested_limit
+    if analysis.suggested_limit is not None and analysis.suggested_limit > Decimal("0"):
+        return analysis.suggested_limit
+    if analysis.final_limit is not None and analysis.final_limit > Decimal("0"):
+        return analysis.final_limit
+    return analysis.requested_limit
+
+
+def _to_decimal_or_none(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(str(value))
+        return parsed
+    except Exception:
+        return None
+
+
+def _resolve_monitor_requested_limit_with_legacy_context(
+    analysis: CreditAnalysis,
+    *,
+    triage_data: dict,
+    audit_metadata: dict | None,
+) -> Decimal | None:
+    direct = _resolve_monitor_requested_limit(analysis)
+    if direct is not None and direct > Decimal("0"):
+        return direct
+
+    if isinstance(triage_data, dict):
+        for key in ("requested_limit", "suggested_limit"):
+            candidate = _to_decimal_or_none(triage_data.get(key))
+            if candidate is not None and candidate > Decimal("0"):
+                return candidate
+
+    if isinstance(audit_metadata, dict):
+        for key in ("requested_limit", "suggested_limit"):
+            candidate = _to_decimal_or_none(audit_metadata.get(key))
+            if candidate is not None and candidate > Decimal("0"):
+                return candidate
+
+    return direct
+
+
 def _clamp_journey_step(step: int | None) -> int | None:
     if step is None:
         return None
@@ -575,91 +640,29 @@ def _attach_recommendation_classification(db: Session, analysis: CreditAnalysis)
     analysis.decision_memory_json = updated_memory
 
 
-def _resolve_owner_role_for_status(status_value: str) -> str:
-    if status_value == "in_approval":
-        return "aprovador"
-    if status_value in {"approved", "rejected"}:
-        return "workflow_encerrado"
-    return "analista_financeiro"
-
-
-def _apply_owner_transition(
-    analysis: CreditAnalysis,
-    *,
-    new_status: str,
-    owner_user_id: int | None,
-    owner_role: str,
-    transition_at: datetime,
-) -> None:
-    analysis.last_owner_user_id = analysis.current_owner_user_id
-    analysis.last_owner_role = analysis.current_owner_role
-    analysis.current_owner_user_id = owner_user_id
-    analysis.current_owner_role = owner_role
-    analysis.current_stage_started_at = transition_at
-    analysis.assigned_at = transition_at
-
-
-def _build_event_payload(
-    *,
-    analysis: CreditAnalysis,
-    previous_status: str | None,
-    new_status: str,
-    current: CurrentUser | None,
-    bu_name: str | None,
-    stage: str | None = None,
-    extra: dict | None = None,
-) -> dict:
-    payload = {
-        "analysis_id": analysis.id,
-        "business_unit": bu_name,
-        "stage": stage or _resolve_workflow_stage(new_status),
-        "previous_status": previous_status,
-        "new_status": new_status,
-        "current_owner_user_id": analysis.current_owner_user_id,
-        "current_owner_role": analysis.current_owner_role,
-        "last_owner_user_id": analysis.last_owner_user_id,
-        "last_owner_role": analysis.last_owner_role,
-        "changed_by_user_id": current.user.id if current else None,
-        "changed_by_email": current.user.email if current else None,
-    }
-    if extra:
-        payload.update(extra)
-    return payload
-
-
 def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
     allowed_bu_names = get_user_allowed_business_units(db, current)
     has_all_scope = user_has_all_bu_scope(current)
     analysis_bu = resolve_analysis_business_unit(db, analysis)
     assert_bu_in_scope(allowed_bu_names, analysis_bu, has_all_scope=has_all_scope)
 
-    can_validate = can_execute_credit_analysis(db, current).allowed or _has_any_permission(
-        current, "credit_request_validate", "credit.analysis.execute"
-    )
-    can_opinion = can_issue_credit_opinion(db, current).allowed or _has_any_permission(
-        current, "credit.dossier.edit", "credit.request.submit", "credit_request_submit_approval"
-    )
-    can_approve = _has_any_permission(current, "credit_request_approve", "credit.approval.approve")
-    can_reject = _has_any_permission(current, "credit_request_reject", "credit.approval.reject")
-    if can_validate or can_opinion or can_approve or can_reject or "scope:all_bu" in current.permissions:
+    visibility_checks = [
+        resolve_credit_workflow_action(db, current, action="access_workspace", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="continue_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="submit_approval", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="approve", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="reject", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="request_maintenance", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="return_to_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="view_dossier", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="view_result", analysis=analysis, business_unit=analysis_bu).allowed,
+    ]
+    if any(visibility_checks):
         return
-    audit = db.scalar(
-        select(AuditLog).where(
-            AuditLog.resource == "credit_analysis",
-            AuditLog.resource_id == str(analysis.id),
-            AuditLog.action == "credit_request_triage_submit",
-        ).order_by(AuditLog.id.desc())
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Usuário sem autorização explícita para acessar esta etapa técnica do workflow.",
     )
-    requester_email = None
-    if audit and isinstance(audit.metadata_json, dict):
-        requester_email = str(audit.metadata_json.get("requested_by") or "").strip().lower() or None
-    is_owner = requester_email == current.user.email.strip().lower()
-    owner_can_view_dossier = analysis.final_decision in {FinalDecision.APPROVED, FinalDecision.REJECTED}
-    if is_owner and not owner_can_view_dossier:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="O dossie sera disponibilizado ao solicitante apos a conclusao da analise.",
-        )
 
 
 def _analysis_documents_storage_root() -> Path:
@@ -959,12 +962,7 @@ def create_credit_analysis_draft(
         exposure_amount=Decimal("0"),
         annual_revenue_estimated=Decimal("0"),
         suggested_limit=Decimal("0"),
-        analysis_status=AnalysisStatus.CREATED,
         assigned_analyst_name=None,
-        current_owner_user_id=None,
-        current_owner_role="comercial_solicitante",
-        last_owner_user_id=current.user.id,
-        last_owner_role="comercial_solicitante",
         assigned_at=now_utc,
         current_stage_started_at=now_utc,
         decision_memory_json={
@@ -978,40 +976,15 @@ def create_credit_analysis_draft(
     )
     db.add(analysis)
     db.flush()
-    db.add(
-        DecisionEvent(
-            credit_analysis_id=analysis.id,
-            event_type="analysis_created",
-            actor_type=ActorType.USER,
-            actor_name=current.user.full_name,
-            description="Rascunho da solicitação criado a partir da consulta de CNPJ.",
-            event_payload_json=_build_event_payload(
-                analysis=analysis,
-                previous_status=None,
-                new_status="pending",
-                current=current,
-                bu_name=selected_bu_name,
-                stage="commercial_draft",
-                extra={"cnpj": normalized_cnpj, "source": source},
-            ),
-        )
+    transition = resolve_credit_workflow_transition(
+        db,
+        current,
+        analysis,
+        action="create_request",
+        payload={"justification": "Rascunho criado a partir da consulta de CNPJ."},
     )
-    db.add(
-        AuditLog(
-            actor_user_id=current.user.id,
-            action="credit_request_draft_create",
-            resource="credit_analysis",
-            resource_id=str(analysis.id),
-            metadata_json={
-                "requested_by": current.user.email,
-                "cnpj": normalized_cnpj,
-                "source": source,
-                "business_unit": selected_bu_name,
-                "analysis_id": analysis.id,
-            },
-            notes="Rascunho criado automaticamente na Etapa 1.",
-        )
-    )
+    if not transition.allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao para criar solicitacao.")
     db.commit()
     db.refresh(analysis)
     return CreditAnalysisDraftCreateResponse(
@@ -1129,12 +1102,7 @@ def submit_credit_analysis_from_triage(
         exposure_amount=Decimal("0"),
         annual_revenue_estimated=Decimal("0"),
         suggested_limit=payload.suggested_limit,
-        analysis_status=AnalysisStatus.CREATED,
         assigned_analyst_name=None,
-        current_owner_user_id=None,
-        current_owner_role="analista_financeiro",
-        last_owner_user_id=current.user.id,
-        last_owner_role="comercial_solicitante",
         assigned_at=now_utc,
         current_stage_started_at=now_utc,
         decision_memory_json={
@@ -1159,38 +1127,15 @@ def submit_credit_analysis_from_triage(
     )
     db.add(analysis)
     db.flush()
-
-    db.add(
-        DecisionEvent(
-            credit_analysis_id=analysis.id,
-            event_type="analysis_created",
-            actor_type=ActorType.USER,
-            actor_name=current.user.full_name,
-            description="Solicitacao de analise criada e encaminhada para fila financeira.",
-            event_payload_json=_build_event_payload(
-                analysis=analysis,
-                previous_status=None,
-                new_status="pending",
-                current=current,
-                bu_name=selected_bu_name,
-                stage="commercial_submitted",
-                extra={
-                "source": payload.source,
-                "cnpj": normalized_cnpj,
-                "suggested_limit": str(payload.suggested_limit),
-                "initial_status": "pending",
-                "is_early_review_request": payload.is_early_review_request,
-                "early_review_justification": early_justification if payload.is_early_review_request else None,
-                "previous_analysis_id": payload.previous_analysis_id or (recent_analysis.id if recent_analysis else None),
-                "reanalysis_available_at": (
-                    (recent_analysis.created_at + timedelta(days=REANALYSIS_COOLDOWN_DAYS)).isoformat()
-                    if recent_analysis
-                    else None
-                ),
-                },
-            ),
-        )
+    transition = resolve_credit_workflow_transition(
+        db,
+        current,
+        analysis,
+        action="submit_request",
+        payload={"justification": "Solicitacao criada e encaminhada para fila financeira."},
     )
+    if not transition.allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao para submeter solicitacao.")
 
     db.add(
         AuditLog(
@@ -1203,19 +1148,11 @@ def submit_credit_analysis_from_triage(
                 "cnpj": normalized_cnpj,
                 "source": payload.source,
                 "suggested_limit": str(payload.suggested_limit),
-                "initial_status": "pending",
                 "analysis_id": analysis.id,
-                "current_owner_user_id": analysis.current_owner_user_id,
-                "current_owner_role": analysis.current_owner_role,
                 "is_early_review_request": payload.is_early_review_request,
                 "business_unit": selected_bu_name,
                 "early_review_justification": early_justification if payload.is_early_review_request else None,
                 "previous_analysis_id": payload.previous_analysis_id or (recent_analysis.id if recent_analysis else None),
-                "reanalysis_available_at": (
-                    (recent_analysis.created_at + timedelta(days=REANALYSIS_COOLDOWN_DAYS)).isoformat()
-                    if recent_analysis
-                    else None
-                ),
             },
             notes="Solicitacao enviada para analise financeira.",
         )
@@ -1612,33 +1549,21 @@ def create_credit_analysis(
     analysis = CreditAnalysis(
         **payload.model_dump(),
         protocol_number=generate_protocol_number(db),
-        analysis_status=AnalysisStatus.CREATED,
-        current_owner_role="analista_financeiro",
-        last_owner_user_id=current.user.id,
-        last_owner_role="comercial_solicitante",
         assigned_at=now_utc,
         current_stage_started_at=now_utc,
     )
     db.add(analysis)
     db.flush()
-    _enforce_technical_access_or_403(db, current, analysis)
-
-    initial_event = DecisionEvent(
-        credit_analysis_id=analysis.id,
-        event_type="analysis_created",
-        actor_type=ActorType.USER,
-        actor_name=current.user.full_name or current.user.email,
-        description="Analise criada e encaminhada para fila financeira.",
-        event_payload_json=_build_event_payload(
-            analysis=analysis,
-            previous_status=None,
-            new_status="pending",
-            current=current,
-            bu_name=resolve_analysis_business_unit(db, analysis),
-            stage="commercial_submitted",
-        ),
+    transition = resolve_credit_workflow_transition(
+        db,
+        current,
+        analysis,
+        action="submit_request",
+        payload={"justification": "Analise criada e encaminhada para fila financeira."},
     )
-    db.add(initial_event)
+    if not transition.allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao para submeter solicitacao.")
+    _enforce_technical_access_or_403(db, current, analysis)
 
     try:
         db.commit()
@@ -1919,15 +1844,8 @@ def list_credit_analyses_monitor(
 ) -> CreditAnalysisMonitorResponse:
     page = max(page, 1)
     page_size = min(max(page_size, 1), 100)
-    can_execute_by_workflow = can_execute_credit_analysis(db, current).allowed
-    can_submit_by_workflow = can_submit_credit_analysis(db, current).allowed
     can_view_own = _has_any_permission(current, "credit_request_view_own", "credit.requests.view")
-    can_validate = can_execute_by_workflow or _has_any_permission(current, "credit_request_validate", "credit.analysis.execute")
-    can_submit_approval = can_submit_by_workflow or _has_any_permission(current, "credit_request_submit_approval", "credit.request.submit")
-    can_approve = _has_any_permission(current, "credit_request_approve", "credit.approval.approve")
-    can_reject = _has_any_permission(current, "credit_request_reject", "credit.approval.reject")
-    can_view_bu = _has_any_permission(current, "credit_request_view_bu", "scope:all_bu")
-    if not any([can_view_own, can_validate, can_submit_approval, can_approve, can_reject, can_view_bu]):
+    if not can_view_own and not current.bu_ids and "scope:all_bu" not in current.permissions:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para visualizar o monitor de solicitacoes.")
 
     bu_context = resolve_business_unit_context(db, current, business_unit_context)
@@ -1999,46 +1917,30 @@ def list_credit_analyses_monitor(
         )
         requester_name = None
         requester_email = None
-        if audit and isinstance(audit.metadata_json, dict):
-            requester_email = str(audit.metadata_json.get("requested_by") or "").strip().lower() or None
+        audit_metadata = audit.metadata_json if audit and isinstance(audit.metadata_json, dict) else None
+        if audit_metadata and isinstance(audit_metadata, dict):
+            requester_email = str(audit_metadata.get("requested_by") or "").strip().lower() or None
             requester_name = requester_email
 
-        if can_view_own and not any([can_validate, can_submit_approval, can_approve, can_reject, can_view_bu]):
+        if can_view_own and requester_email == current.user.email.strip().lower():
+            requester_only = True
+        else:
+            requester_only = False
+        if requester_only:
             if requester_email != current.user.email.strip().lower():
-                continue
-        elif can_approve and not can_validate:
-            if status_value != "in_approval":
-                continue
-        elif can_validate:
-            if status_value in {"approved", "rejected"}:
                 continue
 
         is_early = bool(triage_data.get("is_early_review_request"))
         is_new_customer = not bool(bu_name)
         has_recent = bool(triage_data.get("has_recent_analysis"))
-        available_actions: list[str] = []
-        is_requester_only = can_view_own and not any([can_validate, can_submit_approval, can_approve, can_reject, can_view_bu])
-        if is_requester_only:
-            if status_value in {"approved", "rejected"}:
-                available_actions.extend(["view_dossier", "view_result"])
-            else:
-                available_actions.append("view_tracking")
-        else:
-            if can_validate and status_value == "pending":
-                available_actions.append("start_analysis")
-            if can_validate and status_value in {"in_progress"}:
-                available_actions.append("continue_analysis")
-            if can_validate and can_submit_approval and status_value in {"in_progress"}:
-                available_actions.append("submit_approval")
-            if can_approve and status_value == "in_approval":
-                approval_auth = can_approve_credit_decision(db, current, analysis)
-                rejection_auth = can_reject_credit_decision(db, current, analysis)
-                if approval_auth.allowed or rejection_auth.allowed:
-                    available_actions.append("review_decision")
-            if status_value in {"approved", "rejected"}:
-                available_actions.append("view_result")
-            if can_view_own and requester_email == current.user.email.strip().lower() and status_value not in {"approved", "rejected"}:
-                available_actions.append("view_tracking")
+        available_actions = resolve_credit_workflow_available_actions(
+            db,
+            current,
+            analysis=analysis,
+            business_unit=bu_name,
+        )
+        if not available_actions:
+            continue
         next_role = "analista_financeiro"
         if stage == "pending_approval":
             next_role = "aprovador"
@@ -2064,6 +1966,11 @@ def list_credit_analyses_monitor(
             status_label=_status_label(status_value),
             workflow_stage=stage,
             current_journey_step=_resolve_persisted_journey_step(db, analysis),
+            requested_limit=_resolve_monitor_requested_limit_with_legacy_context(
+                analysis,
+                triage_data=triage_data,
+                audit_metadata=audit_metadata,
+            ),
             suggested_limit=analysis.suggested_limit,
             total_limit=portfolio[2] or Decimal("0"),
             approved_limit=analysis.final_limit,
@@ -2244,61 +2151,15 @@ def start_credit_analysis(
     _enforce_technical_access_or_403(db, current, analysis)
 
     if analysis.analysis_status == AnalysisStatus.CREATED:
-        transition_at = datetime.now(timezone.utc)
-        previous_status = _current_status_value(analysis)
-        analysis.analysis_status = AnalysisStatus.IN_PROGRESS
-        persisted_current, persisted_last = _get_journey_progress(analysis)
-        _set_journey_progress(
+        transition = resolve_credit_workflow_transition(
+            db,
+            current,
             analysis,
-            current_step=max(_clamp_journey_step(persisted_current) or 2, 2),
-            last_completed_step=max((persisted_last or 1), 1),
+            action="start_analysis",
+            payload={"justification": "Inicio formal da analise pelo time financeiro."},
         )
-        analysis.claimed_at = transition_at
-        analysis.analysis_started_at = analysis.analysis_started_at or transition_at
-        _apply_owner_transition(
-            analysis,
-            new_status="in_progress",
-            owner_user_id=current.user.id,
-            owner_role="analista_financeiro",
-            transition_at=transition_at,
-        )
-        db.add(
-            DecisionEvent(
-                credit_analysis_id=analysis.id,
-                event_type="analysis_started",
-                actor_type=ActorType.USER,
-                actor_name=current.user.full_name or current.user.email,
-                description="Analise iniciada pelo analista financeiro.",
-                event_payload_json=_build_event_payload(
-                    analysis=analysis,
-                    previous_status=previous_status,
-                    new_status="in_progress",
-                    current=current,
-                    bu_name=resolve_analysis_business_unit(db, analysis),
-                    stage="financial_review",
-                    extra={
-                        "started_by_user_id": current.user.id,
-                        "started_by_email": current.user.email,
-                        "claimed_at": transition_at.isoformat(),
-                    },
-                ),
-            )
-        )
-        db.add(
-            AuditLog(
-                actor_user_id=current.user.id,
-                action="credit_analysis_start",
-                resource="credit_analysis",
-                resource_id=str(analysis.id),
-                metadata_json={
-                    "previous_status": previous_status,
-                    "new_status": "in_progress",
-                    "current_owner_user_id": analysis.current_owner_user_id,
-                    "current_owner_role": analysis.current_owner_role,
-                },
-                notes="Inicio formal da analise pelo time financeiro.",
-            )
-        )
+        if not transition.allowed:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao.")
         db.commit()
         db.refresh(analysis)
 
@@ -2658,39 +2519,18 @@ def calculate_decision(
         )
     )
     if previous_motor_result is None:
-        transition_at = datetime.now(timezone.utc)
-        _, persisted_last = _get_journey_progress(analysis)
-        _set_journey_progress(analysis, current_step=4, last_completed_step=max((persisted_last or 1), 3))
-        analysis.submitted_for_approval_at = analysis.submitted_for_approval_at or transition_at
-        _apply_owner_transition(
+        transition = resolve_credit_workflow_transition(
+            db,
+            current,
             analysis,
-            new_status="in_approval",
-            owner_user_id=None,
-            owner_role="aprovador",
-            transition_at=transition_at,
+            action="submit_for_approval",
+            payload={
+                "justification": "Analise submetida para aprovacao apos calculo do motor.",
+                "motor_result": analysis.motor_result.value if analysis.motor_result is not None else None,
+            },
         )
-        db.add(
-            DecisionEvent(
-                credit_analysis_id=analysis_id,
-                event_type="analysis_submitted_for_approval",
-                actor_type=ActorType.USER,
-                actor_name=current.user.full_name or current.user.email,
-                description="Analise submetida para aprovacao.",
-                event_payload_json=_build_event_payload(
-                    analysis=analysis,
-                    previous_status=previous_status,
-                    new_status="in_approval",
-                    current=current,
-                    bu_name=resolve_analysis_business_unit(db, analysis),
-                    stage="pending_approval",
-                    extra={
-                        "submitted_by_user_id": current.user.id,
-                        "submitted_by_email": current.user.email,
-                        "motor_result": analysis.motor_result.value if analysis.motor_result is not None else None,
-                    },
-                ),
-            )
-        )
+        if not transition.allowed:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao.")
 
     try:
         db.commit()
@@ -2766,85 +2606,26 @@ def apply_analysis_final_decision(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Credit analysis not found.",
         )
-    if payload.final_decision == FinalDecision.APPROVED:
-        approval_authorization = can_approve_credit_decision(db, current, analysis_record)
-    elif payload.final_decision == FinalDecision.REJECTED:
-        approval_authorization = can_reject_credit_decision(db, current, analysis_record)
-    else:
-        approval_authorization = can_approve_credit_decision(db, current, analysis_record)
-    if not approval_authorization.allowed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Usuário sem alçada configurada para aprovar esta decisão de crédito.",
-        )
     _enforce_technical_access_or_403(db, current, analysis_record)
-    previous_status = _current_status_value(analysis_record)
     try:
-        analysis, event_type = apply_final_decision(db, analysis_id, payload)
-    except FinalDecisionError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-    decision_timestamp = datetime.now(timezone.utc)
-    if analysis.final_decision == FinalDecision.APPROVED:
-        analysis.approved_at = analysis.approved_at or decision_timestamp
-    elif analysis.final_decision == FinalDecision.REJECTED:
-        analysis.rejected_at = analysis.rejected_at or decision_timestamp
-    _, persisted_last = _get_journey_progress(analysis)
-    _set_journey_progress(analysis, current_step=4, last_completed_step=max((persisted_last or 1), 4))
-    _apply_owner_transition(
-        analysis,
-        new_status="approved" if analysis.final_decision == FinalDecision.APPROVED else "rejected",
-        owner_user_id=current.user.id,
-        owner_role="workflow_encerrado",
-        transition_at=decision_timestamp,
-    )
-    decision_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
-    decision_memory["approval_authorization"] = {
-        "approval_authorization_source": approval_authorization.authorization_source,
-        "approval_matrix_rule_id": approval_authorization.approval_matrix_rule_id,
-        "approval_matrix_rule_name": approval_authorization.approval_matrix_rule_name,
-        "required_role_codes": approval_authorization.required_role_codes,
-        "matched_role_codes": approval_authorization.matched_role_codes,
-        "enforcement_enabled": approval_authorization.enforcement_enabled,
-        "legacy_fallback_used": approval_authorization.legacy_fallback_used,
-        "reason": approval_authorization.reason,
-    }
-    analysis.decision_memory_json = decision_memory
-
-    db.add(
-        DecisionEvent(
-            credit_analysis_id=analysis.id,
-            event_type=event_type,
-            actor_type=ActorType.USER,
-            actor_name=payload.analyst_name,
-            description=(
-                f"Final decision {analysis.final_decision.value} "
-                f"with final limit {analysis.final_limit} by {payload.analyst_name}"
-            ),
-            event_payload_json=_build_event_payload(
-                analysis=analysis,
-                previous_status=previous_status,
-                new_status="approved" if analysis.final_decision == FinalDecision.APPROVED else "rejected",
-                current=current,
-                bu_name=resolve_analysis_business_unit(db, analysis),
-                stage="decided",
-                extra={
-                    "analyst_name": payload.analyst_name,
-                    "final_decision": analysis.final_decision.value,
-                    "final_limit": str(analysis.final_limit) if analysis.final_limit is not None else None,
-                    "analyst_notes": payload.analyst_notes,
-                    "approval_authorization_source": approval_authorization.authorization_source,
-                    "approval_matrix_rule_id": approval_authorization.approval_matrix_rule_id,
-                    "approval_matrix_rule_name": approval_authorization.approval_matrix_rule_name,
-                    "required_role_codes": approval_authorization.required_role_codes,
-                    "matched_role_codes": approval_authorization.matched_role_codes,
-                    "enforcement_enabled": approval_authorization.enforcement_enabled,
-                    "legacy_fallback_used": approval_authorization.legacy_fallback_used,
-                    "approval_reason": approval_authorization.reason,
-                },
-            ),
+        transition = resolve_credit_workflow_transition(
+            db,
+            current,
+            analysis_record,
+            action="approve" if payload.final_decision == FinalDecision.APPROVED else "reject",
+            payload={
+                "final_decision": payload.final_decision,
+                "final_limit": payload.final_limit,
+                "analyst_name": payload.analyst_name,
+                "analyst_notes": payload.analyst_notes,
+                "justification": payload.analyst_notes,
+            },
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    if not transition.allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao.")
+    analysis = analysis_record
 
     try:
         db.commit()
@@ -2863,6 +2644,59 @@ def apply_analysis_final_decision(
         analyst_name=analysis.assigned_analyst_name,
         analyst_notes=analysis.analyst_notes,
         completed_at=analysis.completed_at,
+    )
+
+
+@router.post("/{analysis_id}/workflow-actions", response_model=WorkflowActionResponse, status_code=status.HTTP_200_OK)
+def execute_workflow_action(
+    analysis_id: int,
+    payload: WorkflowActionRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> WorkflowActionResponse:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    action = (payload.action or "").strip().lower()
+    if action not in {"request_maintenance", "return_to_analysis", "finalize"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ação de workflow inválida para este endpoint.")
+
+    try:
+        transition = resolve_credit_workflow_transition(
+            db,
+            current,
+            analysis,
+            action=action,
+            payload={"justification": payload.justification},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    if not transition.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=transition.workflow_context.get("denial_reason") or "Sem permissão para esta transição.",
+        )
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Não foi possível persistir a transição de workflow.") from exc
+
+    return WorkflowActionResponse(
+        analysis_id=analysis.id,
+        current_status=transition.current_status,
+        next_status=transition.next_status,
+        current_owner=transition.current_owner,
+        next_owner=transition.next_owner,
+        current_stage=transition.current_stage,
+        next_stage=transition.next_stage,
+        timeline_event=transition.timeline_event,
+        audit_event=transition.audit_event,
+        available_actions=transition.available_actions,
+        workflow_context=transition.workflow_context,
     )
 
 

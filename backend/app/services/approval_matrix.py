@@ -213,7 +213,9 @@ def resolve_required_approval_roles(
     except SQLAlchemyError:
         return {
             "rule_id": None,
+            "rule_code": None,
             "rule_name": None,
+            "rule_range": None,
             "required_roles": [],
             "required_approvals": 0,
             "requires_committee": False,
@@ -234,14 +236,21 @@ def resolve_required_approval_roles(
             ]
             return {
                 "rule_id": rule.id,
+                "rule_code": rule.code,
                 "rule_name": rule.name,
+                "rule_range": (
+                    f"{rule.min_amount if rule.min_amount is not None else '-inf'}.."
+                    f"{rule.max_amount if rule.max_amount is not None else '+inf'}"
+                ),
                 "required_roles": role_codes,
                 "required_approvals": rule.required_approvals,
                 "requires_committee": rule.requires_committee,
             }
     return {
         "rule_id": None,
+        "rule_code": None,
         "rule_name": None,
+        "rule_range": None,
         "required_roles": [],
         "required_approvals": 0,
         "requires_committee": False,

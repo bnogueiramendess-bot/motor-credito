@@ -23,6 +23,8 @@ export async function clearAuthCookies() {
   store.set(REFRESH_TOKEN_COOKIE, "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 });
   store.set("gcc_permissions", "", { httpOnly: false, sameSite: "lax", path: "/", maxAge: 0 });
   store.set("gcc_user_role", "", { httpOnly: false, sameSite: "lax", path: "/", maxAge: 0 });
+  store.set("gcc_is_administrator", "", { httpOnly: false, sameSite: "lax", path: "/", maxAge: 0 });
+  store.set("gcc_can_import_ar_aging", "", { httpOnly: false, sameSite: "lax", path: "/", maxAge: 0 });
   store.set("gcc_user_display_name", "", { httpOnly: false, sameSite: "lax", path: "/", maxAge: 0 });
   store.set("gcc_login_username", "", { httpOnly: false, sameSite: "lax", path: "/", maxAge: 0 });
 }

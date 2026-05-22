@@ -1,10 +1,9 @@
 ﻿"use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { CheckCircle2, Copy, KeyRound, Mail, Pencil, Power, UserPlus, Users } from "lucide-react";
 
-import { AdminProfileDto, AdminUserDto, InviteUserPayload, WorkflowRoleDto } from "@/features/admin/api/admin.api";
-import { useAdminProfilesQuery } from "@/features/admin/hooks/use-admin-profiles-query";
+import { AdminUserDto, InviteUserPayload, WorkflowRoleDto } from "@/features/admin/api/admin.api";
 import { useAdminUsersQuery } from "@/features/admin/hooks/use-admin-users-query";
 import { useBusinessUnitsQuery } from "@/features/admin/hooks/use-business-units-query";
 import { useInviteAdminUserMutation } from "@/features/admin/hooks/use-invite-admin-user-mutation";
@@ -15,10 +14,6 @@ import { useWorkflowRolesQuery } from "@/features/admin/hooks/use-workflow-roles
 import { ApiError } from "@/shared/lib/http/http-client";
 import { cn } from "@/shared/lib/utils";
 
-function profileOptionLabel(profile: AdminProfileDto) {
-  return profile.name;
-}
-
 function userStatusLabel(user: AdminUserDto) {
   if (user.first_access_pending) return "Pendente de primeiro acesso";
   return user.is_active ? "Ativo" : "Inativo";
@@ -27,7 +22,6 @@ function userStatusLabel(user: AdminUserDto) {
 export function AdminUsersPageView() {
   const usersQuery = useAdminUsersQuery();
   const businessUnitsQuery = useBusinessUnitsQuery();
-  const profilesQuery = useAdminProfilesQuery();
   const inviteMutation = useInviteAdminUserMutation();
   const updateUserMutation = useUpdateAdminUserMutation();
   const updateUserStatusMutation = useUpdateAdminUserStatusMutation();
@@ -37,7 +31,8 @@ export function AdminUsersPageView() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [profileId, setProfileId] = useState<number | null>(null);
+  const [isAdministrator, setIsAdministrator] = useState(false);
+  const [canImportArAging, setCanImportArAging] = useState(false);
   const [selectedBuIds, setSelectedBuIds] = useState<number[]>([]);
   const [selectedWorkflowRoleCodes, setSelectedWorkflowRoleCodes] = useState<string[]>([]);
   const [lastInviteToken, setLastInviteToken] = useState<string | null>(null);
@@ -48,11 +43,6 @@ export function AdminUsersPageView() {
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
 
   const users = usersQuery.data ?? [];
-  const allProfiles = useMemo(() => profilesQuery.data ?? [], [profilesQuery.data]);
-  const activeProfiles = useMemo(
-    () => allProfiles.filter((profile) => profile.status === "active"),
-    [allProfiles]
-  );
   const activeBusinessUnits = useMemo(
     () => (businessUnitsQuery.data ?? []).filter((unit) => unit.is_active),
     [businessUnitsQuery.data]
@@ -65,13 +55,13 @@ export function AdminUsersPageView() {
     }),
     [workflowRolesQuery.data]
   );
-
-  useEffect(() => {
-    if (profileId !== null) return;
-    if (activeProfiles.length > 0) {
-      setProfileId(activeProfiles[0].id);
+  const workflowRoleTypeByCode = useMemo(() => {
+    const map = new Map<string, WorkflowRoleDto["type"]>();
+    for (const role of workflowRolesQuery.data ?? []) {
+      map.set(role.code, role.type);
     }
-  }, [activeProfiles, profileId]);
+    return map;
+  }, [workflowRolesQuery.data]);
 
   function toggleBusinessUnit(businessUnitId: number) {
     setSelectedBuIds((current) =>
@@ -117,6 +107,27 @@ export function AdminUsersPageView() {
     );
   }
 
+  function formatWorkflowGroups(codes: string[]) {
+    if (codes.length === 0) return "Sem vínculo";
+    if (workflowRoleTypeByCode.size === 0) return "Carregando grupos...";
+
+    const groups = new Set<WorkflowRoleDto["type"]>();
+    for (const code of codes) {
+      const type = workflowRoleTypeByCode.get(code);
+      if (type) groups.add(type);
+    }
+
+    if (groups.size === 3) return "Todos";
+    if (groups.size === 0) return "Sem vínculo";
+
+    const labels: Array<{ type: WorkflowRoleDto["type"]; label: string }> = [
+      { type: "operational", label: "Operacionais" },
+      { type: "governance", label: "Governança" },
+      { type: "approval", label: "Aprovação" }
+    ];
+    return labels.filter((item) => groups.has(item.type)).map((item) => item.label).join(", ");
+  }
+
   async function copyInviteLink(token: string) {
     const link = `${window.location.origin}/primeiro-acesso?token=${encodeURIComponent(token)}`;
     await navigator.clipboard.writeText(link);
@@ -129,17 +140,8 @@ export function AdminUsersPageView() {
     setLastInviteToken(null);
     setLastInviteEmail(null);
 
-    if (profileId === null) {
-      setFeedbackMessage("Selecione um perfil de acesso ativo.");
-      return;
-    }
     if (!phone.trim()) {
       setFeedbackMessage("Informe um telefone válido.");
-      return;
-    }
-    const selectedProfile = allProfiles.find((profile) => profile.id === profileId);
-    if (!selectedProfile || selectedProfile.status !== "active") {
-      setFeedbackMessage("Selecione um perfil de acesso ativo.");
       return;
     }
 
@@ -150,7 +152,9 @@ export function AdminUsersPageView() {
           payload: {
             full_name: fullName.trim(),
             phone: phone.trim(),
-            profile_id: profileId,
+            profile_id: null,
+            is_administrator: isAdministrator,
+            can_import_ar_aging: canImportArAging,
             business_unit_ids: selectedBuIds,
             workflow_role_assignments: selectedWorkflowRoleCodes.map((code) => ({ code, business_unit_id: null }))
           }
@@ -161,7 +165,9 @@ export function AdminUsersPageView() {
           full_name: fullName.trim(),
           email: email.trim().toLowerCase(),
           phone: phone.trim(),
-          profile_id: profileId,
+          profile_id: null,
+          is_administrator: isAdministrator,
+          can_import_ar_aging: canImportArAging,
           business_unit_ids: selectedBuIds,
           workflow_role_assignments: selectedWorkflowRoleCodes.map((code) => ({ code, business_unit_id: null }))
         };
@@ -175,9 +181,10 @@ export function AdminUsersPageView() {
       setPhone("");
       setSelectedBuIds([]);
       setSelectedWorkflowRoleCodes([]);
-      setOpenDrawer(false);
-      setEditingUserId(null);
-      setDrawerMode("create");
+      setCanImportArAging(false);
+    setOpenDrawer(false);
+    setEditingUserId(null);
+    setDrawerMode("create");
     } catch (error) {
       setFeedbackMessage(error instanceof ApiError ? error.message : "Não foi possível incluir o usuário. Tente novamente.");
     }
@@ -191,7 +198,8 @@ export function AdminUsersPageView() {
     setPhone("");
     setSelectedBuIds([]);
     setSelectedWorkflowRoleCodes([]);
-    setProfileId(activeProfiles[0]?.id ?? null);
+    setIsAdministrator(false);
+    setCanImportArAging(false);
     setOpenDrawer(true);
   }
 
@@ -203,8 +211,8 @@ export function AdminUsersPageView() {
     setPhone(user.phone ?? "");
     setSelectedBuIds(user.business_unit_ids);
     setSelectedWorkflowRoleCodes(user.workflow_role_codes);
-    const matchedProfile = allProfiles.find((profile) => profile.name === user.profile_name);
-    setProfileId(matchedProfile?.id ?? activeProfiles[0]?.id ?? null);
+    setIsAdministrator(user.is_administrator);
+    setCanImportArAging(user.can_import_ar_aging);
     setOpenDrawer(true);
   }
 
@@ -251,8 +259,8 @@ export function AdminUsersPageView() {
           <p className="mt-2 text-2xl font-semibold text-slate-900">{pendingFirstAccessCount}</p>
         </article>
         <article className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-          <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Perfis ativos</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{activeProfiles.length}</p>
+          <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Usuários administradores</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{users.filter((user) => user.is_administrator).length}</p>
         </article>
         <article className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
           <p className="text-xs uppercase tracking-[0.06em] text-slate-500">Unidades de negócio ativas</p>
@@ -358,23 +366,28 @@ export function AdminUsersPageView() {
               </div>
 
               <div className="grid gap-3">
-                <label className="space-y-1">
-                  <span className="text-sm font-medium text-slate-700">Perfil de acesso</span>
-                  <select
-                    value={profileId ?? ""}
-                    onChange={(event) => setProfileId(Number(event.target.value))}
-                    className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
-                    disabled={profilesQuery.isLoading || allProfiles.length === 0}
-                  >
-                    {allProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id} disabled={profile.status !== "active"}>
-                        {profileOptionLabel(profile)} {profile.status === "active" ? "" : "(Inativo)"}
-                      </option>
-                    ))}
-                  </select>
-                  {profilesQuery.isLoading ? <p className="text-xs text-slate-500">Carregando perfis...</p> : null}
-                  {profilesQuery.isError ? <p className="text-xs text-rose-700">Não foi possível carregar os perfis.</p> : null}
-                </label>
+                <div className="space-y-2">
+                  <span className="text-sm font-medium text-slate-700">Acessos especiais</span>
+                  <div className="flex flex-wrap gap-3">
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={isAdministrator}
+                        onChange={(event) => setIsAdministrator(event.target.checked)}
+                      />
+                      <span>Administrador (acesso total)</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={canImportArAging}
+                        onChange={(event) => setCanImportArAging(event.target.checked)}
+                      />
+                      <span>Importação AR Aging</span>
+                    </label>
+                  </div>
+                  {isAdministrator ? <p className="text-xs text-slate-500">Com Administrador ativo, o acesso administrativo completo é concedido automaticamente.</p> : null}
+                </div>
 
                 <div className="space-y-1">
                   <span className="text-sm font-medium text-slate-700">Unidades de negócio</span>
@@ -409,7 +422,7 @@ export function AdminUsersPageView() {
                 <div className="space-y-2 rounded-lg border border-slate-300 p-3">
                   <p className="text-sm font-medium text-slate-700">Papéis no Workflow</p>
                   <p className="text-xs text-slate-500">
-                    Defina os papéis operacionais da pessoa no fluxo de crédito. Esse vínculo não altera o perfil RBAC.
+                    Defina os papéis operacionais da pessoa no fluxo de crédito. Esse vínculo não altera os acessos administrativos por flag.
                   </p>
                   {workflowRolesQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
                   {workflowRolesQuery.isError ? (
@@ -431,7 +444,7 @@ export function AdminUsersPageView() {
 
               <button
                 type="submit"
-                disabled={inviteMutation.isPending || profileId === null}
+                disabled={inviteMutation.isPending}
                 className="inline-flex h-10 items-center justify-center rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
                 {drawerMode === "edit" ? "Salvar alterações" : inviteMutation.isPending ? "Incluindo usuário..." : "Incluir usuário"}
@@ -460,7 +473,6 @@ export function AdminUsersPageView() {
                   <th className="px-3 py-2">Nome de usuário</th>
                   <th className="px-3 py-2">E-mail</th>
                   <th className="px-3 py-2">Telefone</th>
-                  <th className="px-3 py-2">Perfil</th>
                   <th className="px-3 py-2">Papéis no Workflow</th>
                   <th className="px-3 py-2">Unidade de negócio</th>
                   <th className="px-3 py-2">Status</th>
@@ -475,9 +487,8 @@ export function AdminUsersPageView() {
                     <td className="px-3 py-2">{user.username}</td>
                     <td className="px-3 py-2">{user.email}</td>
                     <td className="px-3 py-2">{user.phone ?? "-"}</td>
-                    <td className="px-3 py-2">{user.profile_name}</td>
                     <td className="px-3 py-2">
-                      {user.workflow_role_codes.length > 0 ? user.workflow_role_codes.join(", ") : "Sem vínculo"}
+                      {formatWorkflowGroups(user.workflow_role_codes)}
                     </td>
                     <td className="px-3 py-2">{user.business_unit_names.length > 0 ? user.business_unit_names.join(", ") : "Sem vínculo"}</td>
                     <td className="px-3 py-2">

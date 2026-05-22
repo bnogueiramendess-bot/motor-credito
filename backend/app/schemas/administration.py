@@ -92,6 +92,8 @@ class UserCreate(BaseModel):
     phone: str
     profile_id: int | None = None
     role: str | None = None
+    is_administrator: bool = False
+    can_import_ar_aging: bool = False
     business_unit_ids: list[int]
     workflow_role_assignments: list[UserWorkflowRoleAssignmentInput] = []
 
@@ -99,7 +101,9 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     full_name: str
     phone: str
-    profile_id: int
+    profile_id: int | None = None
+    is_administrator: bool = False
+    can_import_ar_aging: bool = False
     business_unit_ids: list[int]
     workflow_role_assignments: list[UserWorkflowRoleAssignmentInput] = []
 
@@ -123,6 +127,8 @@ class UserRead(BaseModel):
     email: str
     phone: str | None
     profile_name: str
+    is_administrator: bool = False
+    can_import_ar_aging: bool = False
     is_active: bool
     first_access_pending: bool
     business_unit_ids: list[int]

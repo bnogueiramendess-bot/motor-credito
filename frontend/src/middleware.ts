@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const ADMIN_RULES: Array<{ prefix: string; permission: string }> = [
-  { prefix: "/admin/company", permission: "company:manage" },
-  { prefix: "/company", permission: "company:manage" },
-  { prefix: "/admin/empresa", permission: "company:manage" },
-  { prefix: "/admin/business-units", permission: "bu:manage" },
-  { prefix: "/company/business-units", permission: "bu:manage" },
-  { prefix: "/admin/users", permission: "users:manage" },
-  { prefix: "/admin/usuarios", permission: "users:manage" },
-  { prefix: "/admin/configuracoes", permission: "profiles:view" },
-  { prefix: "/admin/profiles", permission: "profiles:view" },
-  { prefix: "/admin/approval-matrix", permission: "profiles:view" },
-  { prefix: "/admin/matriz-aprovacao", permission: "profiles:view" }
+const ADMIN_RULES: Array<{ prefix: string }> = [
+  { prefix: "/admin/company" },
+  { prefix: "/company" },
+  { prefix: "/admin/empresa" },
+  { prefix: "/admin/business-units" },
+  { prefix: "/company/business-units" },
+  { prefix: "/admin/users" },
+  { prefix: "/admin/usuarios" },
+  { prefix: "/admin/configuracoes" },
+  { prefix: "/admin/profiles" },
+  { prefix: "/admin/approval-matrix" },
+  { prefix: "/admin/matriz-aprovacao" }
 ];
 
 export function middleware(request: NextRequest) {
@@ -30,9 +30,11 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const rawPermissions = request.cookies.get("gcc_permissions")?.value;
-  const permissions = rawPermissions ? (JSON.parse(rawPermissions) as string[]) : [];
-  if (!permissions.includes(rule.permission)) {
+  const isAdministrator = (request.cookies.get("gcc_is_administrator")?.value ?? "false").toLowerCase() === "true";
+  if (pathname.startsWith("/admin/profiles")) {
+    return NextResponse.redirect(new URL("/admin/users", request.url));
+  }
+  if (!isAdministrator) {
     return NextResponse.redirect(new URL("/clientes/dashboard", request.url));
   }
 

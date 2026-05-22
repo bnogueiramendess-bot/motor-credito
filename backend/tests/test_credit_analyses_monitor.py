@@ -158,7 +158,13 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             db.commit()
             db.refresh(user)
             db.expunge(user)
-            return CurrentUser(user=user, permissions=set(permissions), bu_ids={bu_id})
+            return CurrentUser(
+                user=user,
+                permissions=set(permissions),
+                bu_ids={bu_id},
+                is_administrator=False,
+                can_import_ar_aging=False,
+            )
 
     def _resolve_email(self, logical_email: str) -> str:
         if logical_email in self._email_map:
@@ -208,6 +214,130 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         self.assertIn("view_tracking", response.items[0].available_actions)
         self.assertNotIn("review_decision", response.items[0].available_actions)
         self.assertNotIn("continue_analysis", response.items[0].available_actions)
+        self.assertNotIn("access_workspace", response.items[0].available_actions)
+
+    def test_user_without_explicit_technical_authorization_does_not_receive_technical_actions(self) -> None:
+        bu_id, run_id = self._setup_base()
+        requester = self._create_user("requester.sem.tecnico@indorama.com", ["credit_request_view_own"], bu_id)
+        analyst = self._create_user("analista.owner@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "requester.sem.tecnico@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = analyst.user.id
+            analysis.current_owner_role = "analista_financeiro"
+            db.commit()
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=requester)
+            self.assertEqual(response.total, 1)
+            self.assertNotIn("continue_analysis", response.items[0].available_actions)
+            self.assertNotIn("start_analysis", response.items[0].available_actions)
+            self.assertNotIn("submit_approval", response.items[0].available_actions)
+            self.assertNotIn("access_workspace", response.items[0].available_actions)
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as ctx:
+                get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_user_with_explicit_technical_authorization_receives_technical_action_and_access(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.autorizado@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = analyst.user.id
+            analysis.current_owner_role = "analista_financeiro"
+            db.commit()
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=analyst)
+            self.assertEqual(response.total, 1)
+            self.assertIn("continue_analysis", response.items[0].available_actions)
+        with SessionLocal() as db:
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+        self.assertEqual(detail.id, analysis_id)
+
+    def test_monitor_requested_limit_falls_back_to_suggested_limit_when_requested_is_zero(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.limit@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = analyst.user.id
+            analysis.current_owner_role = "analista_financeiro"
+            analysis.requested_limit = Decimal("0")
+            analysis.suggested_limit = Decimal("4500000")
+            db.commit()
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=analyst)
+        self.assertEqual(response.total, 1)
+        self.assertEqual(response.items[0].requested_limit, Decimal("4500000"))
+
+    def test_monitor_requested_limit_uses_audit_legacy_value_when_analysis_requested_is_zero(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.audit.limit@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = analyst.user.id
+            analysis.current_owner_role = "analista_financeiro"
+            analysis.requested_limit = Decimal("0")
+            analysis.suggested_limit = Decimal("0")
+            audit = db.scalar(
+                select(AuditLog)
+                .where(AuditLog.resource == "credit_analysis", AuditLog.resource_id == str(analysis_id), AuditLog.action == "credit_request_triage_submit")
+                .order_by(AuditLog.id.desc())
+            )
+            assert audit is not None
+            metadata = dict(audit.metadata_json or {})
+            metadata["suggested_limit"] = "3200000"
+            audit.metadata_json = metadata
+            db.commit()
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=analyst)
+        self.assertEqual(response.total, 1)
+        self.assertEqual(response.items[0].requested_limit, Decimal("3200000"))
+
+    def test_workspace_data_api_direct_call_returns_403_without_positive_technical_authorization(self) -> None:
+        bu_id, run_id = self._setup_base()
+        requester = self._create_user("workspace.sem.tecnico@indorama.com", ["credit_request_view_own"], bu_id)
+        analyst_owner = self._create_user("workspace.owner@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "workspace.sem.tecnico@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = analyst_owner.user.id
+            analysis.current_owner_role = "analista_financeiro"
+            db.commit()
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as ctx:
+                get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_workspace_data_api_direct_call_returns_200_with_positive_technical_authorization(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("workspace.com.tecnico@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = analyst.user.id
+            analysis.current_owner_role = "analista_financeiro"
+            db.commit()
+        with SessionLocal() as db:
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+        self.assertEqual(detail.id, analysis_id)
+
+    def test_workspace_data_api_direct_call_returns_403_when_user_is_outside_bu_even_with_technical_permission(self) -> None:
+        bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()
+        analyst_bu_a = self._create_user("workspace.fora.bu@indorama.com", ["credit_request_validate"], bu_a_id)
+        analysis_bu_b = self._create_analysis(run_id, "comercial.b@indorama.com", status="in_progress", bu_name="Additives")
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as ctx:
+                get_credit_analysis(analysis_id=analysis_bu_b, db=db, current=analyst_bu_a)
+        self.assertEqual(ctx.exception.status_code, 403)
 
     def test_analyst_sees_pending_and_actions(self) -> None:
         bu_id, run_id = self._setup_base()
