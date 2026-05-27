@@ -8,6 +8,7 @@ import {
   CreditAnalysisTriageResponse,
   CreditAnalysisDraftCreateRequest,
   CreditAnalysisDraftCreateResponse,
+  CreditAnalysisDraftRecoveryResponse,
   CreditAnalysisTriageSubmitRequest,
   CreditAnalysisTriageSubmitResponse,
   CofaceReportReadResponse,
@@ -44,6 +45,14 @@ export async function checkExistingCreditAnalysis(cnpj: string) {
 
 export async function createCreditAnalysisDraft(payload: CreditAnalysisDraftCreateRequest) {
   return apiClient.post<CreditAnalysisDraftCreateResponse, CreditAnalysisDraftCreateRequest>("/api/credit-analyses/draft", payload);
+}
+
+export async function recoverCreditAnalysisDraft(cnpj: string) {
+  return apiClient.get<CreditAnalysisDraftRecoveryResponse | null>(`/api/credit-analyses/draft/recover?cnpj=${encodeURIComponent(cnpj)}`);
+}
+
+export async function discardCreditAnalysisDraft(analysisId: number) {
+  return apiClient.delete(`/api/credit-analyses/draft/${analysisId}`);
 }
 
 export async function submitTriageCreditRequest(payload: CreditAnalysisTriageSubmitRequest) {

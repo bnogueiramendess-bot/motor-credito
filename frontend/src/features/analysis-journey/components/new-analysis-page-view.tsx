@@ -6,10 +6,13 @@ import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Building2, Check, ChevronLeft, ChevronRight, CircleAlert, CreditCard, FileText, FolderOpen, Info, Lock, Search, ShieldCheck, Upload, X } from "lucide-react";
 
-import { checkExistingCreditAnalysis, createCommercialReference, createCreditAnalysisDraft, deleteAnalysisDocument, deleteCommercialReference, downloadAnalysisDocument, getAgriskReportRead, getAnalysisRequestMetadata, getCofaceReportRead, listAnalysisDocuments, listAnalysisReportReads, listCommercialReferences, lookupExternalCnpj, readAgriskReport, readCofaceReport, saveAnalysisRequestMetadata, submitAnalysisJourney, triageCreditRequest, uploadAnalysisDocument } from "@/features/analysis-journey/api/analysis-journey.api";
-import { AgriskImportStatus, AgriskReportReadResponse, AnalysisDocumentDto, AnalysisJourneySubmitRequest, AnalysisReportReadSummaryDto, CofaceReportReadResponse, CommercialReference, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import { checkExistingCreditAnalysis, createCommercialReference, createCreditAnalysisDraft, deleteAnalysisDocument, deleteCommercialReference, discardCreditAnalysisDraft, downloadAnalysisDocument, getAgriskReportRead, getAnalysisRequestMetadata, getCofaceReportRead, listAnalysisDocuments, listAnalysisReportReads, listCommercialReferences, lookupExternalCnpj, readAgriskReport, readCofaceReport, recoverCreditAnalysisDraft, saveAnalysisRequestMetadata, submitAnalysisJourney, submitTriageCreditRequest, triageCreditRequest, uploadAnalysisDocument } from "@/features/analysis-journey/api/analysis-journey.api";
+import { AgriskImportStatus, AgriskReportReadResponse, AnalysisDocumentDto, AnalysisJourneySubmitRequest, AnalysisReportReadSummaryDto, CofaceReportReadResponse, CommercialReference, CreditAnalysisDraftRecoveryResponse, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageSubmitRequest, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import { InstitutionalScoreCard } from "@/features/analysis-journey/components/institutional-score-card";
+import { RecommendationInsightsCard } from "@/features/analysis-journey/components/recommendation-insights-card";
 import { getCreditAnalysisDetail, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
 import { getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
+import { getPortfolioCustomers } from "@/features/portfolio/api/portfolio.api";
 import {
   formatCnpj,
   formatCurrencyInputBRL,
@@ -17,12 +20,15 @@ import {
   toNullableNumberInput,
   toNumberInput
 } from "@/features/analysis-journey/utils/formatters";
+import { resolveExecutiveAgingComposition } from "@/features/analysis-journey/utils/internal-portfolio-aging-executive";
+import { resolveInternalPortfolioSummaryFromSources } from "@/features/analysis-journey/utils/internal-portfolio-summary";
 import { formatCurrencyBRL, resolveManualStatus, resolveUploadStatus } from "@/features/analysis-journey/utils/view-models";
 import { ErrorState } from "@/shared/components/states/error-state";
 import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 import { getCurrentUserDisplayName } from "@/shared/lib/auth/current-user";
 
 const steps = ["Identificação do cliente", "Coleta de informações", "Mesa de análise", "Revisão e envio"];
+const TECHNICAL_CONTINUATION_ACTIONS = new Set(["start_analysis", "continue_analysis", "execute_analysis"]);
 type ImportSource = "agrisk" | "coface";
 type ImportStatus = "empty" | AgriskImportStatus | "success";
 
@@ -99,24 +105,6 @@ type InternalEconomicPosition = {
   overdue_amount?: number | string | null;
   not_due_amount?: number | string | null;
   base_date?: string | null;
-};
-
-type ExecutiveNarrativeSeverity = "neutral" | "positive" | "attention";
-
-type ExecutiveNarrativeInput = {
-  score: number | null;
-  scoreBand: string;
-  internalSuggestedLimit: number | null;
-  cofaceCoverage: number | null;
-  recommendedLimit: number | null;
-  exposure: number | null;
-  overduePercentage: number | null;
-};
-
-type ExecutiveNarrativeResult = {
-  summary: string;
-  highlights: Array<{ label: string; text: string }>;
-  severity: ExecutiveNarrativeSeverity;
 };
 
 function RequiredMark() {
@@ -287,7 +275,6 @@ function normalizeAgriskScoreToTenScale(rawScore: number) {
   return Math.max(0, Math.min(10, rawScore / 100));
 }
 
-type ScoreGaugeBand = "Crítico" | "Atenção" | "Moderado" | "Favorável";
 type InstitutionalScoreBand = "AA" | "A" | "B" | "C" | "D" | "Informações insuficientes";
 
 type ScoreBandVisualTokens = {
@@ -297,20 +284,6 @@ type ScoreBandVisualTokens = {
   ring: string;
   glow: string;
 };
-
-function scoreGaugeBandFrom100(score: number) {
-  if (score < 40) return "Crítico";
-  if (score < 60) return "Atenção";
-  if (score < 80) return "Moderado";
-  return "Favorável";
-}
-
-function scoreGaugeBandToInstitutionalBand(band: ScoreGaugeBand): InstitutionalScoreBand {
-  if (band === "Crítico") return "D";
-  if (band === "Atenção") return "C";
-  if (band === "Moderado") return "B";
-  return "A";
-}
 
 function getScoreBandVisualTokens(scoreBand: InstitutionalScoreBand): ScoreBandVisualTokens {
   if (scoreBand === "AA") {
@@ -367,70 +340,6 @@ function getScoreBandVisualTokens(scoreBand: InstitutionalScoreBand): ScoreBandV
   };
 }
 
-function scoreGaugeBandClass(band: ScoreGaugeBand) {
-  return getScoreBandVisualTokens(scoreGaugeBandToInstitutionalBand(band)).badgeClass;
-}
-
-function InstitutionalScoreGauge({ score }: { score: number | null }) {
-  const safeScore100 = score === null ? 0 : Math.max(0, Math.min(100, score * 10));
-  const displayScore = score === null ? "—" : `${Math.round(safeScore100)}`;
-  const band = scoreGaugeBandFrom100(safeScore100);
-  const bandToken = getScoreBandVisualTokens(scoreGaugeBandToInstitutionalBand(band));
-  const cx = 100;
-  const cy = 100;
-  const radius = 76;
-  const arcLength = Math.PI * radius;
-  const pointerRadius = 52;
-  const pointerAngle = Math.PI - (safeScore100 / 100) * Math.PI;
-  const pointerX = cx + pointerRadius * Math.cos(pointerAngle);
-  const pointerY = cy - pointerRadius * Math.sin(pointerAngle);
-  const bands = [
-    { min: 0, max: 39, color: getScoreBandVisualTokens("D").accent },
-    { min: 40, max: 59, color: getScoreBandVisualTokens("C").accent },
-    { min: 60, max: 79, color: getScoreBandVisualTokens("B").accent },
-    { min: 80, max: 100, color: getScoreBandVisualTokens("A").accent }
-  ];
-
-  return (
-    <div className="mx-auto w-full max-w-[220px]">
-      <svg viewBox="0 0 200 138" className="h-[138px] w-full" role="img" aria-label="Velocímetro do score institucional preliminar">
-        <path d="M 24 100 A 76 76 0 0 1 176 100" fill="none" stroke="#E2E8F0" strokeWidth="11" strokeLinecap="round" />
-        {bands.map((item) => {
-          const startFraction = item.min / 100;
-          const endFraction = item.max / 100;
-          const segmentLength = (endFraction - startFraction) * arcLength;
-          return (
-            <path
-              key={`${item.min}-${item.max}`}
-              d="M 24 100 A 76 76 0 0 1 176 100"
-              fill="none"
-              stroke={item.color}
-              strokeWidth="9"
-              strokeLinecap="round"
-              strokeDasharray={`${segmentLength} ${arcLength}`}
-              strokeDashoffset={`${-startFraction * arcLength}`}
-            />
-          );
-        })}
-        <line x1={cx} y1={cy} x2={pointerX} y2={pointerY} stroke={bandToken.accent} strokeWidth="2" strokeLinecap="round" />
-        <circle cx={cx} cy={cy} r="4" fill={bandToken.accent} />
-        <circle cx={cx} cy={cy} r="6.5" fill="none" stroke="#dbeafe" strokeWidth="1" />
-        <text x="24" y="120" textAnchor="start" className="fill-[#94a3b8] text-[10px] font-semibold">0</text>
-        <text x="176" y="120" textAnchor="end" className="fill-[#94a3b8] text-[10px] font-semibold">100</text>
-      </svg>
-      <div className="mt-[-8px] text-center">
-        <p className="text-[34px] font-black leading-none text-[#102a4c]">{displayScore}</p>
-        <p className="mt-1 text-[11px] font-semibold text-[#64748b]">/100</p>
-      </div>
-      <div className="mt-1 flex items-center justify-center gap-2">
-        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${scoreGaugeBandClass(band)}`}>{band}</span>
-      </div>
-      <p className="mt-1 text-center text-[11px] font-semibold text-[#64748b]">Score preliminar</p>
-      <p className="mt-0.5 text-center text-[10px] text-[#94a3b8]">Score absoluto ponderado pelos pilares da política.</p>
-    </div>
-  );
-}
-
 function formatCnpjForDisplay(value: string | null | undefined) {
   const digits = sanitizeDigits(value ?? "");
   if (digits.length !== 14) return value || "Não informado";
@@ -460,6 +369,43 @@ function formatCurrencyBRLCompactExecutive(value: number | null) {
     return `R$ ${kValue}K`;
   }
   return `R$ ${Math.round(safe).toLocaleString("pt-BR")}`;
+}
+
+function formatCurrencyBRLMM2(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const safe = Math.max(0, value);
+  const mmValue = safe / 1_000_000;
+  return `R$ ${mmValue.toFixed(2).replace(".", ",")}MM`;
+}
+
+function formatDoaBoundary(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  if (value === 0) return "R$ 0,00";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) {
+    return `R$ ${(value / 1_000_000).toFixed(2).replace(".", ",")}MM`;
+  }
+  if (abs >= 1_000) {
+    return `R$ ${(value / 1_000).toFixed(2).replace(".", ",")}K`;
+  }
+  return `R$ ${value.toFixed(2).replace(".", ",")}`;
+}
+
+function formatDoaRangeExecutive(range: string | null | undefined): string {
+  if (!range) return "—";
+  const matches = range.match(/-?\d+(?:[.,]\d+)?/g);
+  if (!matches || matches.length < 2) return range;
+  const parseFlexible = (raw: string): number | null => {
+    const hasComma = raw.includes(",");
+    const hasDot = raw.includes(".");
+    if (hasComma && hasDot) return Number(raw.replace(/\./g, "").replace(",", "."));
+    if (hasComma) return Number(raw.replace(",", "."));
+    return Number(raw);
+  };
+  const min = parseFlexible(matches[0]);
+  const max = parseFlexible(matches[1]);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return range;
+  return `${formatDoaBoundary(min)} a ${formatDoaBoundary(max)}`;
 }
 
 function toNullableNumeric(value: unknown): number | null {
@@ -518,90 +464,6 @@ function policyPillarStatusClass(status: PolicyPillarStatus) {
   return "bg-[#EEF3F8] text-[#4F647A] border-[#D7E1EC]";
 }
 
-function buildExecutiveNarrative({
-  score,
-  scoreBand,
-  internalSuggestedLimit,
-  cofaceCoverage,
-  recommendedLimit,
-  exposure,
-  overduePercentage
-}: ExecutiveNarrativeInput): ExecutiveNarrativeResult {
-  const scoreText = score !== null ? `${Math.round(score * 10)}/100` : "informação não disponível";
-  const scoreBandText = score !== null ? scoreBand.toUpperCase() : "informação não disponível";
-  const internalLimitText = internalSuggestedLimit !== null ? formatCurrencyBRLCompactExecutive(internalSuggestedLimit) : "informação não disponível";
-  const coverageText = cofaceCoverage !== null ? formatCurrencyBRLCompactExecutive(cofaceCoverage) : "informação não disponível";
-  const recommendedText = recommendedLimit !== null ? formatCurrencyBRLCompactExecutive(recommendedLimit) : "informação não disponível";
-
-  const isRestrictiveScore = score !== null && score < 4;
-  const hasCoface = cofaceCoverage !== null && cofaceCoverage > 0;
-  const cofaceAsFloor = hasCoface && internalSuggestedLimit !== null && cofaceCoverage > internalSuggestedLimit;
-  const hasResidualExposure = exposure !== null && exposure > 0;
-  const hasOverdue = overduePercentage !== null && overduePercentage > 0;
-  const fullyCovered = exposure !== null && exposure === 0;
-
-  const opening = isRestrictiveScore
-    ? `Apesar do perfil de risco ${scoreBandText} (${scoreText}),`
-    : `Considerando o perfil de risco ${scoreBandText} (${scoreText}),`;
-  const base = ` a política institucional definiu limite interno preliminar de ${internalLimitText}.`;
-  const coverageSentence = hasCoface
-    ? ` Há cobertura COFACE disponível de ${coverageText}.`
-    : " Sem cobertura COFACE disponível, a recomendação permanece limitada ao cálculo interno da política institucional e aos fatores técnicos avaliados na mesa.";
-  const floorSentence = hasCoface
-    ? cofaceAsFloor
-      ? " A cobertura COFACE disponível suporta integralmente a recomendação final e foi adotada como piso decisório, ampliando a mitigação do risco além do limite preliminar."
-      : " A cobertura COFACE foi considerada na recomendação, porém sem necessidade de ajuste do piso em relação ao limite preliminar."
-    : "";
-  const decisionSentence = ` O limite recomendado final é ${recommendedText}.`;
-  const exposureSentence = exposure === null
-    ? " A exposição residual está com informação não disponível."
-    : hasResidualExposure
-      ? ` A recomendação final excede a cobertura disponível, gerando exposição residual de ${formatCurrencyBRLCompactExecutive(exposure)} que deve ser considerada na decisão.`
-      : " Não há exposição residual identificada na recomendação final.";
-  const overdueSentence = overduePercentage === null
-    ? " Overdue interno: informação não disponível."
-    : hasOverdue
-      ? ` Há overdue interno identificado de ${overduePercentage}%, que deve ser considerado como fator de restrição na análise.`
-      : " Não há overdue interno identificado.";
-
-  const summary = `${opening}${base}${coverageSentence}${floorSentence}${decisionSentence}${exposureSentence}${overdueSentence}`;
-
-  const highlights: Array<{ label: string; text: string }> = [
-    {
-      label: "Mitigação",
-      text: hasCoface
-        ? cofaceAsFloor
-          ? "Cobertura COFACE utilizada como piso decisório da recomendação."
-          : "Cobertura COFACE disponível, sem efeito de piso sobre o limite interno."
-        : "Sem cobertura COFACE; recomendação baseada na política interna."
-    },
-    {
-      label: "Exposição",
-      text: exposure === null
-        ? "Informação não disponível."
-        : hasResidualExposure
-          ? `Exposição residual de ${formatCurrencyBRLCompactExecutive(exposure)}.`
-          : "Sem exposição residual identificada."
-    },
-    {
-      label: "Carteira",
-      text: overduePercentage === null
-        ? "Overdue interno com informação não disponível."
-        : hasOverdue
-          ? `Overdue interno de ${overduePercentage}%.`
-          : "Cliente sem overdue interno relevante."
-    }
-  ];
-
-  const severity: ExecutiveNarrativeSeverity = hasResidualExposure || hasOverdue
-    ? "attention"
-    : fullyCovered && hasCoface
-      ? "positive"
-      : "neutral";
-
-  return { summary, highlights, severity };
-}
-
 const agriskWarningLabelMap: Record<string, string> = {
   INFORMACOES_BASICAS: "Informações básicas",
   INFORMACOES_CADASTRAIS: "Informações cadastrais",
@@ -658,10 +520,15 @@ type NewAnalysisPageViewProps = {
 export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysisPageViewProps) {
   const router = useRouter();
   const isWorkspaceMode = mode === "workspace";
-  const [draftAnalysisId, setDraftAnalysisId] = useState<number | null>(null);
-  const [draftCnpj, setDraftCnpj] = useState<string | null>(null);
-  const activeAnalysisId = analysisId ?? draftAnalysisId;
+  const effectivePermissions = useMemo(() => getEffectivePermissions(), []);
+  const hasTechnicalContinuationCapability = hasPermission("credit.analysis.execute", effectivePermissions);
+  const isOperationalSubmitOnlyFlow = !isWorkspaceMode && !hasTechnicalContinuationCapability;
+  const [workingAnalysisId, setWorkingAnalysisId] = useState<number | null>(analysisId ?? null);
+  const activeAnalysisId = workingAnalysisId;
   const hasStep1Workspace = Number.isFinite(activeAnalysisId) && (activeAnalysisId ?? 0) > 0;
+  useEffect(() => {
+    setWorkingAnalysisId(analysisId ?? null);
+  }, [analysisId]);
   const [step, setStep] = useState(1);
   const [stepError, setStepError] = useState<string | null>(null);
   const [existingCustomerId, setExistingCustomerId] = useState<number | null>(null);
@@ -727,6 +594,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const [triageState, setTriageState] = useState<"idle" | "loading" | "found_existing_customer" | "new_customer_external_data" | "recent_analysis_found" | "error" | "submitting" | "submitted">("idle");
   const [triageMessage, setTriageMessage] = useState<string | null>(null);
   const [triageResult, setTriageResult] = useState<CreditAnalysisTriageResponse | null>(null);
+  const [draftRecovery, setDraftRecovery] = useState<CreditAnalysisDraftRecoveryResponse | null>(null);
   const [governanceStatus, setGovernanceStatus] = useState<CreditAnalysisExistingCheckResponse | null>(null);
   const [triageSelectedBusinessUnit, setTriageSelectedBusinessUnit] = useState("");
   const [canCreateRequest, setCanCreateRequest] = useState(false);
@@ -777,12 +645,19 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     persistWorkspaceStateMutation.mutate({ id: activeAnalysisId, payload });
   }
 
-  function resolveWorkspaceInitialStep(analysisRecord: { final_decision?: unknown; analysis_status?: string | null; motor_result?: unknown; current_journey_step?: number | null; last_completed_journey_step?: number | null; analysis_started_at?: string | null } | null | undefined) {
+  function resolveWorkspaceInitialStep(analysisRecord: { final_decision?: unknown; analysis_status?: string | null; motor_result?: unknown; submitted_for_approval_at?: string | null; current_journey_step?: number | null; last_completed_journey_step?: number | null } | null | undefined) {
     if (!analysisRecord) return 2;
-    if (analysisRecord.final_decision || analysisRecord.analysis_status === "completed" || analysisRecord.motor_result) return 4;
+    if (
+      analysisRecord.final_decision ||
+      analysisRecord.analysis_status === "completed" ||
+      analysisRecord.motor_result ||
+      analysisRecord.submitted_for_approval_at
+    ) {
+      return 4;
+    }
     const persistedStep = analysisRecord.current_journey_step ?? analysisRecord.last_completed_journey_step ?? null;
     if (persistedStep && persistedStep >= 2 && persistedStep <= 4) return persistedStep;
-    return analysisRecord.analysis_started_at ? 3 : 2;
+    return 2;
   }
 
   const workspaceDetailQuery = useQuery({
@@ -813,7 +688,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const reportReadsQuery = useQuery({
     queryKey: ["analysis-report-reads", activeAnalysisId],
     queryFn: () => listAnalysisReportReads(activeAnalysisId as number),
-    enabled: hasStep1Workspace
+    enabled: isWorkspaceMode && hasStep1Workspace
   });
 
   const normalizedCnpj = sanitizeDigits(customer.cnpj);
@@ -907,7 +782,32 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   const submitMutation = useMutation({
     mutationFn: (payload: AnalysisJourneySubmitRequest) => submitAnalysisJourney(payload),
-    onSuccess: (response) => router.push(`/analises/${response.analysis_id}`)
+    onSuccess: async (response) => {
+      try {
+        const detail = await getCreditAnalysisDetail(response.analysis_id);
+        const availableActions = detail.analysis.available_actions ?? [];
+        const canContinueInTechnicalWorkspace = availableActions.some((action) => TECHNICAL_CONTINUATION_ACTIONS.has(action));
+        if (canContinueInTechnicalWorkspace) {
+          router.push(`/analises/${response.analysis_id}/workspace`);
+          return;
+        }
+      } catch {
+        // fallback conservador: usuário segue para monitor se não for possível validar continuidade técnica
+      }
+      router.push("/analises/monitor?submission=success");
+    }
+  });
+  const triageSubmitMutation = useMutation({
+    mutationFn: (payload: CreditAnalysisTriageSubmitRequest) => submitTriageCreditRequest(payload),
+    onSuccess: (response) => {
+      const availableActions = response.available_actions ?? [];
+      const canContinueInTechnicalWorkspace = availableActions.some((action) => TECHNICAL_CONTINUATION_ACTIONS.has(action));
+      if (canContinueInTechnicalWorkspace) {
+        router.push(`/analises/${response.analysis_id}/workspace`);
+        return;
+      }
+      router.push("/analises/monitor?submission=success");
+    }
   });
 
   const lookupMutation = useMutation({
@@ -933,9 +833,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   });
 
   useEffect(() => {
-    const permissions = getEffectivePermissions();
-    setCanCreateRequest(hasPermission("credit.request.create", permissions));
-  }, []);
+    setCanCreateRequest(hasPermission("credit.request.create", effectivePermissions));
+  }, [effectivePermissions]);
 
   useEffect(() => {
     if (!isWorkspaceMode) return;
@@ -1107,6 +1006,52 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           setCofaceImport((prev) => ({ ...prev, status: response.status, cofaceReadId: response.id, cofaceReadPayload: response.read_payload, cofaceWarnings: response.warnings, errorMessage: response.validation_message }));
         } catch {}
       }
+      const hasMappedPortfolioData = Boolean(
+        triageSubmission?.portfolio_data &&
+        typeof triageSubmission.portfolio_data === "object" &&
+        (
+          (triageSubmission.portfolio_data as Record<string, unknown>).open_amount !== undefined ||
+          (triageSubmission.portfolio_data as Record<string, unknown>).total_open_amount !== undefined
+        )
+      );
+      if (!hasMappedPortfolioData && customerRecord.document_number) {
+        try {
+          const triageSnapshot = await triageCreditRequest({ cnpj: customerRecord.document_number });
+          const econ = triageSnapshot?.economic_position;
+          if (econ) {
+            setWorkspaceInternalPosition({
+              open_amount: Number(econ.open_amount ?? 0),
+              total_limit: Number(econ.total_limit ?? 0),
+              available_limit: Number(econ.available_limit ?? 0),
+              overdue_amount: econ.overdue_amount !== null && econ.overdue_amount !== undefined ? Number(econ.overdue_amount) : null,
+              not_due_amount: econ.not_due_amount !== null && econ.not_due_amount !== undefined ? Number(econ.not_due_amount) : null,
+              base_date: null
+            });
+          }
+        } catch {
+          // fallback silencioso: mantém comportamento atual sem bloquear workspace
+          try {
+            const portfolioCustomers = await getPortfolioCustomers({
+              cnpj: customerRecord.document_number,
+              snapshot_id: "current",
+            });
+            const portfolioMatch = portfolioCustomers[0];
+            if (portfolioMatch) {
+              const openAmount = Number(portfolioMatch.total_open_amount ?? 0);
+              const totalLimit = Number(portfolioMatch.approved_credit_amount ?? 0);
+              const availableLimit = Math.max(0, totalLimit - openAmount);
+              setWorkspaceInternalPosition({
+                open_amount: openAmount,
+                total_limit: totalLimit,
+                available_limit: availableLimit,
+                overdue_amount: null,
+                not_due_amount: null,
+                base_date: null
+              });
+            }
+          } catch {}
+        }
+      }
     })();
   }, [
     analysisId,
@@ -1130,6 +1075,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     },
     onSuccess: async (response) => {
       setTriageResult(response);
+      setDraftRecovery(null);
       setTriageSelectedBusinessUnit(response.customer_data.business_unit ?? "");
       const isExisting = response.found_in_portfolio;
       if (response.has_recent_analysis) {
@@ -1164,37 +1110,17 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       } catch {
         setGovernanceStatus(null);
       }
-      const responseCnpj = sanitizeDigits(response.customer_data.cnpj);
-      if (!activeAnalysisId || (draftCnpj !== responseCnpj && !isWorkspaceMode)) {
-        setTriageMessage("Preparando solicitação...");
-        try {
-          await createDraftMutation.mutateAsync(response);
-        } catch {
-          setTriageState("error");
-          setTriageMessage("Não foi possível iniciar a solicitação. Tente novamente.");
-          return;
-        }
+      try {
+        const recoveredDraft = await recoverCreditAnalysisDraft(response.customer_data.cnpj);
+        setDraftRecovery(recoveredDraft);
+      } catch {
+        setDraftRecovery(null);
       }
       setTriageModalOpen(false);
     },
     onError: (error) => {
       setTriageState("error");
       setTriageMessage(error instanceof Error ? error.message : "Falha ao consultar CNPJ.");
-    }
-  });
-  const createDraftMutation = useMutation({
-    mutationFn: (response: CreditAnalysisTriageResponse) =>
-      createCreditAnalysisDraft({
-        cnpj: response.customer_data.cnpj,
-        customer_name: response.customer_data.company_name ?? null,
-        economic_group: response.customer_data.economic_group ?? null,
-        business_unit: (response.customer_data.business_unit ?? triageSelectedBusinessUnit) || null,
-        source: response.found_in_portfolio ? "portfolio" : "external"
-      }),
-    onSuccess: (draft) => {
-      setDraftAnalysisId(draft.analysis_id);
-      setDraftCnpj(draft.cnpj);
-      setExistingCustomerId(draft.customer_id);
     }
   });
   const saveStep1MetadataMutation = useMutation({
@@ -1205,7 +1131,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }
   });
   const uploadStep1DocumentMutation = useMutation({
-    mutationFn: (payload: { documentType: Step1DocumentType; file: File }) => uploadAnalysisDocument(activeAnalysisId as number, payload.documentType, payload.file),
+    mutationFn: (payload: { analysisId: number; documentType: Step1DocumentType; file: File }) => uploadAnalysisDocument(payload.analysisId, payload.documentType, payload.file),
     onSuccess: async () => {
       await step1DocumentsQuery.refetch();
       setDocumentUploadFeedback({ type: "success", message: "Arquivo enviado com sucesso." });
@@ -1229,6 +1155,64 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       });
     }
   });
+
+  async function ensureStep1Workspace(): Promise<number | null> {
+    if (hasStep1Workspace && activeAnalysisId) return activeAnalysisId;
+    const digits = sanitizeDigits(customer.cnpj);
+    if (digits.length !== 14) {
+      setDocumentUploadFeedback({ type: "error", message: "Informe um CNPJ válido antes de anexar documentos." });
+      return null;
+    }
+
+    const draftSource = triageResult?.found_in_portfolio ? "portfolio" : triageResult ? "external" : "manual";
+    try {
+      const draft = await createCreditAnalysisDraft({
+        cnpj: digits,
+        customer_name: customer.companyName?.trim() || null,
+        economic_group: triageResult?.customer_data.economic_group ?? null,
+        business_unit: triageSelectedBusinessUnit?.trim() || null,
+        source: draftSource
+      });
+      setWorkingAnalysisId(draft.analysis_id);
+      setGovernanceStatus(null);
+      setStepError(null);
+      setDraftRecovery({
+        analysis_id: draft.analysis_id,
+        customer_id: draft.customer_id,
+        cnpj: draft.cnpj,
+        status: draft.status,
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      });
+      return draft.analysis_id;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível preparar a solicitação para upload.";
+      setDocumentUploadFeedback({ type: "error", message });
+      return null;
+    }
+  }
+
+  async function handleContinueDraft() {
+    if (!draftRecovery) return;
+    setWorkingAnalysisId(draftRecovery.analysis_id);
+    setDocumentUploadFeedback({ type: "success", message: "Rascunho recuperado com sucesso." });
+  }
+
+  async function handleDiscardDraft() {
+    if (!draftRecovery) return;
+    try {
+      await discardCreditAnalysisDraft(draftRecovery.analysis_id);
+      setDraftRecovery(null);
+      setWorkingAnalysisId(null);
+      setDocumentUploadFeedback({ type: "success", message: "Rascunho descartado." });
+      setGovernanceStatus(null);
+      setStepError(null);
+    } catch (error) {
+      setDocumentUploadFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "Não foi possível descartar o rascunho."
+      });
+    }
+  }
   const createCommercialReferenceMutation = useMutation({
     mutationFn: (payload: { name: string; phone: string | null; email: string | null }) =>
       createCommercialReference(activeAnalysisId as number, payload),
@@ -1302,11 +1286,15 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   function navigateToStep(targetStep: number) {
     if (targetStep === step) return;
+    if (isOperationalSubmitOnlyFlow && targetStep > 1) {
+      setStepError("Esta solicitação será apenas submetida para análise financeira. O avanço para a Etapa 2 não é permitido para seu acesso.");
+      return;
+    }
     if (isJourneyReadOnly && targetStep < 4) {
       setStepError("A análise já foi encaminhada para aprovação/conclusão e não pode voltar para edição.");
       return;
     }
-    if (isGovernanceBlocked && targetStep > 1) {
+    if (isStep1GovernanceBlocked && targetStep > 1) {
       setStepError("Não é possível avançar enquanto existir bloqueio de governança para este CNPJ.");
       return;
     }
@@ -1339,6 +1327,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setStep(4);
     }
   }, [isJourneyReadOnly, step]);
+
+  useEffect(() => {
+    if (!isOperationalSubmitOnlyFlow) return;
+    if (step > 1) {
+      setStep(1);
+    }
+  }, [isOperationalSubmitOnlyFlow, step]);
 
   function openImportModal(source: ImportSource) {
     setImportModalSource(source);
@@ -1414,7 +1409,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           agriskReadPayload: response.read_payload,
           agriskWarnings: response.warnings
         }));
-        await Promise.all([step1DocumentsQuery.refetch(), reportReadsQuery.refetch()]);
+        if (isWorkspaceMode) {
+          await Promise.all([step1DocumentsQuery.refetch(), reportReadsQuery.refetch()]);
+        } else {
+          await step1DocumentsQuery.refetch();
+        }
         persistWorkspaceStatePatch({
           imports: {
             agrisk: {
@@ -1463,7 +1462,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           cofaceReadPayload: response.read_payload,
           cofaceWarnings: response.warnings
         }));
-        await Promise.all([step1DocumentsQuery.refetch(), reportReadsQuery.refetch()]);
+        if (isWorkspaceMode) {
+          await Promise.all([step1DocumentsQuery.refetch(), reportReadsQuery.refetch()]);
+        } else {
+          await step1DocumentsQuery.refetch();
+        }
         persistWorkspaceStatePatch({
           imports: {
             coface: {
@@ -1543,10 +1546,26 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   function submit() {
-    if (isGovernanceBlocked) {
+    if (isStep1GovernanceBlocked) {
       setStepError("A abertura de nova solicitação está bloqueada para este cliente neste momento.");
       return;
     }
+    if (isOperationalSubmitOnlyFlow) {
+      const triagePayload: CreditAnalysisTriageSubmitRequest = {
+        cnpj: sanitizeDigits(customer.cnpj),
+        suggested_limit: toNumberInput(analysis.requestedLimit),
+        source: triageResult?.found_in_portfolio ? "cliente_existente_carteira" : "cliente_novo_consulta_externa",
+        customer_id: existingCustomerId ?? triageResult?.customer_data.customer_id ?? null,
+        company_name: customer.companyName.trim() || null,
+        business_unit: triageResult?.found_in_portfolio ? null : ((triageSelectedBusinessUnit || requestBusinessUnit || "").trim() || null),
+        is_early_review_request: isEarlyReviewRequest,
+        early_review_justification: isEarlyReviewRequest ? (earlyReviewJustification.trim() || null) : null,
+        previous_analysis_id: triageResult?.last_analysis?.analysis_id ?? null
+      };
+      triageSubmitMutation.mutate(triagePayload);
+      return;
+    }
+
     const payload: AnalysisJourneySubmitRequest = {
       existing_customer_id: existingCustomerId,
       customer: {
@@ -1648,6 +1667,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   const isGovernanceBlocked =
     governanceStatus?.state === "in_progress" || governanceStatus?.state === "recently_completed";
+  const isCurrentDraftGovernanceRecord =
+    governanceStatus?.state === "in_progress" &&
+    Boolean(activeAnalysisId) &&
+    governanceStatus.analysis_id === activeAnalysisId;
+  const isStep1GovernanceBlocked = isGovernanceBlocked && !isCurrentDraftGovernanceRecord;
   const isGovernanceInProgress = governanceStatus?.state === "in_progress";
   const isGovernanceRecentlyCompleted = governanceStatus?.state === "recently_completed";
   const governanceDecisionDateLabel = governanceStatus?.decision_date
@@ -1657,9 +1681,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     ? new Date(governanceStatus.next_allowed_date).toLocaleDateString("pt-BR")
     : null;
 
-  const canContinue = step === 1 ?normalizedCnpj.length === 14 && Boolean(customer.companyName) && !isGovernanceBlocked : step === 2 ?hasStep2Source : step === 3 ?toNumberInput(analysis.requestedLimit) > 0 : true;
-  const submitBlockingError = validateStep(1) ?? validateStep(2) ?? validateStep(3);
-  const canSubmitJourney = !submitBlockingError && !submitMutation.isPending && !isGovernanceBlocked;
+  const canContinue = step === 1 ?normalizedCnpj.length === 14 && Boolean(customer.companyName) && !isStep1GovernanceBlocked : step === 2 ?hasStep2Source : step === 3 ?toNumberInput(analysis.requestedLimit) > 0 : true;
+  const submitBlockingError = isOperationalSubmitOnlyFlow
+    ? (validateStep(1) ?? (toNumberInput(analysis.requestedLimit) <= 0 ? "Preencha Limite solicitado com valor maior que zero." : null))
+    : (validateStep(1) ?? validateStep(2) ?? validateStep(3));
+  const isSubmitPending = submitMutation.isPending || triageSubmitMutation.isPending;
+  const canSubmitJourney = !submitBlockingError && !isSubmitPending && !isStep1GovernanceBlocked;
   const guaranteeOriginText = hasCofaceCoverageImported
     ? "COFACE (valor de cobertura)"
     : toNumberInput(analysis.guaranteeLimit) > 0
@@ -1791,28 +1818,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     workspaceInternalPositionSource,
     workspacePortfolioDataSource
   ];
-  const mappedInternalOpenAmount = pickNumberFromSources(internalValueSources, [
-    "open_amount",
-    "total_open_amount"
-  ]);
-  const mappedInternalTotalLimit = pickNumberFromSources(internalValueSources, [
-    "total_limit",
-    "credit_limit"
-  ]);
-  const mappedInternalAvailableLimit = pickNumberFromSources(internalValueSources, [
-    "available_limit",
-    "limit_available"
-  ]);
-  const strongCompositionSources: Array<Record<string, unknown> | null> = [
-    triageEconomicPositionSource,
-    workspaceInternalPositionSource,
-    workspacePortfolioDataSource
-  ];
-  const mappedInternalOverdue = pickNumberFromSources(strongCompositionSources, ["overdue_amount"]);
-  const mappedInternalNotDue = pickNumberFromSources(strongCompositionSources, ["not_due_amount"]);
+  const canonicalInternalSummary = resolveInternalPortfolioSummaryFromSources({
+    sources: internalValueSources,
+  });
+  const mappedInternalOpenAmount = canonicalInternalSummary.openAmount;
+  const mappedInternalTotalLimit = canonicalInternalSummary.currentLimit;
+  const mappedInternalAvailableLimit = canonicalInternalSummary.availableLimit;
+  const mappedInternalOverdue = canonicalInternalSummary.overdueAmount;
+  const mappedInternalNotDue = canonicalInternalSummary.notDueAmount;
   const hasAnyMappedFinancialValue =
     mappedInternalOpenAmount !== null || mappedInternalTotalLimit !== null || mappedInternalAvailableLimit !== null;
-  const hasInternalPositionData = hasAnyMappedFinancialValue;
+  const hasInternalPositionData =
+    hasAnyMappedFinancialValue || mappedInternalNotDue !== null || mappedInternalOverdue !== null;
   const internalLastUpdatedLabel =
     (typeof triageEconomicPositionSource?.base_date === "string" && triageEconomicPositionSource.base_date.trim()
       ? new Date(triageEconomicPositionSource.base_date).toLocaleDateString("pt-BR")
@@ -1848,47 +1865,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       });
     }
   }, [mappedInternalNotDue, mappedInternalOpenAmount, mappedInternalOverdue]);
-
-  useEffect(() => {
-    const isWorkspaceEligible = isWorkspaceMode && workspaceHydrated;
-    const digits = sanitizeDigits(customer.cnpj);
-    const hasValidCnpj = digits.length === 14;
-    const portfolioByWorkspace =
-      (typeof workspaceTriageSubmission?.source === "string" && workspaceTriageSubmission.source === "portfolio") ||
-      (typeof workspaceTriageSubmission?.found_in_portfolio === "boolean" && workspaceTriageSubmission.found_in_portfolio);
-    const hasPortfolioFlag = Boolean(triageResult?.found_in_portfolio) || portfolioByWorkspace;
-    const hasEconomicPosition = Boolean(triageResult?.economic_position || workspaceInternalPosition);
-
-    if (!isWorkspaceEligible || !hasValidCnpj || !hasPortfolioFlag || hasEconomicPosition) return;
-
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await triageCreditRequest({ cnpj: digits });
-        if (cancelled || !response.found_in_portfolio || !response.economic_position) return;
-
-        setWorkspaceInternalPosition({
-          open_amount: response.economic_position.open_amount,
-          total_limit: response.economic_position.total_limit,
-          available_limit: response.economic_position.available_limit,
-          overdue_amount: response.economic_position.overdue_amount ?? null,
-          not_due_amount: response.economic_position.not_due_amount ?? null,
-          base_date: response.economic_position.base_date ?? null
-        });
-        setTriageResult((prev) =>
-          prev
-            ? { ...prev, found_in_portfolio: response.found_in_portfolio, customer_data: response.customer_data, economic_position: response.economic_position }
-            : response
-        );
-      } catch {
-        // Keep silent: card will continue using available fallbacks.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [customer.cnpj, isWorkspaceMode, triageResult, workspaceHydrated, workspaceInternalPosition, workspaceTriageSubmission]);
 
   const economicGroupLabel =
     triageResult?.customer_data.economic_group?.trim() ||
@@ -2193,18 +2169,41 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const baseByCoverage = technicalCoverageValue !== null ? Math.min(baseByScore, technicalCoverageValue) : baseByScore * 0.7;
     return Math.max(0, baseByCoverage);
   })();
+  const backendRecommendationClassification = (() => {
+    const decisionMemory = workspaceDetailQuery.data?.analysis?.decision_memory_json;
+    if (!decisionMemory || typeof decisionMemory !== "object") return null;
+    const classification = (decisionMemory as Record<string, unknown>).recommendation_classification;
+    return classification && typeof classification === "object" ? (classification as Record<string, unknown>) : null;
+  })();
+  const backendFinalSuggestedLimit = (() => {
+    const raw = backendRecommendationClassification?.final_suggested_limit;
+    if (raw === undefined || raw === null) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(parsed, 0) : null;
+  })();
   const executiveCofaceFloorApplied =
     preliminaryRecommendedLimit !== null &&
     technicalCoverageValue !== null &&
     technicalCoverageValue > preliminaryRecommendedLimit;
   const executiveDisplayedRecommendedLimit =
-    preliminaryRecommendedLimit === null
-      ? (technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : null)
-      : (technicalCoverageValue !== null ? Math.max(preliminaryRecommendedLimit, technicalCoverageValue) : preliminaryRecommendedLimit);
+    backendFinalSuggestedLimit !== null
+      ? backendFinalSuggestedLimit
+      : preliminaryRecommendedLimit === null
+        ? (technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : null)
+        : (technicalCoverageValue !== null ? Math.max(preliminaryRecommendedLimit, technicalCoverageValue) : preliminaryRecommendedLimit);
   const executiveCoverageAvailable = technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : 0;
   const executiveNetInternalExposure = executiveDisplayedRecommendedLimit !== null
     ? Math.max(executiveDisplayedRecommendedLimit - executiveCoverageAvailable, 0)
     : null;
+  const internalPortfolioSummary = resolveInternalPortfolioSummaryFromSources({
+    sources: internalValueSources,
+    residualExposure: executiveNetInternalExposure,
+  });
+  const approvalFlowSummary = workspaceDetailQuery.data?.approval_flow_summary ?? null;
+  const predictedApprovers = approvalFlowSummary?.predicted_approvers ?? [];
+  const approvalFlowState = approvalFlowSummary?.flow_state ?? approvalFlowSummary?.approval_flow_state ?? "not_submitted";
+  const approvalFlowSteps = approvalFlowSummary?.steps ?? [];
+  const approvalFlowEvents = approvalFlowSummary?.events ?? [];
   const executiveExposureFullyCovered = executiveNetInternalExposure !== null && executiveNetInternalExposure === 0;
   const executiveExposureHasResidual = executiveNetInternalExposure !== null && executiveNetInternalExposure > 0;
   const executiveInternalSuggestedLimit = (() => {
@@ -2212,30 +2211,101 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const scoreFactor = institutionalScore >= 9 ? 1 : institutionalScore >= 8 ? 0.95 : institutionalScore >= 6 ? 0.8 : institutionalScore >= 4 ? 0.6 : 0.4;
     return Math.max(0, technicalRequestedLimit * scoreFactor);
   })();
-  const executiveNarrative = buildExecutiveNarrative({
-    score: institutionalScore,
-    scoreBand: institutionalRiskBand,
-    internalSuggestedLimit: executiveInternalSuggestedLimit,
-    cofaceCoverage: technicalCoverageValue,
-    recommendedLimit: executiveDisplayedRecommendedLimit,
-    exposure: executiveNetInternalExposure,
-    overduePercentage: executiveOverduePercent
-  });
-  const executiveNarrativeCardClass = executiveNarrative.severity === "attention"
-    ? "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]"
-    : executiveNarrative.severity === "positive"
-      ? "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]"
-      : "border border-[#E5EAF1] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)]";
-  const recommendationClassification = (() => {
-    const decisionMemory = workspaceDetailQuery.data?.analysis?.decision_memory_json;
-    if (!decisionMemory || typeof decisionMemory !== "object") return null;
-    const classification = (decisionMemory as Record<string, unknown>).recommendation_classification;
-    return classification && typeof classification === "object" ? (classification as Record<string, unknown>) : null;
-  })();
+  const recommendationClassification = backendRecommendationClassification;
   const recommendationClassificationLabel = (() => {
     const label = recommendationClassification?.label;
     return typeof label === "string" && label.trim() ? label : null;
   })();
+  const engineRecommendedRaw = recommendationClassification?.engine_recommended_limit;
+  const engineRecommendedLimit = (() => {
+    if (engineRecommendedRaw === undefined || engineRecommendedRaw === null) return null;
+    const parsed = Number(engineRecommendedRaw);
+    return Number.isFinite(parsed) ? parsed : null;
+  })();
+  const preliminaryRiskLimitValue = engineRecommendedLimit ?? null;
+  const insightRiskScoreText = institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "Não informado";
+  const insightRiskProfileText = institutionalRiskBand === "Informações insuficientes" ? "Perfil não identificado" : `Perfil ${institutionalRiskBand}`;
+  const insightRiskLimitText = preliminaryRiskLimitValue !== null
+    ? formatCurrencyBRLMM2(preliminaryRiskLimitValue)
+    : "Limite calculado não disponível";
+  const insightCofaceCoverageText = technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "Não identificado";
+  const insightCofaceMessage = technicalCoverageValue === null
+    ? "Sem cobertura COFACE identificada"
+    : executiveCofaceFloorApplied
+      ? "Seguro utilizado como piso para suportar o limite recomendado"
+      : "Cobertura considerada, sem necessidade de ajuste de piso";
+  const insightExposureText = executiveNetInternalExposure !== null ? formatCurrencyBRLCompactExecutive(executiveNetInternalExposure) : "Não informado";
+  const insightImpactText = recommendationClassification?.financial_impact !== undefined && recommendationClassification?.financial_impact !== null
+    ? formatCurrencyBRLCompactExecutive(Number(recommendationClassification.financial_impact))
+    : "Não informado";
+  const insightOverdueText = mappedInternalOverdue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOverdue) : "Não informado";
+  const insightOverdueMessage = mappedInternalOverdue === null
+    ? "Sem dado disponível"
+    : mappedInternalOverdue > 0
+      ? "Overdue interno identificado"
+      : "Sem overdue interno relevante";
+  const insightRiskPrimary = institutionalScore !== null
+    ? `${insightRiskProfileText} · Score ${insightRiskScoreText}`
+    : "Perfil não identificado";
+  const insightRiskSecondary = `Limite Calculado: ${insightRiskLimitText}`;
+  const insightCofacePrimary = technicalCoverageValue !== null
+    ? `Cobertura ativa: ${insightCofaceCoverageText}`
+    : "Sem cobertura COFACE identificada";
+  const cofaceCoverageLimitedRecommendation =
+    technicalCoverageValue !== null &&
+    preliminaryRiskLimitValue !== null &&
+    executiveDisplayedRecommendedLimit !== null &&
+    preliminaryRiskLimitValue > technicalCoverageValue &&
+    Math.abs(executiveDisplayedRecommendedLimit - technicalCoverageValue) < 1;
+  const insightCofaceSecondary = technicalCoverageValue !== null
+    ? cofaceCoverageLimitedRecommendation
+      ? "Recomendação limitada à cobertura disponível"
+      : "Cobertura suficiente para suportar a recomendação"
+    : "Sem cobertura COFACE identificada";
+  const impactRaw = recommendationClassification?.financial_impact;
+  const impactValue = impactRaw !== undefined && impactRaw !== null ? Number(impactRaw) : null;
+  const currentApprovedLimit = mappedInternalTotalLimit;
+  const recommendedLimitValue = executiveDisplayedRecommendedLimit;
+  const coverageLimitValue = technicalCoverageValue;
+  const incrementVsCurrent =
+    recommendedLimitValue !== null && currentApprovedLimit !== null
+      ? recommendedLimitValue - currentApprovedLimit
+      : null;
+  const reductionVsRequested =
+    recommendedLimitValue !== null && technicalRequestedLimit > 0 && recommendedLimitValue < technicalRequestedLimit
+      ? technicalRequestedLimit - recommendedLimitValue
+      : null;
+  const isMaintenanceWithinCoverage =
+    recommendedLimitValue !== null &&
+    currentApprovedLimit !== null &&
+    coverageLimitValue !== null &&
+    Math.abs(recommendedLimitValue - currentApprovedLimit) < 1 &&
+    recommendedLimitValue <= coverageLimitValue;
+  const insightExposurePrimary = executiveNetInternalExposure === null
+    ? "Sem dado disponível"
+    : executiveNetInternalExposure > 0
+      ? "Exposição residual identificada"
+      : "Sem exposição residual";
+  const insightExposureSecondary =
+    executiveNetInternalExposure !== null && executiveNetInternalExposure > 0
+      ? `Exposição residual: ${insightExposureText}`
+      : isMaintenanceWithinCoverage
+        ? "Limite mantido dentro da cobertura disponível"
+        : incrementVsCurrent !== null && incrementVsCurrent > 0
+          ? `Incremento aprovado: +${formatCurrencyBRLCompactExecutive(incrementVsCurrent)}`
+          : reductionVsRequested !== null && reductionVsRequested > 0
+            ? `Redução vs solicitado: -${formatCurrencyBRLCompactExecutive(reductionVsRequested)}`
+            : impactValue === 0
+              ? "Sem impacto financeiro"
+              : impactValue !== null
+                ? `${impactValue > 0 ? "Incremento aprovado" : "Redução recomendada"}: ${impactValue > 0 ? "+" : ""}${insightImpactText}`
+                : "Sem dado disponível";
+  const insightOverduePrimary = insightOverdueMessage;
+  const insightOverdueSecondary = mappedInternalOverdue === null
+    ? "Sem dado disponível"
+    : mappedInternalOverdue > 0
+      ? `Overdue atual: ${insightOverdueText}`
+      : "Carteira sem sinais relevantes de deterioração";
   const preliminaryMaxTermDays = institutionalRiskBand === "AA"
     ? 360
     : institutionalRiskBand === "A"
@@ -2414,12 +2484,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
       return;
     }
-    if (!hasStep1Workspace) {
-      setDocumentUploadFeedback({ type: "error", message: "Não foi possível preparar a solicitação para upload. Consulte o CNPJ novamente." });
-      return;
-    }
+    const resolvedAnalysisId = await ensureStep1Workspace();
+    if (!resolvedAnalysisId) return;
     setDocumentUploadFeedback(null);
-    await uploadStep1DocumentMutation.mutateAsync({ documentType, file });
+    await uploadStep1DocumentMutation.mutateAsync({ analysisId: resolvedAnalysisId, documentType, file });
   }
 
   async function handleFinancialDocumentsUpload(files: File[]) {
@@ -2431,13 +2499,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
       return;
     }
-    if (!hasStep1Workspace) {
-      setDocumentUploadFeedback({ type: "error", message: "Não foi possível preparar a solicitação para upload. Consulte o CNPJ novamente." });
-      return;
-    }
+    const resolvedAnalysisId = await ensureStep1Workspace();
+    if (!resolvedAnalysisId) return;
     setDocumentUploadFeedback(null);
     for (const file of files) {
-      await uploadStep1DocumentMutation.mutateAsync({ documentType: financialDocumentType, file });
+      await uploadStep1DocumentMutation.mutateAsync({ analysisId: resolvedAnalysisId, documentType: financialDocumentType, file });
     }
   }
 
@@ -2453,7 +2519,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       return;
     }
     if (!hasStep1Workspace) {
-      setCommercialReferenceForm((prev) => ({ ...prev, error: "Consulte o CNPJ novamente para iniciar a solicitação." }));
+      setCommercialReferenceForm((prev) => ({ ...prev, error: "Clique em Avançar para criar a solicitação antes de incluir referências." }));
       return;
     }
     const name = commercialReferenceForm.name.trim();
@@ -2666,6 +2732,31 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             </div>
           ) : null}
 
+          {draftRecovery ? (
+            <div className="rounded-[10px] border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-3 text-[12px] text-[#1E3A8A]">
+              <p className="font-medium">Rascunho disponível para este CNPJ.</p>
+              <p className="mt-1">
+                Expira em {new Date(draftRecovery.expires_at).toLocaleString("pt-BR")}.
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleContinueDraft()}
+                  className="rounded-[8px] border border-[#93C5FD] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1E40AF] hover:bg-[#EFF6FF]"
+                >
+                  Continuar rascunho
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDiscardDraft()}
+                  className="rounded-[8px] border border-[#FECACA] bg-white px-3 py-1.5 text-[11px] font-medium text-[#B91C1C] hover:bg-[#FEF2F2]"
+                >
+                  Descartar rascunho
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <p className="text-[13px] font-medium text-[#111827]">Informe o CNPJ para identificar o cliente</p>
           {isStep1ReadOnly ? (
             <div className="rounded-[10px] border border-[#D7E1EC] bg-[#F7F9FC] px-4 py-3 text-[12px] text-[#4F647A]">
@@ -2680,8 +2771,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               onChange={(event) => {
                 setExistingCustomerId(null);
                 setGovernanceStatus(null);
-                setDraftAnalysisId(null);
-                setDraftCnpj(null);
+                setDraftRecovery(null);
                 setCustomer((prev) => ({ ...prev, cnpj: formatCnpj(event.target.value) }));
               }}
               onBlur={handleCnpjBlur}
@@ -2693,7 +2783,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             {lookupMutation.isPending ?"Consultando dados cadastrais..." : externalLookupMessage ?? "A consulta externa é opcional. Se necessário, os dados podem ser informados manualmente."}
           </p>
 
-          <fieldset disabled={isGovernanceBlocked || isStep1ReadOnly} className="contents">
+          <fieldset disabled={isStep1GovernanceBlocked || isStep1ReadOnly} className="contents">
           <div className="rounded-[8px] border border-[#e2e5eb] bg-[#f9fafb] p-3">
             <p className="mb-2 text-[12px] font-medium text-[#111827]">Contato do Cliente</p>
             <div className="grid gap-3 md:grid-cols-3">
@@ -2811,12 +2901,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                       <span className="rounded-full border border-[#D7E1EC] bg-white px-2 py-0.5 text-[10px] text-[#4F647A]">{labelDocumentStatus(item?.status ?? "pendente")}</span>
                       <span className="max-w-[190px] truncate text-[#4F647A]">{item?.original_filename ?? "Sem arquivo"}</span>
                       <span className="text-[#8FA3B4]">{item?.uploaded_at ? new Date(item.uploaded_at).toLocaleDateString("pt-BR") : "-"}</span>
-                      <label className={`rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 py-1 text-[10px] font-medium text-[#102033] hover:bg-[#F2F6FB] ${uploadStep1DocumentMutation.isPending ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                      <label className={`rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 py-1 text-[10px] font-medium text-[#102033] ${uploadStep1DocumentMutation.isPending || isStep1ReadOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-[#F2F6FB]"}`}>
                         Upload
                         <input
                           type="file"
                           className="hidden"
-                          disabled={uploadStep1DocumentMutation.isPending}
+                          disabled={uploadStep1DocumentMutation.isPending || isStep1ReadOnly}
                           onChange={async (event) => {
                             const input = event.currentTarget;
                             const file = event.target.files?.[0];
@@ -2837,13 +2927,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 </p>
 
                 <div className="mt-3">
-                  <label className={`inline-flex items-center rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] hover:bg-[#F2F6FB] ${uploadStep1DocumentMutation.isPending ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                  <label className={`inline-flex items-center rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#102033] ${uploadStep1DocumentMutation.isPending || isStep1ReadOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-[#F2F6FB]"}`}>
                     Adicionar arquivos
                     <input
                       type="file"
                       multiple
                       className="hidden"
-                      disabled={uploadStep1DocumentMutation.isPending}
+                      disabled={uploadStep1DocumentMutation.isPending || isStep1ReadOnly}
                       onChange={async (event) => {
                         const input = event.currentTarget;
                         const files = Array.from(event.target.files ?? []);
@@ -3010,7 +3100,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         </article>
       ) : null}
 
-      {step === 2 ?(
+      {step === 2 && !isOperationalSubmitOnlyFlow ?(
         <div className={`flex items-center gap-3 bg-white ${step === 4 ?"h-[44px] border-b border-[#D7E1EC] px-7" : "rounded-[10px] border border-[#D7E1EC] px-5 py-3"}`}>
           <div className="mr-1 text-[11px] text-[#8FA3B4]">Cliente da solicitação</div>
           <div className={`flex items-center justify-center rounded-[6px] text-[10px] font-bold ${step === 4 ?"h-[26px] w-[26px] bg-[#295B9A] text-white" : "h-7 w-7 bg-[#EEF3F8] text-[#295B9A]"}`}>
@@ -3856,23 +3946,23 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 {step === 3 ?(
         <div className="mt-3 space-y-4">
           <div className="relative overflow-hidden rounded-[30px] bg-[linear-gradient(135deg,#071426_0%,#0b1f3a_45%,#102a4c_100%)] px-5 py-[18px] text-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-            <p className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#bfdbfe]">Etapa 3 · Mesa de análise</p>
-            <h2 className="mt-1.5 text-[30px] font-extrabold leading-[1.05] tracking-[-0.04em] text-white">Mesa corporativa de análise de crédito</h2>
-            <p className="mt-2 text-[13px] leading-5 text-[#dbeafe] md:whitespace-nowrap">Consolidação técnica dos dados internos, bureaus, política de crédito e julgamento do analista antes da revisão e envio para aprovação.</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#bfdbfe]/80">Etapa 3 · Mesa de análise</p>
+            <h2 className="mt-1.5 text-[30px] font-bold leading-[1.12] tracking-[-0.015em] text-white/90">Mesa corporativa de análise de crédito</h2>
+            <p className="mt-2 text-[13px] leading-5 text-[#dbeafe]/85 md:whitespace-nowrap">Consolidação técnica dos dados internos, bureaus, política de crédito e julgamento do analista antes da revisão e envio para aprovação.</p>
             <div className="mt-4 grid gap-2.5 md:grid-cols-2 xl:grid-cols-[1.2fr_0.95fr_0.95fr_0.95fr_0.95fr]">
               <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5">
-                <p className="text-[11px] font-semibold text-[#bfdbfe]">Cliente</p>
-                <p className="mt-1.5 overflow-hidden text-[20px] font-extrabold leading-tight text-white [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{customer.companyName || "Não informado"}</p>
-                <p className="mt-1 text-[11px] text-[#dbeafe]">{formatCnpjForDisplay(customer.cnpj)}</p>
+                <p className="text-[11px] font-medium text-[#bfdbfe]/85">Cliente</p>
+                <p className="mt-1.5 overflow-hidden text-[20px] font-semibold leading-tight tracking-[-0.01em] text-white/90 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{customer.companyName || "Não informado"}</p>
+                <p className="mt-1 text-[11px] text-[#dbeafe]/85">{formatCnpjForDisplay(customer.cnpj)}</p>
               </div>
-              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Limite solicitado</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalRequestedLimit > 0 ? formatCurrencyBRLCompactExecutive(technicalRequestedLimit) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Condição comercial proposta</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-medium text-[#bfdbfe]/85">Limite solicitado</p><p className="mt-1.5 text-[20px] font-bold text-white/95">{technicalRequestedLimit > 0 ? formatCurrencyBRLCompactExecutive(technicalRequestedLimit) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]/85">Condição comercial proposta</p></div>
               <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5">
-                <p className="text-[11px] font-semibold text-[#bfdbfe]">Limite Atual Aprovado</p>
-                <p className="mt-1.5 text-[20px] font-extrabold text-white">{mappedInternalTotalLimit !== null ? formatCurrencyBRLCompactExecutive(mappedInternalTotalLimit) : "Não disponível"}</p>
-                <p className="mt-0.5 text-[11px] text-[#dbeafe]">{mappedInternalTotalLimit !== null ? "Limite total aprovado vigente" : "Cliente sem limite vigente identificado na base importada."}</p>
+                <p className="text-[11px] font-medium text-[#bfdbfe]/85">Limite Atual Aprovado</p>
+                <p className="mt-1.5 text-[20px] font-bold text-white/95">{mappedInternalTotalLimit !== null ? formatCurrencyBRLCompactExecutive(mappedInternalTotalLimit) : "Não disponível"}</p>
+                <p className="mt-0.5 text-[11px] text-[#dbeafe]/85">{mappedInternalTotalLimit !== null ? "Limite total aprovado vigente" : "Cliente sem limite vigente identificado na base importada."}</p>
               </div>
-              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Cobertura COFACE</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">{executiveCoveragePercent !== null ? `${executiveCoveragePercent}% do limite solicitado` : "Sem percentual"}</p></div>
-              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-semibold text-[#bfdbfe]">Valor em Aberto</p><p className="mt-1.5 text-[20px] font-extrabold text-white">{mappedInternalOpenAmount !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOpenAmount) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]">Notdue: {mappedInternalNotDue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalNotDue) : "—"} · Overdue: {mappedInternalOverdue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOverdue) : "—"}</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-medium text-[#bfdbfe]/85">Cobertura COFACE</p><p className="mt-1.5 text-[20px] font-bold text-white/95">{technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]/85">{executiveCoveragePercent !== null ? `${executiveCoveragePercent}% do limite solicitado` : "Sem percentual"}</p></div>
+              <div className="rounded-[18px] border border-white/20 bg-white/10 p-3.5"><p className="text-[11px] font-medium text-[#bfdbfe]/85">Valor em Aberto</p><p className="mt-1.5 text-[20px] font-bold text-white/95">{mappedInternalOpenAmount !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOpenAmount) : "—"}</p><p className="mt-0.5 text-[11px] text-[#dbeafe]/85">Notdue: {mappedInternalNotDue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalNotDue) : "—"} · Overdue: {mappedInternalOverdue !== null ? formatCurrencyBRLCompactExecutive(mappedInternalOverdue) : "—"}</p></div>
             </div>
           </div>
           <div className="grid gap-4 xl:grid-cols-[1.45fr_0.9fr]">
@@ -3913,47 +4003,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 </div>
               </article>
 
-              <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
-                <p className="text-[18px] font-semibold text-[#0f172a]">Score institucional preliminar</p>
-                <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
-                  <InstitutionalScoreGauge score={institutionalScore} />
-                  <div>
-                    <div className="space-y-3">
-                      {institutionalScoreBreakdown.map((item) => (
-                        <div key={item.key}>
-                          <div className="mb-1 flex items-center justify-between text-[12px] font-semibold text-[#334155]">
-                            <span className="inline-flex items-center gap-2">
-                              <span>{item.title}</span>
-                              <span className="group relative inline-flex">
-                                <Info className="h-3.5 w-3.5 text-[#94a3b8] transition-colors duration-150 group-hover:text-[#2563eb]" />
-                                <span className="pointer-events-none absolute left-1/2 top-[calc(100%+8px)] z-30 w-[300px] -translate-x-1/2 rounded-[10px] border border-[#E2E8F0] bg-white px-3 py-2 text-left text-[11px] font-normal text-[#334155] opacity-0 shadow-[0_8px_20px_rgba(15,23,42,0.08)] transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
-                                  <span className="block text-[11px] font-semibold text-[#0f172a]">{item.tooltip.title}</span>
-                                  <span className="mt-1 block leading-4">{item.tooltip.description}</span>
-                                  <span className="mt-1 block text-[#475569]"><strong>Fonte:</strong> {item.tooltip.source}</span>
-                                  {item.tooltip.weightLabel ? <span className="mt-1 block font-semibold text-[#64748b]">{item.tooltip.weightLabel}</span> : null}
-                                  <span className="mt-1 block text-[#64748b]">{item.tooltip.note}</span>
-                                </span>
-                              </span>
-                              {item.key === "financial_liquidity" && hasValidCofaceCoverage ? <span className="inline-flex rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-2 py-0.5 text-[10px] font-semibold text-[#1D4ED8]">Mitigado por COFACE</span> : null}
-                              {item.key === "financial_liquidity" && !hasValidCofaceCoverage && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Não avaliado</span> : null}
-                              {item.key === "market_conditions" && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Em evolução</span> : null}
-                            </span>
-                            <span>{item.score.toFixed(1)}/10</span>
-                          </div>
-                          <div className="h-2 overflow-hidden rounded-full border border-[#E2E8F0] bg-[#F1F5F9]">
-                            <div className={`h-full rounded-full ${item.key === "financial_liquidity" ? "bg-[#94a3b8]" : "bg-[#2563eb]"}`} style={{ width: `${Math.max(0, Math.min(100, item.score * 10))}%` }} />
-                          </div>
-                          {item.key === "financial_liquidity" && !hasValidCofaceCoverage && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Impacta o score por ausência de demonstrações financeiras estruturadas.</p> : null}
-                          {item.key === "guarantees" ? <p className="mt-1 text-[11px] text-[#64748b]">{guaranteeCoverageHelperText}</p> : null}
-                          {item.key === "market_conditions" && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Metodologia de condições de mercado em evolução no modelo atual.</p> : null}
-                          {item.key === "payment_history" ? <p className="mt-1 text-[11px] text-[#64748b]">{paymentPillarHelperText}</p> : null}
-                          {item.key === "relationship_history" ? <p className="mt-1 text-[11px] text-[#64748b]">{relationshipPillarHelperText}</p> : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </article>
+              <InstitutionalScoreCard
+                score={institutionalScore}
+                breakdown={institutionalScoreBreakdown}
+                hasValidCofaceCoverage={hasValidCofaceCoverage}
+                guaranteeCoverageHelperText={guaranteeCoverageHelperText}
+                paymentPillarHelperText={paymentPillarHelperText}
+                relationshipPillarHelperText={relationshipPillarHelperText}
+              />
 
               <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
                 <p className="text-[18px] font-semibold text-[#0f172a]">Parecer técnico do analista</p>
@@ -3962,24 +4019,16 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </article>
             </div>
             <aside className="space-y-4">
-              <article className={`rounded-[24px] p-6 shadow-[0_4px_14px_rgba(15,23,42,0.04)] ${executiveNarrativeCardClass}`}>
-                <div className="flex items-start gap-3">
-                  <span className="mt-1 h-10 w-[3px] rounded-full bg-[#8DB8EA]" aria-hidden="true" />
-                  <div>
-                    <p className="text-[18px] font-semibold text-[#0f172a]">Explicação da análise</p>
-                    <p className="mt-1 text-[13px] text-[#64748b]">Leitura executiva da lógica aplicada à recomendação.</p>
-                  </div>
-                </div>
-                <p className="mt-5 max-w-[70ch] text-[13px] leading-[1.85] text-[#334155]">{executiveNarrative.summary}</p>
-                <ul className="mt-5 divide-y divide-[#E8EEF5]/70 text-[12px] text-[#475569]">
-                  {executiveNarrative.highlights.slice(0, 3).map((item, index) => (
-                    <li key={`${item.label}-${index}`} className="py-3.5 first:pt-0 last:pb-0">
-                      <p className="text-[12px] font-medium tracking-[0.01em] text-[#5B6E84]">{item.label}</p>
-                      <p className="mt-1.5 text-[12px] leading-relaxed text-[#334155]">{item.text}</p>
-                    </li>
-                  ))}
-                </ul>
-              </article>
+              <RecommendationInsightsCard
+                riskPrimary={insightRiskPrimary}
+                riskSecondary={insightRiskSecondary}
+                cofacePrimary={insightCofacePrimary}
+                cofaceSecondary={insightCofaceSecondary}
+                exposurePrimary={insightExposurePrimary}
+                exposureSecondary={insightExposureSecondary}
+                overduePrimary={insightOverduePrimary}
+                overdueSecondary={insightOverdueSecondary}
+              />
               <article className="rounded-[24px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#FFFFFF_0%,#FAFCFF_100%)] p-5 shadow-[0_10px_24px_rgba(15,23,42,0.05)]">
                 <p className="text-[18px] font-semibold text-[#0f172a]">Dossiê de Crédito</p>
                 <p className="mt-1 text-[13px] text-[#64748b]">Encerramento institucional da mesa de análise com consolidação do parecer técnico do analista.</p>
@@ -4063,10 +4112,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         ? "Aprovação parcial recomendada"
                         : "Aprovação integral recomendada"
                   );
+                const recommendationCode = typeof recommendationClassification?.code === "string"
+                  ? recommendationClassification.code
+                  : null;
+                const hideRecommendedLimitInHeader = recommendationCode === "maintain_current_limit";
                 const recommendationToneClass =
                   recommendationLabel === "Reprovação recomendada"
                     ? "text-[#9f1239]"
-                    : recommendationLabel === "Aprovação parcial recomendada" || recommendationLabel === "Manutenção do limite atual recomendada"
+                    : recommendationLabel === "Aprovação parcial recomendada" || recommendationLabel === "Manutenção do limite atual recomendada" || recommendationLabel === "Manutenção do Limite Atual"
                       ? "text-[#92400e]"
                       : "text-[#166534]";
                 const classificationJustification = recommendationClassification?.justification;
@@ -4090,7 +4143,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#5a6f89]">Decisão Executiva</p>
                         <p className={`mt-1.5 text-[10px] font-semibold uppercase tracking-[0.13em] ${recommendationToneClass}`}>Recomendação final</p>
                         <p className="mt-2 text-[22px] font-black leading-[1.2] tracking-[-0.012em] text-[#0f2747]">
-                          {recommendationLabel} <span className="font-semibold text-[#33506f]">·</span> <span className="text-[#0b2f5c]">Limite recomendado: {formatCurrencyBRLCompactExecutive(recommended)}</span>
+                          {recommendationLabel}
+                          {!hideRecommendedLimitInHeader ? (
+                            <>
+                              {" "}
+                              <span className="font-semibold text-[#33506f]">·</span>{" "}
+                              <span className="text-[#0b2f5c]">Limite recomendado: {formatCurrencyBRLCompactExecutive(recommended)}</span>
+                            </>
+                          ) : null}
                         </p>
                         <p className="mt-2 text-[12px] leading-[1.5] text-[#4f647a]">
                           <span className="font-semibold text-[#334155]">Solicitado:</span> <span className="font-semibold text-[#0f2747]">{requested > 0 ? formatCurrencyBRLCompactExecutive(requested) : "—"}</span>
@@ -4130,71 +4190,80 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
-            <article className="rounded-[22px] border border-[#e1e9f3] bg-white p-5 shadow-[0_10px_22px_rgba(10,29,64,.052)]">
-              <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Score institucional preliminar</p>
-              <p className="mt-1 text-[12px] text-[#64748b]">Score absoluto ponderado pelos pilares da política institucional de crédito.</p>
-              <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
-                <InstitutionalScoreGauge score={institutionalScore} />
-                <div className="space-y-3">
-                  {institutionalScoreBreakdown.map((item) => (
-                    <div key={item.key}>
-                      <div className="mb-1 flex items-center justify-between text-[12px] font-semibold text-[#334155]">
-                        <span className="inline-flex items-center gap-2">
-                          <span>{item.title}</span>
-                          {item.key === "financial_liquidity" && hasValidCofaceCoverage ? <span className="inline-flex rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-2 py-0.5 text-[10px] font-semibold text-[#1D4ED8]">Mitigado por COFACE</span> : null}
-                          {item.key === "market_conditions" && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Em evolução</span> : null}
-                        </span>
-                        <span>{item.score.toFixed(1)}/10</span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full border border-[#E2E8F0] bg-[#F1F5F9]"><div className={`h-full rounded-full ${item.key === "financial_liquidity" ? "bg-[#94a3b8]" : "bg-[#2563eb]"}`} style={{ width: `${Math.max(0, Math.min(100, item.score * 10))}%` }} /></div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </article>
+            <InstitutionalScoreCard
+              score={institutionalScore}
+              breakdown={institutionalScoreBreakdown}
+              hasValidCofaceCoverage={hasValidCofaceCoverage}
+              guaranteeCoverageHelperText={guaranteeCoverageHelperText}
+              paymentPillarHelperText={paymentPillarHelperText}
+              relationshipPillarHelperText={relationshipPillarHelperText}
+            />
             <article className="rounded-[22px] border border-[#dfe8f2] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] p-5 shadow-[0_9px_20px_rgba(10,29,64,.045)]">
               <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Trilha da solicitação</p>
               <p className="mt-1 text-[12px] leading-[1.55] text-[#6a7d93]">Fluxo consolidado para aprovação institucional.</p>
               <div className="relative mt-4">
                 <div className="pointer-events-none absolute bottom-2 top-2 left-[18px] w-[1.5px] rounded-full bg-[linear-gradient(180deg,rgba(143,164,189,0.14)_0%,rgba(118,143,174,0.45)_48%,rgba(143,164,189,0.14)_100%)]" />
-                {[
-                  ["✓", "Solicitação criada", "Cliente identificado e limite comercial informado."],
-                  ["✓", "Coleta de informações", "Dados internos, documentos e bureaus consolidados."],
-                  ["✓", "Mesa de análise", "Score, explicabilidade e parecer técnico consolidados."],
-                  ["4", "Revisão e envio", "Perfil corporativo revisado para submissão."],
-                  ["5", "Envio para aprovação", "Pronto para encaminhamento à alçada aprovadora."]
-                ].map(([mark, title, description]) => (
+                {(() => {
+                  const step5Completed = approvalFlowState === "approved" || approvalFlowState === "rejected";
+                  const step5Active = approvalFlowState === "in_approval" || step5Completed;
+                  const step4Completed = step5Active;
+                  const trailItems = [
+                    { key: "1", mark: "✓", title: "Solicitação criada", description: "Cliente identificado e limite comercial informado.", tone: "done" as const },
+                    { key: "2", mark: "✓", title: "Coleta de informações", description: "Dados internos, documentos e bureaus consolidados.", tone: "done" as const },
+                    { key: "3", mark: "✓", title: "Mesa de análise", description: "Score, explicabilidade e parecer técnico consolidados.", tone: "done" as const },
+                    {
+                      key: "4",
+                      mark: step4Completed ? "✓" : "›",
+                      title: "Revisão e envio",
+                      description: "Perfil corporativo revisado e encaminhado para aprovação.",
+                      tone: step4Completed ? ("done" as const) : ("active" as const),
+                    },
+                    {
+                      key: "5",
+                      mark: step5Completed ? "✓" : "5",
+                      title: "Aprovação",
+                      description: "Decisão da alçada aprovadora e conclusão institucional.",
+                      tone: step5Completed ? ("done" as const) : step5Active ? ("active" as const) : ("pending" as const),
+                    },
+                  ];
+                  return trailItems.map(({ mark, title, description, tone }) => (
                   <div key={title} className="relative mb-5 grid grid-cols-[36px_minmax(0,1fr)] items-start gap-3 last:mb-0">
                     <div className="relative z-10 flex w-9 shrink-0 justify-center">
                       <div className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${
-                      mark === "✓"
+                      tone === "done"
                         ? "border border-[#9cc8b0] bg-[linear-gradient(180deg,#5a9b78_0%,#4a8868_100%)] text-white shadow-[0_2px_8px_rgba(74,136,104,0.20)]"
-                        : mark === "4"
+                        : tone === "active"
                           ? "border border-[#7ea6d8] bg-[linear-gradient(180deg,#3f6fa7_0%,#335f91_100%)] text-white shadow-[0_2px_8px_rgba(51,95,145,0.20)]"
                           : "border border-[#c7d4e3] bg-[#edf3f9] text-[#7f95ac]"
-                      }`}>{mark === "4" ? "›" : mark}</div>
+                      }`}>{mark}</div>
                     </div>
                     <div className="min-w-0 pt-[1px]">
                       <p className={`text-[12.5px] font-semibold leading-[1.35] tracking-[0.006em] ${
-                        mark === "4" ? "text-[#0f2747]" : mark === "✓" ? "text-[#13243a]" : "text-[#445a73]"
+                        tone === "active" ? "text-[#0f2747]" : tone === "done" ? "text-[#13243a]" : "text-[#445a73]"
                       }`}>{title}</p>
                       <p className={`mt-1 text-[11px] leading-[1.65] ${
-                        mark === "4" ? "text-[#607a97]" : mark === "✓" ? "text-[#6f8398]" : "text-[#90a2b5]"
+                        tone === "active" ? "text-[#607a97]" : tone === "done" ? "text-[#6f8398]" : "text-[#90a2b5]"
                       }`}>{description}</p>
                     </div>
                   </div>
-                ))}
+                ));
+                })()}
               </div>
             </article>
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
             <div className="space-y-4">
-              <article className={`rounded-[22px] border border-[#e1e9f3] p-5 shadow-[0_10px_22px_rgba(10,29,64,.052)] ${executiveNarrativeCardClass}`}>
-                <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Explicação da análise</p>
-                <p className="mt-1 text-[12px] text-[#64748b]">Leitura executiva da lógica aplicada à recomendação.</p>
-                <p className="mt-3.5 w-full text-[13px] leading-[1.82] tracking-[0.002em] text-[#334155]">{executiveNarrative.summary}</p>
-              </article>
+              <RecommendationInsightsCard
+                riskPrimary={insightRiskPrimary}
+                riskSecondary={insightRiskSecondary}
+                cofacePrimary={insightCofacePrimary}
+                cofaceSecondary={insightCofaceSecondary}
+                exposurePrimary={insightExposurePrimary}
+                exposureSecondary={insightExposureSecondary}
+                overduePrimary={insightOverduePrimary}
+                overdueSecondary={insightOverdueSecondary}
+              />
               <article className="rounded-[22px] border border-[#e1e9f3] bg-white p-5 shadow-[0_10px_22px_rgba(10,29,64,.052)]">
                 <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Relatórios importados e informações da Etapa 2</p>
                 <div className="mt-3 divide-y divide-[#ecf1f7] rounded-[16px] bg-[#fbfdff]">
@@ -4335,43 +4404,167 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </article>
             </div>
             <aside className="space-y-4">
+              {approvalFlowSummary ? (
+                <article className="rounded-[18px] border border-[#e5edf6] bg-white px-4 py-4 shadow-[0_6px_14px_rgba(10,29,64,.04)]">
+                  <p className="text-[15px] font-semibold tracking-[-0.01em] text-[#0f172a]">Fluxo de Aprovação</p>
+                  {approvalFlowState === "not_submitted" ? (
+                    <div className="mt-2.5 rounded-[10px] border border-[#e2eaf4] bg-[#f8fbff] px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-[0.08em] text-[#6a7d93]">{approvalFlowSummary.display_title || "Prévia da alçada"}</p>
+                      {approvalFlowSummary.predicted_doa_code && approvalFlowSummary.predicted_doa_range ? (
+                        <p className="mt-1 text-[12px] font-semibold text-[#1f344d]">
+                          {approvalFlowSummary.predicted_doa_code} · {formatDoaRangeExecutive(approvalFlowSummary.predicted_doa_range)}
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-[12px] font-semibold text-[#1f344d]">Alçada ainda não definida</p>
+                      )}
+                      <p className="mt-1 text-[10px] text-[#6a7d93]">
+                        {approvalFlowSummary.decision_basis ? `Base: ${approvalFlowSummary.decision_basis}` : approvalFlowSummary.display_message || "Aguardando envio para aprovação."}
+                      </p>
+                      <div className="mt-2">
+                        {predictedApprovers.length > 0 ? (
+                          <>
+                            <p className="text-[10px] uppercase tracking-[0.08em] text-[#6a7d93]">
+                              {predictedApprovers.some((item) => item.user_name) ? "Aprovadores previstos" : "Papel aprovador previsto"}
+                            </p>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              {predictedApprovers.slice(0, 4).map((item, index) => (
+                                <span key={`${item.role}-${item.user_id ?? "role"}-${index}`} className="rounded-full border border-[#d6e0ec] bg-white px-2 py-0.5 text-[10px] font-medium text-[#3b536e]">
+                                  {item.role_label}{item.user_name ? ` · ${item.user_name}` : ""}
+                                </span>
+                              ))}
+                              {predictedApprovers.length > 4 ? (
+                                <span className="rounded-full border border-[#d6e0ec] bg-white px-2 py-0.5 text-[10px] font-medium text-[#3b536e]">
+                                  +{predictedApprovers.length - 4}
+                                </span>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-[10px] text-[#6a7d93]">Aprovador será definido pela matriz no envio para aprovação.</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2.5 flex items-center justify-between gap-2 rounded-[10px] border border-[#e2eaf4] bg-[#f8fbff] px-3 py-2">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.08em] text-[#6a7d93]">DOA aplicada</p>
+                        <p className="text-[12px] font-semibold text-[#1f344d]">{approvalFlowSummary.applicable_doa_code || "—"}</p>
+                      </div>
+                      <p className="text-[11px] font-medium text-[#3b536e]">{formatDoaRangeExecutive(approvalFlowSummary.applicable_doa_range)}</p>
+                    </div>
+                  )}
+                  {approvalFlowState !== "not_submitted" ? (
+                    <p className="mt-2 text-[10px] text-[#5c7188]">{approvalFlowSummary.display_status} · {approvalFlowSummary.display_stage}</p>
+                  ) : null}
+                  {approvalFlowState !== "not_submitted" && predictedApprovers.length > 0 ? (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {predictedApprovers.slice(0, 3).map((item, index) => (
+                        <span key={`${item.role}-${item.user_id ?? "role"}-${index}`} className="rounded-full border border-[#d6e0ec] bg-white px-2 py-0.5 text-[10px] font-medium text-[#3b536e]">
+                          {item.role_label}{item.user_name ? ` · ${item.user_name}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {approvalFlowSummary.decision_actor_name ? (
+                    <p className="mt-2 text-[10px] text-[#5c7188]">
+                      Decisão: {approvalFlowSummary.decision_actor_name}
+                      {approvalFlowSummary.decision_actor_role ? ` · ${approvalFlowSummary.decision_actor_role}` : ""}
+                    </p>
+                  ) : null}
+                  {approvalFlowSummary.completed_steps.length > 0 ? (
+                    <p className="mt-2 text-[10px] text-[#5c7188]">Concluídas: {approvalFlowSummary.completed_steps.join(" · ")}</p>
+                  ) : null}
+                  {approvalFlowSummary.pending_steps.length > 0 && approvalFlowState !== "not_submitted" ? (
+                    <p className="mt-1 text-[10px] text-[#5c7188]">Pendentes: {approvalFlowSummary.pending_steps.join(" · ")}</p>
+                  ) : null}
+                  {approvalFlowSteps.length > 0 ? (
+                    <div className="mt-2 space-y-1">
+                      {approvalFlowSteps.slice(0, 4).map((stepItem, index) => (
+                        <p key={`${stepItem.status}-${index}`} className="text-[10px] text-[#5c7188]">
+                          {stepItem.label}
+                          {stepItem.actor_name ? ` · ${stepItem.actor_name}` : ""}
+                          {stepItem.timestamp ? ` · ${formatImportedAt(stepItem.timestamp)}` : ""}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                  {approvalFlowEvents.some((eventItem) => eventItem.event_type === "request_changes" && eventItem.comment) ? (
+                    <p className="mt-1 text-[10px] text-[#5c7188]">
+                      Comentário: {approvalFlowEvents.find((eventItem) => eventItem.event_type === "request_changes" && eventItem.comment)?.comment}
+                    </p>
+                  ) : null}
+                  {approvalFlowSummary.last_decision_event_at ? (
+                    <p className="mt-1 text-[10px] text-[#5c7188]">Último evento: {formatImportedAt(approvalFlowSummary.last_decision_event_at)}</p>
+                  ) : null}
+                  {approvalFlowSummary.sequential_approval_note && approvalFlowState !== "not_submitted" ? (
+                    <p className="mt-1 text-[10px] text-[#73879d]">{approvalFlowSummary.sequential_approval_note}</p>
+                  ) : null}
+                </article>
+              ) : null}
               <article className="flex min-h-[214px] self-start flex-col rounded-[22px] border border-[#e5edf6] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] px-5 py-5 shadow-[0_6px_14px_rgba(10,29,64,.04)]">
                 <div>
                   <p className="text-[17px] font-semibold tracking-[-0.01em] text-[#0f172a]">Resumo financeiro da carteira</p>
                   <p className="mt-1 text-[12px] leading-[1.55] text-[#70859b]">Composição da posição interna atual.</p>
                 </div>
-                {hasInternalFinancialSnapshot ? (
+                {internalPortfolioSummary.hasAnyPositionData ? (
                   (() => {
-                    const openAmount = mappedInternalOpenAmount;
-                    const notDueAmount = mappedInternalNotDue;
-                    const overdueAmount = mappedInternalOverdue;
-                    const hasOpenBase = openAmount !== null && openAmount > 0;
-                    const notDuePercent = hasOpenBase && notDueAmount !== null ? Math.max(0, Math.min(100, Math.round((notDueAmount / openAmount) * 100))) : null;
-                    const overduePercent = hasOpenBase && overdueAmount !== null ? Math.max(0, Math.min(100, Math.round((overdueAmount / openAmount) * 100))) : null;
-                    const notDueBar = notDuePercent ?? 0;
-                    const overdueBar = overduePercent ?? 0;
+                    const openAmount = internalPortfolioSummary.openAmount;
+                    const overdueAmount = internalPortfolioSummary.overdueAmount;
+                    const currentLimit = internalPortfolioSummary.currentLimit;
+                    const availableLimit = internalPortfolioSummary.availableLimit;
+                    const overdueHasValue = overdueAmount !== null && overdueAmount > 0;
+                    const agingExecutive = resolveExecutiveAgingComposition({
+                      sources: internalValueSources,
+                      openAmount,
+                      notDueAmount: internalPortfolioSummary.notDueAmount,
+                      overdueAmount: internalPortfolioSummary.overdueAmount,
+                      hasOpenBase: internalPortfolioSummary.hasOpenBase,
+                      hasConsistentComposition: internalPortfolioSummary.hasConsistentComposition,
+                    });
+                    const segmentPalette: Record<string, string> = {
+                      not_due_0_30: "bg-[linear-gradient(180deg,#7f95ae_0%,#7087a2_100%)]",
+                      "31_60": "bg-[linear-gradient(180deg,#d6b28f_0%,#c99b72_100%)]",
+                      "61_90": "bg-[linear-gradient(180deg,#d6a07e_0%,#c98663_100%)]",
+                      "91_180": "bg-[linear-gradient(180deg,#cb8668_0%,#b86a4a_100%)]",
+                      "180_plus": "bg-[linear-gradient(180deg,#c56f6f_0%,#a84f4f_100%)]",
+                    };
 
                     return (
                       <div className="mt-4 flex w-full flex-1 flex-col">
                         <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6a7d93]">Valor em Aberto</p>
-                          <p className="mt-1.5 text-[27px] font-black leading-[1.04] tracking-[-0.02em] text-[#0f2747]">{openAmount !== null ? formatCurrencyBRLCompactExecutive(openAmount) : "—"}</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6a7d93]">Valor em aberto</p>
+                          <p className="mt-1.5 text-[28px] font-black leading-[1.02] tracking-[-0.02em] text-[#0f2747]">
+                            {openAmount !== null ? formatCurrencyBRLCompactExecutive(openAmount) : "—"}
+                          </p>
                         </div>
-                        <div className="mt-4 space-y-1.5 text-[12px] leading-[1.55]">
-                          <p className="text-[#5f7288]"><span className="font-medium text-[#3c4f64]">Not Due:</span> <span className="font-semibold text-[#0f2747]">{notDueAmount !== null ? formatCurrencyBRLCompactExecutive(notDueAmount) : "—"}</span> <span className="text-[#73879d]">· {notDuePercent !== null ? `${notDuePercent}%` : "—"}</span></p>
-                          <p className="text-[#5f7288]"><span className="font-medium text-[#3c4f64]">Overdue:</span> <span className="font-semibold text-[#0f2747]">{overdueAmount !== null ? formatCurrencyBRLCompactExecutive(overdueAmount) : "—"}</span> <span className="text-[#73879d]">· {overduePercent !== null ? `${overduePercent}%` : "—"}</span></p>
-                        </div>
-                        <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full border border-[#e2eaf4] bg-[#eff4fa]">
-                          <div className="flex h-full w-full">
-                            <div className="h-full bg-[linear-gradient(180deg,#879eb9_0%,#7890ab_100%)]" style={{ width: `${notDueBar}%` }} />
-                            <div className="h-full bg-[linear-gradient(180deg,#d8abab_0%,#c89797_100%)]" style={{ width: `${overdueBar}%` }} />
+                        <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2.5 text-[11px]">
+                          <div className="rounded-[10px] border border-[#e2eaf4] bg-[#f7fbff] px-2.5 py-2">
+                            <p className="text-[#7a8ea4]">Limite atual</p>
+                            <p className="mt-1 font-semibold text-[#1f344d]">{currentLimit !== null ? formatCurrencyBRLCompactExecutive(currentLimit) : "—"}</p>
+                          </div>
+                          <div className="rounded-[10px] border border-[#e2eaf4] bg-[#f7fbff] px-2.5 py-2">
+                            <p className="text-[#7a8ea4]">Limite disponível</p>
+                            <p className="mt-1 font-semibold text-[#1f344d]">{availableLimit !== null ? formatCurrencyBRLCompactExecutive(availableLimit) : "—"}</p>
                           </div>
                         </div>
+                        {internalPortfolioSummary.hasOpenBase && internalPortfolioSummary.hasConsistentComposition ? (
+                          <div className="mt-4 rounded-[10px] border border-[#e2eaf4] bg-[#f8fbff] px-2.5 py-2">
+                            <p className={`text-[11px] font-medium ${overdueHasValue ? "text-[#9a3412]" : "text-[#1a6644]"}`}>{agingExecutive.message}</p>
+                            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full border border-[#e2eaf4] bg-[#eff4fa]">
+                              <div className="flex h-full w-full">
+                                {agingExecutive.segments.map((segment) => (
+                                  <div key={segment.key} className={`h-full ${segmentPalette[segment.key] ?? "bg-[#94a3b8]"}`} style={{ width: `${segment.percent}%` }} />
+                                ))}
+                              </div>
+                            </div>
+                            <p className="mt-1.5 text-[10px] text-[#73879d]">{agingExecutive.summary}</p>
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })()
                 ) : (
-                  <p className="mt-4 text-[12px] leading-[1.6] text-[#6a7d93]">Cliente sem histórico financeiro interno identificado na carteira atual.</p>
+                  <p className="mt-4 text-[12px] leading-[1.6] text-[#6a7d93]">Cliente sem posição interna identificada na carteira atual.</p>
                 )}
               </article>
             </aside>
@@ -4402,7 +4595,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             </button>
           </div>
         </div>
-      ) : step === 3 ?(
+      ) : step === 3 && !isOperationalSubmitOnlyFlow ?(
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#D7E1EC] bg-white px-7 py-4">
           <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
             <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[#8FA3B4] text-[9px]">i</span>
@@ -4423,7 +4616,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             </button>
           </div>
         </div>
-      ) : step === 4 ?(
+      ) : step === 4 && !isOperationalSubmitOnlyFlow ?(
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#D7E1EC] bg-white px-7 py-4">
           <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
             <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[#8FA3B4] text-[9px]">i</span>
@@ -4440,7 +4633,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               disabled={!canSubmitJourney}
               className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
             >
-              {submitMutation.isPending ?"Enviando..." : "Enviar para aprovação"}
+              {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
             </button>
           </div>
         </div>
@@ -4450,12 +4643,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             Voltar
           </button>
           {step < 4 ?(
-            <button type="button" onClick={() => navigateToStep(Math.min(4, step + 1))} disabled={!canContinue} className="rounded-[6px] bg-[#1a2b5e] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
-              Avançar
-            </button>
+            isOperationalSubmitOnlyFlow && step === 1 ? (
+              <button type="button" onClick={submit} disabled={!canSubmitJourney} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
+                {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
+              </button>
+            ) : (
+              <button type="button" onClick={() => navigateToStep(Math.min(4, step + 1))} disabled={!canContinue} className="rounded-[6px] bg-[#1a2b5e] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
+                Avançar
+              </button>
+            )
           ) : (
-            <button type="button" onClick={submit} disabled={submitMutation.isPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
-              {submitMutation.isPending ?"Enviando..." : "Enviar para aprovação"}
+            <button type="button" onClick={submit} disabled={isSubmitPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
+              {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
             </button>
           )}
         </div>
@@ -4489,15 +4688,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                     setTriageState("idle");
                     setTriageMessage(null);
                     setTriageResult(null);
+                    setDraftRecovery(null);
                     setGovernanceStatus(null);
-                    setDraftAnalysisId(null);
-                    setDraftCnpj(null);
                     setTriageSelectedBusinessUnit("");
                     setCustomer((prev) => ({ ...prev, cnpj: formatCnpj(event.target.value) }));
                   }} className="h-11 flex-1 rounded-[10px] border border-[#D7E1EC] px-3.5 font-mono text-[15px] tracking-[0.03em] text-[#102033] focus:border-[#1B3A6B] focus:outline-none" placeholder="00.000.000/0000-00" />
-                  <button type="button" disabled={!canCreateRequest || triageLookupMutation.isPending || createDraftMutation.isPending} onClick={handleTriageLookup} className="inline-flex h-11 items-center gap-2 rounded-[10px] bg-[#1B3A6B] px-5 text-[14px] font-medium text-white transition hover:bg-[#152E56] disabled:opacity-50">
+                  <button type="button" disabled={!canCreateRequest || triageLookupMutation.isPending} onClick={handleTriageLookup} className="inline-flex h-11 items-center gap-2 rounded-[10px] bg-[#1B3A6B] px-5 text-[14px] font-medium text-white transition hover:bg-[#152E56] disabled:opacity-50">
                     <Search className="h-4 w-4" />
-                    {triageLookupMutation.isPending || createDraftMutation.isPending ? "Preparando..." : "Consultar"}
+                    {triageLookupMutation.isPending ? "Consultando..." : "Consultar"}
                   </button>
                 </div>
               </div>
@@ -4549,9 +4747,4 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     </section>
   );
 }
-
-
-
-
-
 

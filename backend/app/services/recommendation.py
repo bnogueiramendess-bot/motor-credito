@@ -63,7 +63,7 @@ def classify_recommendation(
     current_approved = _to_decimal(current_approved_limit)
 
     final_suggested = engine_recommended
-    if coface_coverage is not None and coface_coverage > DECIMAL_ZERO and engine_recommended < coface_coverage:
+    if coface_coverage is not None and coface_coverage > DECIMAL_ZERO and engine_recommended > coface_coverage:
         final_suggested = coface_coverage
 
     final_suggested = _money(max(DECIMAL_ZERO, final_suggested))
@@ -96,24 +96,31 @@ def classify_recommendation(
             is_existing_customer=is_existing_customer,
         )
 
-    if (
-        is_existing_customer
-        and current_approved is not None
-        and requested > current_approved
-        and final_suggested <= current_approved
-    ):
-        maintenance_limit = current_approved
-        return _build_classification_payload(
-            code="maintain_current_limit",
-            label="Manutenção do limite atual recomendada",
-            justification="Cliente já possui limite vigente compatível com a cobertura COFACE atual. A recomendação mantém o limite aprovado e não concede o aumento solicitado.",
-            requested=requested,
-            current_approved=current_approved,
-            coface_coverage=coface_coverage,
-            engine_recommended=engine_recommended,
-            final_suggested=maintenance_limit,
-            is_existing_customer=is_existing_customer,
-        )
+    if is_existing_customer and current_approved is not None and current_approved > DECIMAL_ZERO:
+        if final_suggested == current_approved:
+            return _build_classification_payload(
+                code="maintain_current_limit",
+                label="Manutenção do Limite Atual",
+                justification="A recomendação final mantém o limite vigente, respeitando a cobertura COFACE disponível.",
+                requested=requested,
+                current_approved=current_approved,
+                coface_coverage=coface_coverage,
+                engine_recommended=engine_recommended,
+                final_suggested=final_suggested,
+                is_existing_customer=is_existing_customer,
+            )
+        if final_suggested < current_approved:
+            return _build_classification_payload(
+                code="reduction",
+                label="Redução recomendada",
+                justification="A recomendação final reduz o limite atual para respeitar os limites técnicos e de cobertura disponível.",
+                requested=requested,
+                current_approved=current_approved,
+                coface_coverage=coface_coverage,
+                engine_recommended=engine_recommended,
+                final_suggested=final_suggested,
+                is_existing_customer=is_existing_customer,
+            )
 
     return _build_classification_payload(
         code="partial_approval",
@@ -126,3 +133,4 @@ def classify_recommendation(
         final_suggested=final_suggested,
         is_existing_customer=is_existing_customer,
     )
+

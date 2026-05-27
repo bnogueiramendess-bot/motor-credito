@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  CreditAnalysisApprovalFlowSummaryDto,
   CreditAnalysisDto,
   CustomerDto,
   DecisionEventDto,
@@ -27,13 +28,21 @@ export async function GET(_: Request, context: Context) {
 
   try {
     const analysis = await fetchBackend<CreditAnalysisDto>(`/credit-analyses/${analysisId}`);
+    const canLoadScore = Boolean(
+      analysis.motor_result ||
+      analysis.final_decision ||
+      analysis.decision_calculated_at ||
+      (analysis.current_journey_step ?? 2) >= 3
+    );
+    const canLoadFinalDecision = Boolean(analysis.final_decision || analysis.analysis_status === "completed");
 
-    const [customer, events, score, decision, finalDecision] = await Promise.all([
+    const [customer, events, score, decision, finalDecision, approvalFlowSummary] = await Promise.all([
       fetchBackendOptional<CustomerDto>(`/customers/${analysis.customer_id}`),
       fetchBackend<DecisionEventDto[]>(`/credit-analyses/${analysisId}/events`),
-      fetchBackendOptional<ScoreResultDto>(`/credit-analyses/${analysisId}/score`),
-      fetchBackendOptional<DecisionResultDto>(`/credit-analyses/${analysisId}/decision`),
-      fetchBackendOptional<FinalDecisionResultDto>(`/credit-analyses/${analysisId}/final-decision`)
+      canLoadScore ? fetchBackendOptional<ScoreResultDto>(`/credit-analyses/${analysisId}/score`) : Promise.resolve(null),
+      canLoadScore ? fetchBackendOptional<DecisionResultDto>(`/credit-analyses/${analysisId}/decision`) : Promise.resolve(null),
+      canLoadFinalDecision ? fetchBackendOptional<FinalDecisionResultDto>(`/credit-analyses/${analysisId}/final-decision`) : Promise.resolve(null),
+      fetchBackendOptional<CreditAnalysisApprovalFlowSummaryDto>(`/credit-analyses/${analysisId}/approval-flow-summary`)
     ]);
 
     return NextResponse.json({
@@ -42,7 +51,8 @@ export async function GET(_: Request, context: Context) {
       score,
       decision,
       final_decision: finalDecision,
-      events
+      events,
+      approval_flow_summary: approvalFlowSummary
     });
   } catch (error) {
     if (error instanceof BackendError) {

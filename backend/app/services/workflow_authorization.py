@@ -34,6 +34,11 @@ LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
 
 ACTION_POLICIES: dict[str, dict] = {
     "create_request": {"workflow_roles": ("CREDIT_REQUESTER",), "legacy_permissions": ("credit.request.create",)},
+    "submit_request": {
+        "workflow_roles": ("CREDIT_REQUESTER",),
+        "legacy_permissions": ("credit.request.create",),
+        "statuses": {"pending"},
+    },
     "start_analysis": {
         "workflow_roles": ("CREDIT_ANALYST", "CREDIT_REVIEWER"),
         "legacy_permissions": ("credit.analysis.execute",),
@@ -81,7 +86,7 @@ ACTION_POLICIES: dict[str, dict] = {
     "return_to_analysis": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_approval"}},
     "finalize": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"approved", "rejected"}},
     "view_result": {"workflow_roles": (), "legacy_permissions": ("credit.requests.view",), "statuses": {"approved", "rejected"}},
-    "view_dossier": {"workflow_roles": (), "legacy_permissions": ("clients.dossier.view",), "statuses": {"approved", "rejected"}},
+    "view_dossier": {"workflow_roles": (), "legacy_permissions": ("clients.dossier.view",), "statuses": {"in_approval", "approved", "rejected"}},
     "view_tracking": {
         "workflow_roles": ("CREDIT_REQUESTER",),
         "legacy_permissions": ("credit.requests.view",),
@@ -328,6 +333,42 @@ def resolve_credit_workflow_action(
             authorization_source = "workflow_role"
         elif allowed_by_legacy:
             authorization_source = "legacy_permission"
+
+    if action == "view_dossier" and analysis is not None and status_value == "in_approval":
+        for decision_action in ("approve", "reject", "request_changes"):
+            decision_resolution = resolve_credit_workflow_action(
+                db,
+                current,
+                action=decision_action,
+                analysis=analysis,
+                requested_amount=requested_amount,
+                business_unit=business_unit,
+            )
+            if decision_resolution.allowed:
+                decision_source = str(decision_resolution.workflow_context.get("authorization_source", "approval_matrix"))
+                return WorkflowAuthorizationContext(
+                    allowed=True,
+                    denial_reason=None,
+                    denial_type=None,
+                    applicable_doa_code=decision_resolution.applicable_doa_code,
+                    applicable_doa_range=decision_resolution.applicable_doa_range,
+                    available_actions=[],
+                    workflow_context={
+                        "action": action,
+                        "status": status_value,
+                        "authorization_source": decision_source,
+                        "granted_via_decision_action": decision_action,
+                        "requested_amount": decision_resolution.workflow_context.get("requested_amount"),
+                        "matrix_amount": decision_resolution.workflow_context.get("matrix_amount"),
+                        "zero_financial_impact": decision_resolution.workflow_context.get("zero_financial_impact"),
+                        "applicable_roles": decision_resolution.workflow_context.get("applicable_roles", []),
+                        "matched_roles": decision_resolution.workflow_context.get("matched_roles", []),
+                        "user_workflow_roles": decision_resolution.workflow_context.get("user_workflow_roles", []),
+                        "doa_rule_id": decision_resolution.workflow_context.get("doa_rule_id"),
+                        "doa_rule_name": decision_resolution.workflow_context.get("doa_rule_name"),
+                        "business_unit": business_unit,
+                    },
+                )
 
     allowed = authorization_source != "denied"
     denial_reason = None if allowed else f"Usuario sem alcada configurada para executar {action}."

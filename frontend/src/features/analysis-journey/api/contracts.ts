@@ -300,6 +300,14 @@ export type CreditAnalysisDraftCreateResponse = {
   reused_existing: boolean;
 };
 
+export type CreditAnalysisDraftRecoveryResponse = {
+  analysis_id: number;
+  customer_id: number;
+  status: string;
+  cnpj: string;
+  expires_at: string;
+};
+
 export type CreditAnalysisTriageSubmitRequest = {
   cnpj: string;
   suggested_limit: number;
@@ -316,6 +324,10 @@ export type CreditAnalysisTriageSubmitResponse = {
   analysis_id: number;
   customer_id: number;
   status: string;
+  current_owner_user_id?: number | null;
+  current_owner_role?: string | null;
+  workflow_stage: string;
+  available_actions: string[];
   reused_existing?: boolean;
 };
 

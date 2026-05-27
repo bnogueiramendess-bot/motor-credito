@@ -37,6 +37,7 @@ function getAgingTone(days: number): string {
 function mapActionLabel(actions: string[]): string {
   if (actions.includes("continue_analysis")) return "Continuar Análise";
   if (actions.includes("start_analysis")) return "Iniciar Análise";
+  if (actions.includes("execute_analysis")) return "Executar Análise";
   if (actions.includes("submit_approval")) return "Submeter para aprovação";
   if (actions.includes("approve")) return "Aprovar / decidir";
   if (actions.includes("reject")) return "Rejeitar";
@@ -44,6 +45,19 @@ function mapActionLabel(actions: string[]): string {
   if (actions.includes("view_dossier")) return "Ver dossiê";
   if (actions.includes("view_result")) return "Ver resultado";
   return "Acompanhar status";
+}
+
+function resolveMonitorActionRoute(analysisId: number, actions: string[]): string {
+  if (actions.some((action) => ["start_analysis", "continue_analysis", "execute_analysis"].includes(action))) {
+    return `/analises/${analysisId}/workspace`;
+  }
+  if (actions.some((action) => ["view_dossier", "view_result"].includes(action))) {
+    return `/analises/${analysisId}`;
+  }
+  if (actions.includes("view_tracking")) {
+    return `/analises/monitor?analysisId=${analysisId}`;
+  }
+  return `/analises/${analysisId}`;
 }
 
 function formatCurrencyNoCents(value: number | string | null | undefined): string {
@@ -102,6 +116,7 @@ export function MonitorPageView() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const businessUnitContext = searchParams.get("business_unit_context") ?? "";
+  const showSubmissionSuccess = searchParams.get("submission") === "success";
   const buContextQuery = useBusinessUnitContextQuery();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -169,6 +184,11 @@ export function MonitorPageView() {
         <p className="text-[30px] font-semibold tracking-[-0.02em] text-[#0F172A]">Monitor de Solicitações</p>
         <p className="text-[14px] text-[#64748B]">Acompanhe solicitações de crédito, pendências operacionais e decisões em andamento.</p>
       </div>
+      {showSubmissionSuccess ? (
+        <div className="mb-3 rounded-[10px] border border-[#BBF7D0] bg-[#F0FDF4] px-3 py-2 text-[13px] text-[#166534]">
+          Solicitação submetida com sucesso. Ela foi encaminhada para análise financeira.
+        </div>
+      ) : null}
       {buContextQuery.data ? (
         <OperationalContextBar className="mb-3">
             <BusinessUnitContextSelector
@@ -269,11 +289,7 @@ export function MonitorPageView() {
                       Acesso não autorizado
                     </button>
                   ) : null}
-                  {item.available_actions.length > 0 && item.available_actions.includes("view_tracking") && !item.available_actions.some((action) => ["start_analysis", "continue_analysis", "submit_approval", "approve", "reject", "request_changes", "view_dossier", "view_result"].includes(action)) ? (
-                    <button type="button" disabled title="O dossiê será disponibilizado após a conclusão da análise." className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-medium text-[#94A3B8]">
-                      Acompanhar status <ChevronDown className="ml-2 h-4 w-4" />
-                    </button>
-                  ) : item.available_actions.length > 0 ? (
+                  {item.available_actions.length > 0 ? (
                     item.available_actions.includes("start_analysis") ? (
                       <button
                         type="button"
@@ -288,11 +304,7 @@ export function MonitorPageView() {
                       </button>
                     ) : (
                       <Link
-                        href={
-                          item.available_actions.includes("continue_analysis")
-                            ? `/analises/${item.analysis_id}/workspace`
-                            : `/analises/${item.analysis_id}`
-                        }
+                        href={resolveMonitorActionRoute(item.analysis_id, item.available_actions)}
                         className="inline-flex h-9 min-w-[150px] whitespace-nowrap items-center justify-center rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#1D4ED8] hover:bg-[#F8FAFC]"
                       >
                         {mapActionLabel(item.available_actions)} <ChevronDown className="ml-2 h-4 w-4" />

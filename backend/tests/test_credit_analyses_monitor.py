@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import uuid
 import unittest
@@ -29,17 +29,20 @@ from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
 from app.routes.credit_analyses import (
     WorkflowActionRequest,
+    _build_approval_flow_summary,
     apply_analysis_final_decision,
     execute_workflow_action,
     get_credit_analysis,
+    get_credit_analysis_approval_flow_summary,
     get_score_result,
     list_credit_analysis_events,
+    list_analysis_documents,
     list_credit_analyses_approval_queue,
     list_credit_analyses_monitor,
     start_credit_analysis,
     update_credit_analysis_workspace_state,
 )
-from app.models.enums import FinalDecision, AnalysisStatus, MotorResult
+from app.models.enums import ActorType, FinalDecision, AnalysisStatus, MotorResult
 from app.schemas.final_decision import FinalDecisionApplyRequest
 from app.schemas.credit_analysis import CreditAnalysisWorkspaceStateUpdateRequest
 from app.services.security import hash_password
@@ -306,6 +309,28 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
         self.assertEqual(detail.id, analysis_id)
 
+    def test_analyst_with_view_own_and_technical_capability_still_sees_submitted_request_from_another_requester(self) -> None:
+        bu_id, run_id = self._setup_base()
+        requester = self._create_user("requester.monitor.chain@indorama.com", ["credit_request_view_own"], bu_id)
+        analyst = self._create_user("analyst.monitor.chain@indorama.com", ["credit_request_view_own", "credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "requester.monitor.chain@indorama.com", status="created")
+
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = None
+            analysis.current_owner_role = "analista_financeiro"
+            db.commit()
+
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=analyst)
+
+        self.assertGreaterEqual(response.total, 1)
+        item = next((entry for entry in response.items if entry.analysis_id == analysis_id), None)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertTrue(any(action in {"start_analysis", "continue_analysis"} for action in item.available_actions))
+
     def test_monitor_requested_limit_falls_back_to_suggested_limit_when_requested_is_zero(self) -> None:
         bu_id, run_id = self._setup_base()
         analyst = self._create_user("analista.limit@indorama.com", ["credit_request_validate"], bu_id)
@@ -408,6 +433,12 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.assertEqual(updated.current_owner_role, "analista_financeiro")
             self.assertIsNotNone(updated.analysis_started_at)
             self.assertIsNotNone(updated.claimed_at)
+            self.assertIsNone(updated.final_decision)
+            self.assertIsNone(updated.submitted_for_approval_at)
+            self.assertIsNone(updated.completed_at)
+            self.assertIsNone(updated.approved_at)
+            self.assertIsNone(updated.rejected_at)
+            self.assertIsNone(updated.motor_result)
             event = db.scalar(
                 select(DecisionEvent).where(
                     DecisionEvent.credit_analysis_id == analysis_id,
@@ -417,9 +448,20 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.assertIsNotNone(event)
             assert event is not None
             self.assertEqual((event.event_payload_json or {}).get("new_status"), "in_progress")
+            forbidden_events = db.scalars(
+                select(DecisionEvent.event_type).where(
+                    DecisionEvent.credit_analysis_id == analysis_id,
+                    DecisionEvent.event_type.in_(["analysis_submitted_for_approval", "analysis_approved", "analysis_rejected"]),
+                )
+            ).all()
+            self.assertEqual(forbidden_events, [])
         with SessionLocal() as db:
             response = list_credit_analyses_monitor(db=db, current=analyst)
-        self.assertIn("continue_analysis", response.items[0].available_actions)
+        item = next((entry for entry in response.items if entry.analysis_id == analysis_id), None)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertIn("continue_analysis", item.available_actions)
+        self.assertEqual(item.current_journey_step, 2)
 
     def test_monitor_returns_persisted_journey_step_for_continue(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -462,6 +504,21 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.assertIsInstance(ws, dict)
             assert isinstance(ws, dict)
             self.assertTrue(bool(ws.get("manual_configured")))
+
+    def test_requester_can_list_step1_documents_in_created_stage(self) -> None:
+        bu_id, run_id = self._setup_base()
+        requester = self._create_user("solicitante.step1@indorama.com", ["credit_request_view_own", "credit_request_submit"], bu_id)
+        analysis_id = self._create_analysis(run_id, "solicitante.step1@indorama.com", status="created")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = requester.user.id
+            analysis.current_owner_role = "comercial_solicitante"
+            db.commit()
+
+        with SessionLocal() as db:
+            documents = list_analysis_documents(analysis_id=analysis_id, db=db, current=requester)
+        self.assertEqual(documents, [])
 
     def test_approver_sees_pending_approval(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -541,7 +598,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 get_score_result(analysis_id=analysis_bu_b, db=db, current=analyst_bu_a)
         self.assertEqual(ctx.exception.status_code, 403)
-        self.assertIn("unidade de negócio", str(ctx.exception.detail).lower())
+        self.assertIn("unidade de negÃ³cio", str(ctx.exception.detail).lower())
 
     def test_scope_all_bu_can_view_multi_bu_monitor(self) -> None:
         bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()
@@ -655,6 +712,465 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         self.assertEqual(response.items[0].financial_impact, Decimal("0.00"))
         self.assertEqual(response.items[0].applicable_doa_code, "DOA-0001")
         self.assertIn("approve", response.items[0].available_actions)
+        self.assertIn("view_dossier", response.items[0].available_actions)
+
+    def test_approval_flow_summary_uses_same_doa_and_status_source_as_approval_queue(self) -> None:
+        bu_id, run_id = self._setup_base()
+        approver = self._create_user("finance.head.summary@indorama.com", [], bu_id)
+        self._attach_workflow_role(approver.user.id, "CREDIT_FINANCE_HEAD")
+        analysis_id = self._create_analysis(run_id, "comercial.summary@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = MotorResult.MANUAL_REVIEW
+            analysis.decision_calculated_at = datetime.now()
+            db.commit()
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 1,
+                    "rule_code": "DOA-0001",
+                    "rule_name": "Faixa 0",
+                    "rule_range": "0.00..1000000.00",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            with SessionLocal() as db:
+                queue = list_credit_analyses_approval_queue(db=db, current=approver)
+                summary = get_credit_analysis_approval_flow_summary(analysis_id=analysis_id, db=db, current=approver)
+        self.assertEqual(queue.total, 1)
+        queue_item = queue.items[0]
+        self.assertEqual(summary.analysis_id, queue_item.analysis_id)
+        self.assertEqual(summary.current_status, queue_item.current_status)
+        self.assertEqual(summary.workflow_stage, queue_item.workflow_stage)
+        self.assertEqual(summary.applicable_doa_code, queue_item.applicable_doa_code)
+        self.assertEqual(summary.applicable_doa_range, queue_item.applicable_doa_range)
+        self.assertEqual(summary.available_actions, queue_item.available_actions)
+        self.assertEqual(summary.approval_flow_state, "in_approval")
+        self.assertEqual(summary.flow_state, "in_approval")
+        self.assertEqual(summary.display_status, "Aguardando aprovação")
+
+    def test_approval_flow_summary_not_submitted_does_not_expose_missing_doa_as_error(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.summary.not_submitted@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.not_submitted@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = None
+            analysis.submitted_for_approval_at = None
+            analysis.current_limit = Decimal("4500000")
+            analysis.suggested_limit = Decimal("0")
+            memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["recommendation_classification"] = {
+                "code": "maintain_current_limit",
+                "final_suggested_limit": "4500000.00",
+                "current_approved_limit": "4500000.00",
+                "financial_impact": "0.00",
+            }
+            analysis.decision_memory_json = memory
+            db.commit()
+        with patch("app.services.workflow_authorization.resolve_required_approval_roles", return_value={}):
+            with SessionLocal() as db:
+                summary = get_credit_analysis_approval_flow_summary(analysis_id=analysis_id, db=db, current=analyst)
+        self.assertEqual(summary.approval_flow_state, "not_submitted")
+        self.assertEqual(summary.display_title, "Prévia da alçada")
+        self.assertEqual(summary.display_message, "Será definida após a submissão do dossiê.")
+        self.assertIsNone(summary.predicted_doa_code)
+        self.assertIsNone(summary.predicted_doa_range)
+
+    def test_approval_flow_summary_not_submitted_with_resolvable_doa_returns_predicted_alcada(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.summary.predicted@indorama.com", ["credit_request_validate"], bu_id)
+        approver_user = self._create_user("aprovador.summary.predicted@indorama.com", [], bu_id)
+        self._attach_workflow_role(approver_user.user.id, "CREDIT_FINANCE_HEAD")
+        analysis_id = self._create_analysis(run_id, "comercial.predicted@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = None
+            analysis.submitted_for_approval_at = None
+            analysis.current_limit = Decimal("4500000")
+            analysis.suggested_limit = Decimal("0")
+            memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["recommendation_classification"] = {
+                "code": "maintain_current_limit",
+                "final_suggested_limit": "4500000.00",
+                "current_approved_limit": "4500000.00",
+                "financial_impact": "0.00",
+            }
+            analysis.decision_memory_json = memory
+            db.commit()
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 1,
+                    "rule_code": "DOA-0001",
+                    "rule_name": "Faixa 0",
+                    "rule_range": "0.00..1000000.00",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            with SessionLocal() as db:
+                analysis = db.get(CreditAnalysis, analysis_id)
+                assert analysis is not None
+                summary = _build_approval_flow_summary(
+                    db=db,
+                    current=analyst,
+                    analysis=analysis,
+                    business_unit="Fertilizer",
+                )
+        self.assertEqual(summary.approval_flow_state, "not_submitted")
+        self.assertEqual(summary.display_title, "Prévia da alçada")
+        self.assertEqual(summary.predicted_doa_code, "DOA-0001")
+        self.assertEqual(summary.predicted_doa_range, "0.00..1000000.00")
+        self.assertEqual(summary.matrix_amount, Decimal("0"))
+        self.assertEqual(summary.decision_basis, "manutenção do limite atual · impacto R$ 0")
+        self.assertEqual(summary.display_message, "Aguardando envio para aprovação.")
+        self.assertTrue(any(item["role"] == "CREDIT_FINANCE_HEAD" for item in summary.predicted_approvers))
+        self.assertTrue(any(item["user_name"] is not None for item in summary.predicted_approvers))
+
+    def test_approval_flow_summary_approved_exposes_decision_and_timestamp(self) -> None:
+        bu_id, run_id = self._setup_base()
+        approver = self._create_user("aprovador.summary.approved@indorama.com", ["credit_request_validate"], bu_id)
+        self._attach_workflow_role(approver.user.id, "CREDIT_FINANCE_HEAD")
+        analysis_id = self._create_analysis(run_id, "comercial.approved@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.final_decision = FinalDecision.APPROVED
+            analysis.approved_at = datetime.now(timezone.utc)
+            db.add(
+                DecisionEvent(
+                    credit_analysis_id=analysis.id,
+                    event_type="analysis_approved",
+                    actor_type=ActorType.USER,
+                    actor_name="Aprovador Teste",
+                    description="Aprovado",
+                    event_payload_json={},
+                )
+            )
+            db.commit()
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            summary = _build_approval_flow_summary(
+                db=db,
+                current=approver,
+                analysis=analysis,
+                business_unit="Fertilizer",
+            )
+        self.assertEqual(summary.approval_flow_state, "approved")
+        self.assertEqual(summary.flow_state, "approved")
+        self.assertEqual(summary.display_status, "Aprovado")
+        self.assertIsNotNone(summary.approved_at)
+        self.assertEqual(summary.decision_actor_name, "Aprovador Teste")
+
+    def test_approval_flow_summary_rejected_exposes_actor_timestamp_and_event(self) -> None:
+        bu_id, run_id = self._setup_base()
+        approver = self._create_user("aprovador.summary.rejected@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.rejected@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.final_decision = FinalDecision.REJECTED
+            analysis.rejected_at = datetime.now(timezone.utc)
+            db.add(
+                DecisionEvent(
+                    credit_analysis_id=analysis.id,
+                    event_type="analysis_rejected",
+                    actor_type=ActorType.USER,
+                    actor_name="Aprovador Rejeição",
+                    description="Rejeitado",
+                    event_payload_json={},
+                )
+            )
+            db.commit()
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            summary = _build_approval_flow_summary(db=db, current=approver, analysis=analysis, business_unit="Fertilizer")
+        self.assertEqual(summary.flow_state, "rejected")
+        self.assertTrue(any(event["event_type"] == "rejected" for event in summary.events))
+        self.assertIsNotNone(summary.rejected_at)
+
+    def test_approval_flow_summary_request_changes_exposes_comment_and_timestamp(self) -> None:
+        bu_id, run_id = self._setup_base()
+        approver = self._create_user("aprovador.summary.returned@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.returned@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = MotorResult.MANUAL_REVIEW
+            analysis.submitted_for_approval_at = datetime.now(timezone.utc)
+            analysis.analysis_status = AnalysisStatus.IN_PROGRESS
+            db.add(
+                DecisionEvent(
+                    credit_analysis_id=analysis.id,
+                    event_type="returned_for_revision",
+                    actor_type=ActorType.USER,
+                    actor_name="Aprovador Ajustes",
+                    description="Devolvido para ajustes",
+                    event_payload_json={"justification": "Ajustar garantias e anexos."},
+                )
+            )
+            db.commit()
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            summary = _build_approval_flow_summary(db=db, current=approver, analysis=analysis, business_unit="Fertilizer")
+        self.assertEqual(summary.flow_state, "request_changes")
+        self.assertTrue(any(event["event_type"] == "request_changes" for event in summary.events))
+        self.assertTrue(any((event.get("comment") or "") == "Ajustar garantias e anexos." for event in summary.events))
+
+    def test_approval_flow_summary_not_submitted_with_limit_increase_uses_positive_impact_as_preview_base(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.summary.increase@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.increase@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = None
+            analysis.submitted_for_approval_at = None
+            analysis.current_limit = Decimal("1000000")
+            analysis.suggested_limit = Decimal("1500000")
+            memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["recommendation_classification"] = {
+                "code": "increase_limit",
+                "final_suggested_limit": "1500000.00",
+                "current_approved_limit": "1000000.00",
+                "financial_impact": "500000.00",
+            }
+            analysis.decision_memory_json = memory
+            db.commit()
+        with patch(
+            "app.services.workflow_authorization.resolve_required_approval_roles",
+            return_value={
+                "rule_id": 2,
+                "rule_code": "DOA-0002",
+                "rule_name": "Faixa incremento",
+                "rule_range": "100000.00..600000.00",
+                "required_roles": ["CREDIT_FINANCE_HEAD"],
+                "required_approvals": 1,
+                "requires_committee": False,
+            },
+        ):
+            with SessionLocal() as db:
+                analysis = db.get(CreditAnalysis, analysis_id)
+                assert analysis is not None
+                summary = _build_approval_flow_summary(
+                    db=db,
+                    current=analyst,
+                    analysis=analysis,
+                    business_unit="Fertilizer",
+                )
+        self.assertEqual(summary.approval_flow_state, "not_submitted")
+        self.assertEqual(summary.predicted_doa_code, "DOA-0002")
+        self.assertEqual(summary.matrix_amount, Decimal("500000"))
+        self.assertEqual(summary.decision_basis, "aumento de limite · impacto R$ 500.000")
+
+    def test_approval_flow_summary_not_submitted_with_multiple_eligible_approvers_returns_compact_group(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.summary.multi@indorama.com", ["credit_request_validate"], bu_id)
+        approver_a = self._create_user("aprovador.a.multi@indorama.com", [], bu_id)
+        approver_b = self._create_user("aprovador.b.multi@indorama.com", [], bu_id)
+        self._attach_workflow_role(approver_a.user.id, "CREDIT_FINANCE_HEAD")
+        self._attach_workflow_role(approver_b.user.id, "CREDIT_FINANCE_HEAD")
+        analysis_id = self._create_analysis(run_id, "comercial.multi@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = None
+            analysis.submitted_for_approval_at = None
+            db.commit()
+        with patch(
+            "app.services.workflow_authorization.resolve_required_approval_roles",
+            return_value={
+                "rule_id": 3,
+                "rule_code": "DOA-0003",
+                "rule_name": "Faixa 3",
+                "rule_range": "1000000.00..5000000.00",
+                "required_roles": ["CREDIT_FINANCE_HEAD"],
+                "required_approvals": 1,
+                "requires_committee": False,
+            },
+        ):
+            with SessionLocal() as db:
+                analysis = db.get(CreditAnalysis, analysis_id)
+                assert analysis is not None
+                summary = _build_approval_flow_summary(db=db, current=analyst, analysis=analysis, business_unit="Fertilizer")
+        users = [item for item in summary.predicted_approvers if item["role"] == "CREDIT_FINANCE_HEAD" and item["user_name"]]
+        self.assertGreaterEqual(len(users), 2)
+
+    def test_approval_flow_summary_excludes_administrative_profile_from_predicted_operational_approvers(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.summary.adminfilter@indorama.com", ["credit_request_validate"], bu_id)
+        finance_head = self._create_user("finance.head.summary.adminfilter@indorama.com", [], bu_id)
+        admin_like = self._create_user("admin.summary.adminfilter@indorama.com", [], bu_id)
+        self._attach_workflow_role(finance_head.user.id, "CREDIT_FINANCE_HEAD")
+        self._attach_workflow_role(admin_like.user.id, "CREDIT_FINANCE_HEAD")
+        with SessionLocal() as db:
+            admin_user = db.get(User, admin_like.user.id)
+            assert admin_user is not None
+            admin_role = db.get(Role, admin_user.role_id)
+            assert admin_role is not None
+            admin_role.is_system = True
+            db.commit()
+        analysis_id = self._create_analysis(run_id, "comercial.adminfilter@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = None
+            analysis.submitted_for_approval_at = None
+            db.commit()
+        with patch(
+            "app.services.workflow_authorization.resolve_required_approval_roles",
+            return_value={
+                "rule_id": 5,
+                "rule_code": "DOA-0005",
+                "rule_name": "Faixa 5",
+                "rule_range": "0.00..1000000.00",
+                "required_roles": ["CREDIT_FINANCE_HEAD"],
+                "required_approvals": 1,
+                "requires_committee": False,
+            },
+        ):
+            with SessionLocal() as db:
+                analysis = db.get(CreditAnalysis, analysis_id)
+                assert analysis is not None
+                summary = _build_approval_flow_summary(db=db, current=analyst, analysis=analysis, business_unit="Fertilizer")
+        names = [item["user_name"] for item in summary.predicted_approvers if item["role"] == "CREDIT_FINANCE_HEAD" and item["user_name"]]
+        self.assertIn("finance.head.summary.adminfilter", " ".join([n.lower() for n in names]))
+        self.assertNotIn("admin.summary.adminfilter", " ".join([n.lower() for n in names]))
+
+    def test_approval_flow_summary_not_submitted_with_role_only_returns_predicted_role_without_user(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.summary.roleonly@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.roleonly@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = None
+            analysis.submitted_for_approval_at = None
+            db.commit()
+        with patch(
+            "app.services.workflow_authorization.resolve_required_approval_roles",
+            return_value={
+                "rule_id": 4,
+                "rule_code": "DOA-0004",
+                "rule_name": "Faixa 4",
+                "rule_range": "5000000.00..9000000.00",
+                "required_roles": ["CREDIT_COMMITTEE"],
+                "required_approvals": 1,
+                "requires_committee": True,
+            },
+        ):
+            with SessionLocal() as db:
+                analysis = db.get(CreditAnalysis, analysis_id)
+                assert analysis is not None
+                summary = _build_approval_flow_summary(db=db, current=analyst, analysis=analysis, business_unit="Fertilizer")
+        self.assertTrue(any(item["role"] == "CREDIT_COMMITTEE" for item in summary.predicted_approvers))
+        self.assertTrue(all(item["user_name"] is None for item in summary.predicted_approvers if item["role"] == "CREDIT_COMMITTEE"))
+
+    def test_eligible_approver_can_open_existing_dossier_detail_without_403(self) -> None:
+        bu_id, run_id = self._setup_base()
+        approver = self._create_user("finance.head.detail@indorama.com", [], bu_id)
+        self._attach_workflow_role(approver.user.id, "CREDIT_FINANCE_HEAD")
+        analysis_id = self._create_analysis(run_id, "comercial.detail@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = MotorResult.MANUAL_REVIEW
+            analysis.decision_calculated_at = datetime.now()
+            db.commit()
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 1,
+                    "rule_code": "DOA-0001",
+                    "rule_name": "Faixa 0",
+                    "rule_range": "0.00..1000000.00",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            with SessionLocal() as db:
+                queue = list_credit_analyses_approval_queue(db=db, current=approver)
+                self.assertEqual(queue.total, 1)
+                self.assertIn("approve", queue.items[0].available_actions)
+                self.assertIn("view_dossier", queue.items[0].available_actions)
+            with SessionLocal() as db:
+                detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=approver)
+        self.assertEqual(detail.id, analysis_id)
+
+    def test_workspace_remains_blocked_for_eligible_approver_without_technical_permission(self) -> None:
+        bu_id, run_id = self._setup_base()
+        approver = self._create_user("finance.head.workspace@indorama.com", [], bu_id)
+        self._attach_workflow_role(approver.user.id, "CREDIT_FINANCE_HEAD")
+        analysis_id = self._create_analysis(run_id, "comercial.workspace@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.motor_result = MotorResult.MANUAL_REVIEW
+            analysis.decision_calculated_at = datetime.now()
+            db.commit()
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={
+                    "rule_id": 1,
+                    "rule_code": "DOA-0001",
+                    "rule_name": "Faixa 0",
+                    "rule_range": "0.00..1000000.00",
+                    "required_roles": ["CREDIT_FINANCE_HEAD"],
+                    "required_approvals": 1,
+                    "requires_committee": False,
+                },
+            ),
+        ):
+            with SessionLocal() as db:
+                with self.assertRaises(HTTPException) as ctx:
+                    update_credit_analysis_workspace_state(
+                        analysis_id=analysis_id,
+                        payload=CreditAnalysisWorkspaceStateUpdateRequest(analyst_notes="Tentativa indevida"),
+                        db=db,
+                        current=approver,
+                    )
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_non_eligible_or_out_of_scope_user_cannot_open_dossier(self) -> None:
+        bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()
+        approver_bu_a = self._create_user("aprovador.dossie@indorama.com", ["credit_request_approve", "credit_request_reject"], bu_a_id)
+        analysis_bu_b = self._create_analysis(run_id, "comercial.b@indorama.com", status="in_progress", bu_name="Additives")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_bu_b)
+            assert analysis is not None
+            analysis.motor_result = MotorResult.MANUAL_REVIEW
+            analysis.decision_calculated_at = datetime.now()
+            db.commit()
+        with SessionLocal() as db:
+            with self.assertRaises(HTTPException) as ctx:
+                get_credit_analysis(analysis_id=analysis_bu_b, db=db, current=approver_bu_a)
+        self.assertEqual(ctx.exception.status_code, 403)
 
     def test_bu_scope_blocks_final_decision_outside_scope(self) -> None:
         bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()
@@ -790,7 +1306,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         classification = detail.decision_memory_json.get("recommendation_classification")
         self.assertIsInstance(classification, dict)
         assert isinstance(classification, dict)
-        self.assertEqual(classification.get("label"), "Manutenção do limite atual recomendada")
+        self.assertEqual(classification.get("label"), "ManutenÃ§Ã£o do limite atual recomendada")
         self.assertEqual(classification.get("requested_limit"), "5000000.00")
         self.assertEqual(classification.get("current_approved_limit"), "4500000.00")
         self.assertEqual(classification.get("coface_coverage_limit"), "4500000.0")
@@ -924,7 +1440,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         assert isinstance(detail.decision_memory_json, dict)
         classification = detail.decision_memory_json.get("recommendation_classification")
         assert isinstance(classification, dict)
-        self.assertEqual(classification.get("label"), "Manutenção do limite atual recomendada")
+        self.assertEqual(classification.get("label"), "ManutenÃ§Ã£o do limite atual recomendada")
         self.assertEqual(classification.get("current_approved_limit"), "4500000.00")
 
     def test_get_credit_analysis_legacy_without_triage_source_still_identifies_existing_customer(self) -> None:
@@ -1005,9 +1521,11 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         assert isinstance(detail.decision_memory_json, dict)
         classification = detail.decision_memory_json.get("recommendation_classification")
         assert isinstance(classification, dict)
-        self.assertEqual(classification.get("label"), "Manutenção do limite atual recomendada")
+        self.assertEqual(classification.get("label"), "ManutenÃ§Ã£o do limite atual recomendada")
         self.assertEqual(classification.get("is_existing_customer"), True)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+

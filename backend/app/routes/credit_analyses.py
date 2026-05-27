@@ -1,4 +1,4 @@
-from decimal import Decimal
+﻿from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import Numeric, func, select
+from sqlalchemy import Numeric, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,11 +29,16 @@ from app.models.analysis_document import AnalysisDocument
 from app.models.analysis_commercial_reference import AnalysisCommercialReference
 from app.models.score_result import ScoreResult
 from app.models.credit_report_read import CreditReportRead
+from app.models.user import User
+from app.models.role import Role
+from app.models.user_workflow_role import UserWorkflowRole
+from app.models.workflow_role import WorkflowRole
 from app.models.user_business_unit_scope import UserBusinessUnitScope
 from app.schemas.credit_analysis import (
     CreditAnalysisCreate,
     CreditAnalysisDraftCreateRequest,
     CreditAnalysisDraftCreateResponse,
+    CreditAnalysisDraftRecoveryResponse,
     CreditAnalysisExistingCheckResponse,
     CreditAnalysisQueueItem,
     CreditAnalysisQueueKpis,
@@ -42,6 +47,7 @@ from app.schemas.credit_analysis import (
     CreditAnalysisMonitorResponse,
     CreditAnalysisApprovalQueueKpis,
     CreditAnalysisApprovalQueueResponse,
+    CreditAnalysisApprovalFlowSummary,
     CreditAnalysisJourneyProgressUpdateRequest,
     CreditAnalysisWorkspaceStateUpdateRequest,
     CreditAnalysisReportReadSummary,
@@ -101,6 +107,8 @@ from app.services.workflow_transition_engine import resolve_credit_workflow_tran
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
 logger = logging.getLogger(__name__)
+
+DRAFT_TTL_HOURS = 24
 
 
 class WorkflowActionRequest(BaseModel):
@@ -181,7 +189,7 @@ def _build_customer_from_portfolio_row(cnpj: str, row: tuple) -> dict:
     composition_delta = abs(open_value - (overdue_value + not_due_value))
     if composition_delta > Decimal("1.00"):
         logger.warning(
-            "Triagem carteira com composição inconsistente para CNPJ %s: open=%s overdue=%s not_due=%s delta=%s",
+            "Triagem carteira com composiÃ§Ã£o inconsistente para CNPJ %s: open=%s overdue=%s not_due=%s delta=%s",
             cnpj,
             open_value,
             overdue_value,
@@ -415,6 +423,18 @@ def _resolve_workflow_stage(status_value: str) -> str:
     return "returned"
 
 
+TECHNICAL_MONITOR_VISIBILITY_ACTIONS = {
+    "start_analysis",
+    "continue_analysis",
+    "submit_approval",
+    "approve",
+    "reject",
+    "request_changes",
+    "view_dossier",
+    "view_result",
+}
+
+
 def _status_label(status_value: str) -> str:
     mapping = {
         "pending": "Pendente",
@@ -424,6 +444,400 @@ def _status_label(status_value: str) -> str:
         "rejected": "Recusado",
     }
     return mapping.get(status_value, status_value)
+
+def _build_approval_flow_summary(
+    db: Session,
+    current: CurrentUser,
+    *,
+    analysis: CreditAnalysis,
+    business_unit: str | None,
+) -> CreditAnalysisApprovalFlowSummary:
+    event_type_labels = {
+        "analysis_submitted_for_approval": "submitted_for_approval",
+        "analysis_approved": "approved",
+        "analysis_rejected": "rejected",
+        "returned_for_revision": "request_changes",
+    }
+    def role_label_from_code(code: str) -> str:
+        role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == code, WorkflowRole.is_active.is_(True)))
+        if role and role.name and role.name.strip():
+            return role.name.strip()
+        return code
+
+    def resolve_users_for_role(role_code: str) -> list[dict]:
+        if not business_unit:
+            bu_id = None
+        else:
+            bu_id = db.scalar(
+                select(BusinessUnit.id).where(
+                    BusinessUnit.company_id == current.user.company_id,
+                    BusinessUnit.name == business_unit,
+                    BusinessUnit.is_active.is_(True),
+                )
+            )
+        rows = db.execute(
+            select(User.id, User.full_name, User.email)
+            .join(UserWorkflowRole, UserWorkflowRole.user_id == User.id)
+            .join(WorkflowRole, WorkflowRole.id == UserWorkflowRole.workflow_role_id)
+            .join(Role, Role.id == User.role_id)
+            .where(
+                WorkflowRole.code == role_code,
+                WorkflowRole.is_active.is_(True),
+                User.company_id == current.user.company_id,
+                User.is_active.is_(True),
+                Role.is_active.is_(True),
+                Role.is_system.is_(False),
+            )
+            .where(
+                (UserWorkflowRole.business_unit_id.is_(None))
+                if bu_id is None
+                else ((UserWorkflowRole.business_unit_id.is_(None)) | (UserWorkflowRole.business_unit_id == bu_id))
+            )
+            .order_by(User.full_name.asc(), User.id.asc())
+        ).all()
+        seen: set[int] = set()
+        users: list[dict] = []
+        for user_id, full_name, email in rows:
+            if user_id in seen:
+                continue
+            seen.add(user_id)
+            users.append(
+                {
+                    "user_id": user_id,
+                    "user_name": (full_name or "").strip() or None,
+                    "user_email": (email or "").strip() or None,
+                }
+            )
+        return users
+
+    status_value = _current_status_value(analysis)
+    workflow_stage = _resolve_workflow_stage(status_value)
+    available_actions = resolve_credit_workflow_available_actions(
+        db,
+        current,
+        analysis=analysis,
+        business_unit=business_unit,
+    )
+    approval_resolution = resolve_credit_workflow_action(
+        db,
+        current,
+        action="approve",
+        analysis=analysis,
+        business_unit=business_unit,
+    )
+    events = list(
+        db.scalars(
+            select(DecisionEvent)
+            .where(DecisionEvent.credit_analysis_id == analysis.id)
+            .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
+        ).all()
+    )
+    event_by_type: dict[str, datetime] = {}
+    for event in events:
+        if event.event_type not in event_by_type:
+            event_by_type[event.event_type] = event.created_at
+    returned_for_revision_at = event_by_type.get("returned_for_revision")
+    relevant_decision_events = [
+        event.created_at
+        for event in events
+        if event.event_type in {"analysis_submitted_for_approval", "analysis_approved", "analysis_rejected", "returned_for_revision"}
+    ]
+    required_roles: list[str] = []
+    if isinstance(analysis.decision_memory_json, dict):
+        preview = analysis.decision_memory_json.get("approval_matrix_preview")
+        if isinstance(preview, dict) and isinstance(preview.get("required_roles"), list):
+            required_roles = [str(role) for role in preview["required_roles"] if str(role).strip()]
+
+    completed_steps: list[str] = []
+    if analysis.submitted_for_approval_at is not None:
+        completed_steps.append("Submetida para aprovação")
+    if analysis.approved_at is not None:
+        completed_steps.append("Aprovada")
+    if analysis.rejected_at is not None:
+        completed_steps.append("Rejeitada")
+    if returned_for_revision_at is not None:
+        completed_steps.append("Devolvida para ajustes")
+
+    pending_steps: list[str] = []
+    if status_value == "in_approval":
+        pending_steps.append("Aguardando decisão da alçada")
+    elif status_value == "pending":
+        pending_steps.append("Pendente de submissão")
+    elif status_value == "in_progress":
+        pending_steps.append("Em análise técnica")
+
+    sequential_note = (
+        "A aprovação sequencial multi-etapas ainda não está modelada explicitamente; o resumo reflete a alçada aplicável, ações disponíveis e eventos registrados."
+        if len(required_roles) <= 1
+        else None
+    )
+
+    approved_event = next((event for event in reversed(events) if event.event_type == "analysis_approved"), None)
+    rejected_event = next((event for event in reversed(events) if event.event_type == "analysis_rejected"), None)
+    returned_event = next((event for event in reversed(events) if event.event_type == "returned_for_revision"), None)
+
+    decision_actor_name = approved_event.actor_name if approved_event else rejected_event.actor_name if rejected_event else None
+    decision_actor_role = "Aprovador" if approved_event or rejected_event else None
+
+    memory_snapshot = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    recommendation = memory_snapshot.get("recommendation_classification") if isinstance(memory_snapshot.get("recommendation_classification"), dict) else None
+    if recommendation is None:
+        recommendation = _resolve_recommendation_classification(db, analysis)
+    recommendation_code = str(recommendation.get("code") or "").strip().lower()
+    financial_impact = _resolve_financial_impact(analysis)
+    recommended_limit = _resolve_recommended_limit_from_memory(analysis)
+    matrix_amount: Decimal | None = None
+    decision_basis: str | None = None
+
+    if recommendation_code == "maintain_current_limit" or (financial_impact is not None and financial_impact == Decimal("0")):
+        matrix_amount = Decimal("0")
+        decision_basis = "manutenção do limite atual · impacto R$ 0"
+    elif financial_impact is not None and financial_impact > Decimal("0"):
+        matrix_amount = financial_impact
+        decision_basis = f"aumento de limite · impacto R$ {int(financial_impact):,}".replace(",", ".")
+    elif financial_impact is not None and financial_impact < Decimal("0"):
+        if recommended_limit is not None:
+            matrix_amount = recommended_limit
+        decision_basis = f"redução de limite · impacto R$ {int(abs(financial_impact)):,}".replace(",", ".")
+    elif recommended_limit is not None:
+        matrix_amount = recommended_limit
+        decision_basis = f"base canônica de decisão · valor R$ {int(recommended_limit):,}".replace(",", ".")
+
+    if matrix_amount is not None and matrix_amount == Decimal("0"):
+        decision_basis = "manutenção do limite atual · impacto R$ 0"
+
+    preview_resolution = resolve_credit_workflow_action(
+        db,
+        current,
+        action="approve",
+        analysis=None,
+        requested_amount=matrix_amount if matrix_amount is not None else None,
+        business_unit=business_unit,
+    )
+    if not required_roles:
+        context_roles = preview_resolution.workflow_context.get("applicable_roles")
+        if isinstance(context_roles, list):
+            required_roles = [str(role) for role in context_roles if str(role).strip()]
+
+    if status_value == "approved":
+        flow_state = "approved"
+        display_status = "Aprovado"
+        display_stage = "Aprovação concluída"
+        display_title = "Aprovação concluída"
+        display_message = "Decisão final registrada."
+    elif status_value == "rejected":
+        flow_state = "rejected"
+        display_status = "Rejeitado"
+        display_stage = "Aprovação concluída"
+        display_title = "Aprovação concluída"
+        display_message = "Solicitação rejeitada na alçada."
+    elif returned_event is not None:
+        flow_state = "request_changes"
+        display_status = "Devolvido para ajustes"
+        display_stage = "Retornado para análise"
+        display_title = "Retornado para análise"
+        display_message = "A solicitação foi devolvida para ajustes."
+    elif status_value == "in_approval":
+        flow_state = "in_approval"
+        display_status = "Aguardando aprovação"
+        display_stage = "Em aprovação"
+        display_title = "Em aprovação"
+        display_message = "Aguardando decisão da alçada."
+    elif analysis.submitted_for_approval_at is None:
+        flow_state = "not_submitted"
+        display_status = "Ainda não enviado para aprovação"
+        display_stage = "Aguardando envio para aprovação"
+        display_title = "Prévia da alçada"
+        if preview_resolution.applicable_doa_code and preview_resolution.applicable_doa_range:
+            display_message = "Aguardando envio para aprovação."
+        else:
+            display_message = "Será definida após a submissão do dossiê."
+    else:
+        flow_state = "in_approval"
+        display_status = "Em aprovação"
+        display_stage = "Aguardando próxima decisão"
+        display_title = "Em aprovação"
+        display_message = "Aguardando próxima decisão da alçada."
+
+    predicted_doa_code = preview_resolution.applicable_doa_code if flow_state == "not_submitted" else None
+    predicted_doa_range = preview_resolution.applicable_doa_range if flow_state == "not_submitted" else None
+
+    approver_status = (
+        "predicted"
+        if flow_state == "not_submitted"
+        else "pending"
+        if flow_state in {"in_approval", "request_changes"}
+        else "approved"
+        if flow_state == "approved"
+        else "rejected"
+    )
+    predicted_approvers: list[dict] = []
+    for index, role_code in enumerate(required_roles, start=1):
+        role_users = resolve_users_for_role(role_code)
+        if role_users:
+            for user_item in role_users:
+                predicted_approvers.append(
+                    {
+                        "role": role_code,
+                        "role_label": role_label_from_code(role_code),
+                        "user_id": user_item["user_id"],
+                        "user_name": user_item["user_name"],
+                        "user_email": user_item["user_email"],
+                        "sequence": index,
+                        "status": approver_status,
+                    }
+                )
+        else:
+            predicted_approvers.append(
+                {
+                    "role": role_code,
+                    "role_label": role_label_from_code(role_code),
+                    "user_id": None,
+                    "user_name": None,
+                    "user_email": None,
+                    "sequence": index,
+                    "status": approver_status,
+                }
+            )
+
+    expected_approvers = list(predicted_approvers)
+    pending_approvers = [item for item in predicted_approvers if item.get("status") == "pending"]
+    approved_approvers: list[dict] = []
+    rejected_approvers: list[dict] = []
+    returned_approvers: list[dict] = []
+    flow_events: list[dict] = []
+    flow_steps: list[dict] = []
+
+    for event in events:
+        normalized_type = event_type_labels.get(event.event_type)
+        if normalized_type is None:
+            continue
+        payload = event.event_payload_json if isinstance(event.event_payload_json, dict) else {}
+        event_item = {
+            "event_type": normalized_type,
+            "timestamp": event.created_at,
+            "actor_name": event.actor_name,
+            "actor_role": payload.get("new_owner_role") or payload.get("previous_owner_role") or "aprovador",
+            "comment": payload.get("justification"),
+        }
+        flow_events.append(event_item)
+        if normalized_type == "approved":
+            approved_approvers.append(event_item)
+        elif normalized_type == "rejected":
+            rejected_approvers.append(event_item)
+        elif normalized_type == "request_changes":
+            returned_approvers.append(event_item)
+
+    if flow_state == "not_submitted":
+        flow_steps.append(
+            {
+                "status": "not_submitted",
+                "label": "Prévia de aprovação",
+                "timestamp": None,
+                "actor_name": None,
+                "actor_role": None,
+                "comment": None,
+            }
+        )
+    if flow_state == "in_approval":
+        for pending in pending_approvers:
+            flow_steps.append(
+                {
+                    "status": "pending",
+                    "label": "Aguardando aprovação",
+                    "timestamp": None,
+                    "actor_name": pending.get("user_name"),
+                    "actor_role": pending.get("role_label") or pending.get("role"),
+                    "comment": None,
+                }
+            )
+    for event_item in flow_events:
+        if event_item["event_type"] == "submitted_for_approval":
+            flow_steps.append(
+                {
+                    "status": "submitted",
+                    "label": "Submetida para aprovação",
+                    "timestamp": event_item["timestamp"],
+                    "actor_name": event_item["actor_name"],
+                    "actor_role": event_item["actor_role"],
+                    "comment": event_item["comment"],
+                }
+            )
+        if event_item["event_type"] == "approved":
+            flow_steps.append(
+                {
+                    "status": "approved",
+                    "label": "Aprovado",
+                    "timestamp": event_item["timestamp"],
+                    "actor_name": event_item["actor_name"],
+                    "actor_role": event_item["actor_role"],
+                    "comment": event_item["comment"],
+                }
+            )
+        if event_item["event_type"] == "rejected":
+            flow_steps.append(
+                {
+                    "status": "rejected",
+                    "label": "Rejeitado",
+                    "timestamp": event_item["timestamp"],
+                    "actor_name": event_item["actor_name"],
+                    "actor_role": event_item["actor_role"],
+                    "comment": event_item["comment"],
+                }
+            )
+        if event_item["event_type"] == "request_changes":
+            flow_steps.append(
+                {
+                    "status": "request_changes",
+                    "label": "Devolvido para ajustes",
+                    "timestamp": event_item["timestamp"],
+                    "actor_name": event_item["actor_name"],
+                    "actor_role": event_item["actor_role"],
+                    "comment": event_item["comment"],
+                }
+            )
+
+    return CreditAnalysisApprovalFlowSummary(
+        analysis_id=analysis.id,
+        current_status=status_value,
+        status_label=_status_label(status_value),
+        workflow_stage=workflow_stage,
+        applicable_doa_code=approval_resolution.applicable_doa_code,
+        applicable_doa_range=approval_resolution.applicable_doa_range,
+        available_actions=sorted(set(available_actions)),
+        current_owner_user_id=analysis.current_owner_user_id,
+        current_owner_role=analysis.current_owner_role,
+        submitted_for_approval_at=analysis.submitted_for_approval_at,
+        approved_at=analysis.approved_at,
+        rejected_at=analysis.rejected_at,
+        returned_for_revision_at=returned_for_revision_at,
+        last_decision_event_at=max(relevant_decision_events) if relevant_decision_events else None,
+        completed_steps=completed_steps,
+        pending_steps=pending_steps,
+        required_approval_roles=required_roles,
+        sequential_approval_mode=len(required_roles) > 1,
+        sequential_approval_note=sequential_note,
+        approval_flow_state=flow_state,
+        display_status=display_status,
+        display_stage=display_stage,
+        decision_actor_name=decision_actor_name,
+        decision_actor_role=decision_actor_role,
+        predicted_doa_code=predicted_doa_code,
+        predicted_doa_range=predicted_doa_range,
+        matrix_amount=matrix_amount if flow_state == "not_submitted" else None,
+        decision_basis=decision_basis if flow_state == "not_submitted" else None,
+        predicted_approvers=predicted_approvers,
+        flow_state=flow_state,
+        expected_approvers=expected_approvers,
+        pending_approvers=pending_approvers,
+        approved_approvers=approved_approvers,
+        rejected_approvers=rejected_approvers,
+        returned_approvers=returned_approvers,
+        events=flow_events,
+        steps=flow_steps,
+        display_title=display_title,
+        display_message=display_message,
+    )
 
 
 def _current_status_value(analysis: CreditAnalysis) -> str:
@@ -502,8 +916,8 @@ def _resolve_recommended_limit_from_memory(analysis: CreditAnalysis) -> Decimal 
         and analysis.suggested_limit is not None
         and analysis.suggested_limit <= Decimal("0")
     ):
-        # Fallback para manter semântica de manutenção quando memória/classificação
-        # ainda não foi persistida no registro.
+        # Fallback para manter semÃ¢ntica de manutenÃ§Ã£o quando memÃ³ria/classificaÃ§Ã£o
+        # ainda nÃ£o foi persistida no registro.
         return analysis.current_limit
     return analysis.suggested_limit
 
@@ -581,7 +995,7 @@ def _derive_journey_step_from_state(db: Session, analysis: CreditAnalysis) -> in
     has_external_data = db.scalar(select(ExternalDataEntry.id).where(ExternalDataEntry.credit_analysis_id == analysis.id).limit(1)) is not None
     has_documents = db.scalar(select(AnalysisDocument.id).where(AnalysisDocument.credit_analysis_id == analysis.id).limit(1)) is not None
 
-    if has_score or (analysis.analyst_notes or "").strip() or analysis.analysis_started_at is not None:
+    if has_score or (analysis.analyst_notes or "").strip():
         return 3
     if has_external_data or has_documents:
         return 2
@@ -730,7 +1144,7 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Usuário sem autorização explícita para acessar esta etapa técnica do workflow.",
+        detail="UsuÃ¡rio sem autorizaÃ§Ã£o explÃ­cita para acessar esta etapa tÃ©cnica do workflow.",
     )
 
 
@@ -759,9 +1173,62 @@ def _enforce_step1_editable_or_409(analysis: CreditAnalysis) -> None:
         return
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail="Esta solicitação já foi submetida para análise e não pode ser alterada nesta etapa.",
+        detail="Esta solicitaÃ§Ã£o jÃ¡ foi submetida para anÃ¡lise e nÃ£o pode ser alterada nesta etapa.",
     )
 
+
+
+def _enforce_step1_requester_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
+    allowed_bu_names = get_user_allowed_business_units(db, current)
+    has_all_scope = user_has_all_bu_scope(current)
+    analysis_bu = resolve_analysis_business_unit(db, analysis)
+    assert_bu_in_scope(allowed_bu_names, analysis_bu, has_all_scope=has_all_scope)
+
+    current_email = (current.user.email or "").strip().lower()
+    if (
+        analysis.current_owner_role == "comercial_solicitante"
+        and analysis.current_owner_user_id == current.user.id
+        and analysis.analysis_status == AnalysisStatus.CREATED
+    ):
+        return
+
+    draft_audit_by_user = db.scalar(
+        select(AuditLog.id).where(
+            AuditLog.resource == "credit_analysis",
+            AuditLog.resource_id == str(analysis.id),
+            AuditLog.action == "credit_request_draft_create",
+            AuditLog.actor_user_id == current.user.id,
+        ).limit(1)
+    )
+    if draft_audit_by_user and analysis.analysis_status == AnalysisStatus.CREATED:
+        return
+
+    triage_audit = db.scalar(
+        select(AuditLog).where(
+            AuditLog.resource == "credit_analysis",
+            AuditLog.resource_id == str(analysis.id),
+            AuditLog.action == "credit_request_triage_submit",
+        ).order_by(AuditLog.id.desc())
+    )
+    metadata = triage_audit.metadata_json if triage_audit and isinstance(triage_audit.metadata_json, dict) else None
+    requested_by = str((metadata or {}).get("requested_by") or "").strip().lower() if metadata else ""
+    if requested_by and requested_by == current_email and analysis.analysis_status == AnalysisStatus.CREATED:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Usu?rio sem autoriza??o expl?cita para acessar esta etapa t?cnica do workflow.",
+    )
+
+
+def _enforce_step1_read_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
+    try:
+        _enforce_step1_requester_access_or_403(db, current, analysis)
+        return
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_403_FORBIDDEN:
+            raise
+    _enforce_technical_access_or_403(db, current, analysis)
 
 def _normalize_document_status(value: str | None) -> str:
     normalized = (value or "").strip().lower()
@@ -874,7 +1341,7 @@ def triage_credit_analysis(
         requires_early_review_justification=has_recent_analysis,
         requires_business_unit_selection=len(scoped_bus) > 1,
         available_business_units=bu_options,
-        message="Cliente não localizado na carteira atual. Os dados cadastrais foram preenchidos com base na consulta externa.",
+        message="Cliente nÃ£o localizado na carteira atual. Os dados cadastrais foram preenchidos com base na consulta externa.",
     )
 
 
@@ -895,12 +1362,16 @@ def check_existing_credit_analysis(
             message="Nenhuma análise anterior encontrada para este cliente.",
         )
 
-    latest_analysis = db.scalar(
+    latest_analysis = None
+    for candidate in db.scalars(
         select(CreditAnalysis)
         .where(CreditAnalysis.customer_id == customer.id)
         .order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
-        .limit(1)
-    )
+    ).all():
+        if _is_step1_draft(candidate):
+            continue
+        latest_analysis = candidate
+        break
     if latest_analysis is None:
         return CreditAnalysisExistingCheckResponse(
             cnpj=normalized_cnpj,
@@ -969,39 +1440,39 @@ def create_credit_analysis_draft(
     normalized_cnpj = _normalize_cnpj_or_400(payload.cnpj)
     source = (payload.source or "").strip().lower()
     if source not in {"portfolio", "external", "manual"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Origem da solicitação inválida.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Origem da solicitaÃ§Ã£o invÃ¡lida.")
 
     customer = db.scalar(select(Customer).where(Customer.document_number == normalized_cnpj))
     if customer is not None:
-        latest_analysis = db.scalar(
+        reusable_draft = _find_user_active_draft_for_customer(
+            db,
+            user_id=current.user.id,
+            customer_id=customer.id,
+        )
+        if reusable_draft is not None:
+            return CreditAnalysisDraftCreateResponse(
+                analysis_id=reusable_draft.id,
+                customer_id=customer.id,
+                status=reusable_draft.analysis_status.value,
+                cnpj=normalized_cnpj,
+                reused_existing=True,
+            )
+
+        latest_analysis = None
+        for candidate in db.scalars(
             select(CreditAnalysis)
             .where(CreditAnalysis.customer_id == customer.id)
             .order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
-            .limit(1)
-        )
+        ).all():
+            if _is_step1_draft(candidate):
+                continue
+            latest_analysis = candidate
+            break
+
         if latest_analysis and latest_analysis.analysis_status in {AnalysisStatus.CREATED, AnalysisStatus.IN_PROGRESS}:
-            recent_draft_audit = db.scalar(
-                select(AuditLog)
-                .where(
-                    AuditLog.resource == "credit_analysis",
-                    AuditLog.resource_id == str(latest_analysis.id),
-                    AuditLog.action == "credit_request_draft_create",
-                    AuditLog.actor_user_id == current.user.id,
-                )
-                .order_by(AuditLog.id.desc())
-                .limit(1)
-            )
-            if recent_draft_audit is not None and latest_analysis.analysis_status == AnalysisStatus.CREATED:
-                return CreditAnalysisDraftCreateResponse(
-                    analysis_id=latest_analysis.id,
-                    customer_id=customer.id,
-                    status=latest_analysis.analysis_status.value,
-                    cnpj=normalized_cnpj,
-                    reused_existing=True,
-                )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Já existe uma solicitação de crédito em andamento para este cliente.",
+                detail="JÃ¡ existe uma solicitaÃ§Ã£o de crÃ©dito em andamento para este cliente.",
             )
         if latest_analysis and latest_analysis.final_decision in {FinalDecision.APPROVED, FinalDecision.REJECTED}:
             decision_date = _resolve_decision_date(latest_analysis)
@@ -1010,12 +1481,12 @@ def create_credit_analysis_draft(
                 if days_since_decision < REANALYSIS_COOLDOWN_DAYS:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
-                        detail="Este cliente já possui uma análise concluída nos últimos 90 dias.",
+                        detail="Este cliente jÃ¡ possui uma anÃ¡lise concluÃ­da nos Ãºltimos 90 dias.",
                     )
 
     if customer is None:
         customer = Customer(
-            company_name=(payload.customer_name or "Cliente sem razão social").strip(),
+            company_name=(payload.customer_name or "Cliente sem razÃ£o social").strip(),
             document_number=normalized_cnpj,
             segment="nao_informado",
             region="nao_informado",
@@ -1042,6 +1513,8 @@ def create_credit_analysis_draft(
         annual_revenue_estimated=Decimal("0"),
         suggested_limit=Decimal("0"),
         assigned_analyst_name=None,
+        current_owner_user_id=current.user.id,
+        current_owner_role="comercial_solicitante",
         assigned_at=now_utc,
         current_stage_started_at=now_utc,
         decision_memory_json={
@@ -1064,6 +1537,22 @@ def create_credit_analysis_draft(
     )
     if not transition.allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao para criar solicitacao.")
+    db.add(
+        AuditLog(
+            actor_user_id=current.user.id,
+            action="credit_request_draft_create",
+            resource="credit_analysis",
+            resource_id=str(analysis.id),
+            metadata_json={
+                "requested_by": current.user.email,
+                "cnpj": normalized_cnpj,
+                "source": source,
+                "analysis_id": analysis.id,
+                "business_unit": selected_bu_name,
+            },
+            notes="Rascunho criado para preenchimento da etapa inicial.",
+        )
+    )
     db.commit()
     db.refresh(analysis)
     return CreditAnalysisDraftCreateResponse(
@@ -1073,6 +1562,111 @@ def create_credit_analysis_draft(
         cnpj=normalized_cnpj,
         reused_existing=False,
     )
+
+
+def _triage_submission_from_memory(analysis: CreditAnalysis) -> dict:
+    if not isinstance(analysis.decision_memory_json, dict):
+        return {}
+    payload = analysis.decision_memory_json.get("triage_submission")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _is_step1_draft(analysis: CreditAnalysis) -> bool:
+    triage_submission = _triage_submission_from_memory(analysis)
+    return bool(
+        analysis.analysis_status == AnalysisStatus.CREATED
+        and analysis.current_owner_role == "comercial_solicitante"
+        and triage_submission.get("draft_created_from_step1") is True
+    )
+
+
+def _is_draft_expired(analysis: CreditAnalysis, *, now_utc: datetime | None = None) -> bool:
+    if not _is_step1_draft(analysis):
+        return False
+    reference = now_utc or datetime.now(timezone.utc)
+    return analysis.created_at < (reference - timedelta(hours=DRAFT_TTL_HOURS))
+
+
+def _is_active_step1_draft(analysis: CreditAnalysis, *, now_utc: datetime | None = None) -> bool:
+    return _is_step1_draft(analysis) and not _is_draft_expired(analysis, now_utc=now_utc)
+
+
+def _find_user_active_draft_for_customer(db: Session, *, user_id: int, customer_id: int) -> CreditAnalysis | None:
+    candidates = db.scalars(
+        select(CreditAnalysis)
+        .where(CreditAnalysis.customer_id == customer_id, CreditAnalysis.analysis_status == AnalysisStatus.CREATED)
+        .order_by(CreditAnalysis.created_at.desc(), CreditAnalysis.id.desc())
+    ).all()
+    now_utc = datetime.now(timezone.utc)
+    for analysis in candidates:
+        if not _is_active_step1_draft(analysis, now_utc=now_utc):
+            continue
+        if analysis.current_owner_user_id == user_id:
+            return analysis
+        draft_audit_by_user = db.scalar(
+            select(AuditLog.id).where(
+                AuditLog.resource == "credit_analysis",
+                AuditLog.resource_id == str(analysis.id),
+                AuditLog.action == "credit_request_draft_create",
+                AuditLog.actor_user_id == user_id,
+            ).limit(1)
+        )
+        if draft_audit_by_user:
+            return analysis
+    return None
+
+
+@router.get("/draft/recover", response_model=CreditAnalysisDraftRecoveryResponse | None, status_code=status.HTTP_200_OK)
+def recover_credit_analysis_draft(
+    cnpj: str,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysisDraftRecoveryResponse | None:
+    _require_can_create_credit_request_or_403(db, current)
+    normalized_cnpj = _normalize_cnpj_or_400(cnpj)
+    customer = db.scalar(select(Customer).where(Customer.document_number == normalized_cnpj))
+    if customer is None:
+        return None
+    draft = _find_user_active_draft_for_customer(db, user_id=current.user.id, customer_id=customer.id)
+    if draft is None:
+        return None
+    expires_at = draft.created_at + timedelta(hours=DRAFT_TTL_HOURS)
+    return CreditAnalysisDraftRecoveryResponse(
+        analysis_id=draft.id,
+        customer_id=customer.id,
+        cnpj=normalized_cnpj,
+        status=draft.analysis_status.value,
+        expires_at=expires_at,
+    )
+
+
+@router.delete("/draft/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
+def discard_credit_analysis_draft(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> Response:
+    _require_can_create_credit_request_or_403(db, current)
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rascunho não encontrado.")
+    if not _is_step1_draft(analysis):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A análise informada não é um rascunho descartável.")
+    if analysis.current_owner_user_id != current.user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para descartar este rascunho.")
+    try:
+        db.execute(delete(AnalysisDocument).where(AnalysisDocument.credit_analysis_id == analysis.id))
+        db.execute(delete(AnalysisCommercialReference).where(AnalysisCommercialReference.credit_analysis_id == analysis.id))
+        db.execute(delete(AnalysisRequestMetadata).where(AnalysisRequestMetadata.credit_analysis_id == analysis.id))
+        db.execute(delete(ExternalDataEntry).where(ExternalDataEntry.credit_analysis_id == analysis.id))
+        db.execute(delete(DecisionEvent).where(DecisionEvent.credit_analysis_id == analysis.id))
+        db.execute(delete(ScoreResult).where(ScoreResult.credit_analysis_id == analysis.id))
+        db.delete(analysis)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Não foi possível descartar o rascunho.") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/triage/submit", response_model=CreditAnalysisTriageSubmitResponse, status_code=status.HTTP_201_CREATED)
@@ -1118,10 +1712,17 @@ def submit_credit_analysis_from_triage(
                 continue
             reused = db.get(CreditAnalysis, int(resource_id))
             if reused and reused.analysis_status in {AnalysisStatus.CREATED, AnalysisStatus.IN_PROGRESS}:
+                reused_status = _resolve_operational_status(reused, [])
+                reused_bu = resolve_analysis_business_unit(db, reused)
+                reused_actions = resolve_credit_workflow_available_actions(db, current, analysis=reused, business_unit=reused_bu)
                 return CreditAnalysisTriageSubmitResponse(
                     analysis_id=reused.id,
                     customer_id=reused.customer_id,
                     status=reused.analysis_status,
+                    current_owner_user_id=reused.current_owner_user_id,
+                    current_owner_role=reused.current_owner_role,
+                    workflow_stage=_resolve_workflow_stage(reused_status),
+                    available_actions=sorted(set(reused_actions)),
                     reused_existing=True,
                 )
 
@@ -1173,39 +1774,65 @@ def submit_credit_analysis_from_triage(
             selected_bu_name = selected_bu.name
 
     now_utc = datetime.now(timezone.utc)
-    analysis = CreditAnalysis(
+    reusable_draft = _find_user_active_draft_for_customer(
+        db,
+        user_id=current.user.id,
         customer_id=customer.id,
-        protocol_number=generate_protocol_number(db),
-        requested_limit=payload.suggested_limit,
-        current_limit=Decimal("0"),
-        exposure_amount=Decimal("0"),
-        annual_revenue_estimated=Decimal("0"),
-        suggested_limit=payload.suggested_limit,
-        assigned_analyst_name=None,
-        assigned_at=now_utc,
-        current_stage_started_at=now_utc,
-        decision_memory_json={
-            "triage_submission": {
-                "source": payload.source,
-                "is_early_review_request": payload.is_early_review_request,
-                "early_review_justification": early_justification if payload.is_early_review_request else None,
-                "previous_analysis_id": payload.previous_analysis_id or (recent_analysis.id if recent_analysis else None),
-                "reanalysis_available_at": (
-                    (recent_analysis.created_at + timedelta(days=REANALYSIS_COOLDOWN_DAYS)).isoformat()
-                    if recent_analysis
-                    else None
-                ),
-                "has_recent_analysis": recent_analysis is not None,
-                "business_unit": selected_bu_name,
-            },
-            "journey_progress": {
-                "current_journey_step": 2,
-                "last_completed_journey_step": 1,
-            },
-        },
     )
-    db.add(analysis)
-    db.flush()
+
+    triage_payload = {
+        "source": payload.source,
+        "is_early_review_request": payload.is_early_review_request,
+        "early_review_justification": early_justification if payload.is_early_review_request else None,
+        "previous_analysis_id": payload.previous_analysis_id or (recent_analysis.id if recent_analysis else None),
+        "reanalysis_available_at": (
+            (recent_analysis.created_at + timedelta(days=REANALYSIS_COOLDOWN_DAYS)).isoformat()
+            if recent_analysis
+            else None
+        ),
+        "has_recent_analysis": recent_analysis is not None,
+        "business_unit": selected_bu_name,
+        "draft_created_from_step1": False,
+    }
+    if reusable_draft is not None:
+        analysis = reusable_draft
+        analysis.requested_limit = payload.suggested_limit
+        analysis.suggested_limit = payload.suggested_limit
+        analysis.assigned_at = analysis.assigned_at or now_utc
+        analysis.current_stage_started_at = now_utc
+        memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+        memory["triage_submission"] = triage_payload
+        journey_progress = memory.get("journey_progress") if isinstance(memory.get("journey_progress"), dict) else {}
+        journey_progress["current_journey_step"] = 2
+        journey_progress["last_completed_journey_step"] = max(int(journey_progress.get("last_completed_journey_step", 1)), 1)
+        memory["journey_progress"] = journey_progress
+        analysis.decision_memory_json = memory
+        db.add(analysis)
+        db.flush()
+    else:
+        analysis = CreditAnalysis(
+            customer_id=customer.id,
+            protocol_number=generate_protocol_number(db),
+            requested_limit=payload.suggested_limit,
+            current_limit=Decimal("0"),
+            exposure_amount=Decimal("0"),
+            annual_revenue_estimated=Decimal("0"),
+            suggested_limit=payload.suggested_limit,
+            assigned_analyst_name=None,
+            current_owner_user_id=current.user.id,
+            current_owner_role="comercial_solicitante",
+            assigned_at=now_utc,
+            current_stage_started_at=now_utc,
+            decision_memory_json={
+                "triage_submission": triage_payload,
+                "journey_progress": {
+                    "current_journey_step": 2,
+                    "last_completed_journey_step": 1,
+                },
+            },
+        )
+        db.add(analysis)
+        db.flush()
     transition = resolve_credit_workflow_transition(
         db,
         current,
@@ -1244,10 +1871,17 @@ def submit_credit_analysis_from_triage(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nao foi possivel criar a solicitacao de credito.") from exc
 
     db.refresh(analysis)
+    status_value = _resolve_operational_status(analysis, [])
+    analysis_bu = resolve_analysis_business_unit(db, analysis)
+    available_actions = resolve_credit_workflow_available_actions(db, current, analysis=analysis, business_unit=analysis_bu)
     return CreditAnalysisTriageSubmitResponse(
         analysis_id=analysis.id,
         customer_id=customer.id,
         status=analysis.analysis_status,
+        current_owner_user_id=analysis.current_owner_user_id,
+        current_owner_role=analysis.current_owner_role,
+        workflow_stage=_resolve_workflow_stage(status_value),
+        available_actions=sorted(set(available_actions)),
         reused_existing=False,
     )
 
@@ -1270,7 +1904,7 @@ def get_analysis_request_metadata(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_read_access_or_403(db, current, analysis)
 
     metadata = db.scalar(select(AnalysisRequestMetadata).where(AnalysisRequestMetadata.credit_analysis_id == analysis_id))
     return AnalysisRequestMetadataRead(
@@ -1297,7 +1931,7 @@ def upsert_analysis_request_metadata(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_requester_access_or_403(db, current, analysis)
     _enforce_step1_editable_or_409(analysis)
 
     metadata = db.scalar(select(AnalysisRequestMetadata).where(AnalysisRequestMetadata.credit_analysis_id == analysis_id))
@@ -1343,7 +1977,7 @@ def list_analysis_documents(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_read_access_or_403(db, current, analysis)
     return list(
         db.scalars(
             select(AnalysisDocument)
@@ -1365,7 +1999,7 @@ async def upload_analysis_document(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_requester_access_or_403(db, current, analysis)
     _enforce_step1_editable_or_409(analysis)
 
     original_name = (file.filename or "").strip()
@@ -1410,7 +2044,7 @@ def delete_analysis_document(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_requester_access_or_403(db, current, analysis)
     _enforce_step1_editable_or_409(analysis)
 
     document = db.get(AnalysisDocument, document_id)
@@ -1470,7 +2104,7 @@ def list_analysis_commercial_references(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_read_access_or_403(db, current, analysis)
     return list(
         db.scalars(
             select(AnalysisCommercialReference)
@@ -1494,7 +2128,7 @@ def create_analysis_commercial_reference(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_requester_access_or_403(db, current, analysis)
     _enforce_step1_editable_or_409(analysis)
 
     name = payload.name.strip()
@@ -1502,14 +2136,14 @@ def create_analysis_commercial_reference(
     email = payload.email.strip() if payload.email else None
 
     if not name:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome da referência é obrigatório.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nome da referÃªncia Ã© obrigatÃ³rio.")
     if not phone and not email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Informe ao menos telefone ou e-mail da referência.",
+            detail="Informe ao menos telefone ou e-mail da referÃªncia.",
         )
     if email and not _is_valid_email(email):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail da referência é inválido.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="E-mail da referÃªncia Ã© invÃ¡lido.")
 
     reference = AnalysisCommercialReference(
         credit_analysis_id=analysis_id,
@@ -1534,7 +2168,7 @@ def delete_analysis_commercial_reference(
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
-    _enforce_technical_access_or_403(db, current, analysis)
+    _enforce_step1_requester_access_or_403(db, current, analysis)
     _enforce_step1_editable_or_409(analysis)
 
     reference = db.get(AnalysisCommercialReference, reference_id)
@@ -1704,6 +2338,8 @@ def list_credit_analyses_queue(
 
     items: list[CreditAnalysisQueueItem] = []
     for analysis, customer in rows:
+        if _is_step1_draft(analysis):
+            continue
         portfolio = db.execute(
             select(
                 func.max(ArAgingDataTotalRow.bu_normalized),
@@ -1845,6 +2481,8 @@ def list_credit_analyses_queue_options(
     analysis_types: set[str] = set()
 
     for analysis, customer in rows:
+        if _is_step1_draft(analysis):
+            continue
         portfolio = db.execute(
             select(func.max(ArAgingDataTotalRow.bu_normalized)).where(ArAgingDataTotalRow.cnpj_normalized == customer.document_number)
         ).one()
@@ -1893,7 +2531,7 @@ def list_credit_analyses_queue_options(
     type_label_map = {
         "cliente_carteira": "Cliente da carteira",
         "novo_cliente": "Cliente novo",
-        "revisao_antecipada": "Revisão antecipada",
+        "revisao_antecipada": "RevisÃ£o antecipada",
     }
     return CreditAnalysisQueueOptionsResponse(
         statuses=[CreditAnalysisQueueOption(value=value, label=status_label_map.get(value, value)) for value in sorted(statuses)],
@@ -1936,6 +2574,8 @@ def list_credit_analyses_monitor(
     rows = db.execute(query).all()
     items: list[CreditAnalysisMonitorItem] = []
     for analysis, customer in rows:
+        if _is_step1_draft(analysis):
+            continue
         latest_run_id = db.scalar(
             select(ArAgingDataTotalRow.import_run_id)
             .join(ArAgingImportRun, ArAgingImportRun.id == ArAgingDataTotalRow.import_run_id)
@@ -2002,10 +2642,6 @@ def list_credit_analyses_monitor(
             requester_email = str(audit_metadata.get("requested_by") or "").strip().lower() or None
             requester_name = requester_email
 
-        if can_view_own and not can_view_bu:
-            if requester_email != current.user.email.strip().lower():
-                continue
-
         is_early = bool(triage_data.get("is_early_review_request"))
         is_new_customer = not bool(bu_name)
         has_recent = bool(triage_data.get("has_recent_analysis"))
@@ -2017,6 +2653,12 @@ def list_credit_analyses_monitor(
         )
         if not available_actions:
             continue
+        has_technical_visibility = any(action in TECHNICAL_MONITOR_VISIBILITY_ACTIONS for action in available_actions)
+
+        if can_view_own and not can_view_bu:
+            is_requester = requester_email == current.user.email.strip().lower()
+            if not is_requester and not has_technical_visibility:
+                continue
         next_role = "analista_financeiro"
         if stage == "pending_approval":
             next_role = "aprovador"
@@ -2155,12 +2797,16 @@ def list_credit_analyses_approval_queue(
 
     items: list[CreditAnalysisMonitorItem] = []
     now = datetime.now(timezone.utc)
+    requester_name_cache: dict[str, str | None] = {}
+    analyst_name_cache: dict[int, str | None] = {}
     for analysis, customer in rows:
+        if _is_step1_draft(analysis):
+            continue
         status_value = _current_status_value(analysis)
         if status_value != "in_approval":
             continue
 
-        # Preserva classificação já persistida; recalcula apenas quando ausente.
+        # Preserva classificaÃ§Ã£o jÃ¡ persistida; recalcula apenas quando ausente.
         memory_snapshot = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
         classification_snapshot = memory_snapshot.get("recommendation_classification") if isinstance(memory_snapshot.get("recommendation_classification"), dict) else None
         if not classification_snapshot:
@@ -2213,19 +2859,56 @@ def list_credit_analyses_approval_queue(
         if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
 
-        available_actions = resolve_credit_workflow_available_actions(
+        audit = db.scalar(
+            select(AuditLog).where(
+                AuditLog.resource == "credit_analysis",
+                AuditLog.resource_id == str(analysis.id),
+                AuditLog.action == "credit_request_triage_submit",
+            ).order_by(AuditLog.id.desc())
+        )
+        requester_name = None
+        audit_metadata = audit.metadata_json if audit and isinstance(audit.metadata_json, dict) else None
+        requester_email = None
+        if audit_metadata and isinstance(audit_metadata, dict):
+            requester_email = str(audit_metadata.get("requested_by") or "").strip().lower() or None
+        if requester_email:
+            if requester_email not in requester_name_cache:
+                requester_user = db.scalar(select(User).where(func.lower(User.email) == requester_email))
+                requester_name_cache[requester_email] = (
+                    requester_user.full_name.strip()
+                    if requester_user and requester_user.full_name and requester_user.full_name.strip()
+                    else None
+                )
+            requester_name = requester_name_cache.get(requester_email)
+
+        analyst_name = analysis.assigned_analyst_name.strip() if analysis.assigned_analyst_name and analysis.assigned_analyst_name.strip() else None
+        start_audit = db.scalar(
+            select(AuditLog).where(
+                AuditLog.resource == "credit_analysis",
+                AuditLog.resource_id == str(analysis.id),
+                AuditLog.action == "credit_analysis_start",
+            ).order_by(AuditLog.id.asc())
+        )
+        starter_user_id = start_audit.actor_user_id if start_audit else None
+        if starter_user_id:
+            if starter_user_id not in analyst_name_cache:
+                starter_user = db.get(User, starter_user_id)
+                analyst_name_cache[starter_user_id] = (
+                    starter_user.full_name.strip()
+                    if starter_user and starter_user.full_name and starter_user.full_name.strip()
+                    else None
+                )
+            starter_name = analyst_name_cache.get(starter_user_id)
+            if starter_name:
+                analyst_name = starter_name
+
+        approval_summary = _build_approval_flow_summary(
             db,
             current,
             analysis=analysis,
             business_unit=bu_name,
         )
-        approval_resolution = resolve_credit_workflow_action(
-            db,
-            current,
-            action="approve",
-            analysis=analysis,
-            business_unit=bu_name,
-        )
+        available_actions = approval_summary.available_actions
         can_decide = any(action in {"approve", "reject", "request_changes"} for action in available_actions)
         technical_linked_to_user = (
             analysis.last_owner_user_id == current.user.id
@@ -2248,8 +2931,8 @@ def list_credit_analyses_approval_queue(
             cnpj=customer.document_number,
             economic_group=portfolio[1],
             business_unit=bu_name,
-            requester_name=None,
-            assigned_analyst_name=analysis.assigned_analyst_name,
+            requester_name=requester_name,
+            assigned_analyst_name=analyst_name,
             current_owner_user_id=analysis.current_owner_user_id,
             current_owner_role=analysis.current_owner_role,
             approver_name=None,
@@ -2271,9 +2954,9 @@ def list_credit_analyses_approval_queue(
             aging_days=aging_days,
             stage_aging_days=stage_aging_days,
             next_responsible_role="aprovador",
-            applicable_doa_code=approval_resolution.applicable_doa_code,
-            applicable_doa_range=approval_resolution.applicable_doa_range,
-            available_actions=sorted(set(available_actions)),
+            applicable_doa_code=approval_summary.applicable_doa_code,
+            applicable_doa_range=approval_summary.applicable_doa_range,
+            available_actions=available_actions,
         )
         items.append(item)
 
@@ -2325,6 +3008,29 @@ def get_credit_analysis(
     _attach_recommendation_classification(db, analysis)
     _attach_available_actions_field(db, current, analysis)
     return analysis
+
+
+@router.get("/{analysis_id}/approval-flow-summary", response_model=CreditAnalysisApprovalFlowSummary)
+def get_credit_analysis_approval_flow_summary(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysisApprovalFlowSummary:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Credit analysis not found.",
+        )
+    _enforce_detail_read_access_or_403(db, current, analysis)
+
+    bu_name = resolve_analysis_business_unit(db, analysis)
+    return _build_approval_flow_summary(
+        db,
+        current,
+        analysis=analysis,
+        business_unit=bu_name,
+    )
 
 
 @router.put("/{analysis_id}/journey-progress", response_model=CreditAnalysisRead, status_code=status.HTTP_200_OK)
@@ -2918,7 +3624,7 @@ def execute_workflow_action(
 
     action = (payload.action or "").strip().lower()
     if action not in {"submit_approval", "submit_for_approval", "request_changes", "request_maintenance", "return_to_analysis", "finalize"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ação de workflow inválida para este endpoint.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AÃ§Ã£o de workflow invÃ¡lida para este endpoint.")
 
     action_aliases = {
         "request_maintenance": "request_changes",
@@ -2945,14 +3651,14 @@ def execute_workflow_action(
             )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=transition.workflow_context.get("denial_reason") or "Sem permissão para esta transição.",
+            detail=transition.workflow_context.get("denial_reason") or "Sem permissÃ£o para esta transiÃ§Ã£o.",
         )
 
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Não foi possível persistir a transição de workflow.") from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="NÃ£o foi possÃ­vel persistir a transiÃ§Ã£o de workflow.") from exc
 
     return WorkflowActionResponse(
         analysis_id=analysis.id,
@@ -2997,4 +3703,5 @@ def get_analysis_final_decision(
         analyst_notes=analysis.analyst_notes,
         completed_at=analysis.completed_at,
     )
+
 

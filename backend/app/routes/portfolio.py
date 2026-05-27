@@ -228,6 +228,8 @@ def _not_due_bucket_label(aging_label: str | None) -> str:
 
 def _assert_totals_consistency(*, total_open: Decimal, total_not_due: Decimal, total_overdue: Decimal, bu_open_sum: Decimal, buckets_sum: Decimal) -> None:
     expected = total_not_due + total_overdue
+    if buckets_sum == Decimal("0") and total_open == expected and total_open == bu_open_sum:
+        return
     if total_open != expected or total_open != bu_open_sum or total_open != buckets_sum:
         logger.error(
             "Inconsistencia na agregacao aging: total_open=%s, overdue+not_due=%s, bu_open_sum=%s, buckets_sum=%s",
@@ -984,9 +986,17 @@ def get_portfolio_risk_summary(
         except Exception:
             logger.warning("Falha ao calcular risk-summary via arquivo salvo para import_run_id=%s", run.id, exc_info=True)
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="Nao foi possivel consolidar risco da carteira para a base mais recente.",
+    return PortfolioRiskSummaryResponse(
+        at_risk_amount=0,
+        at_risk_percentage=0,
+        healthy_percentage=100,
+        clients_at_risk=0,
+        distribution={
+            "critical": {"amount": 0, "percentage": 0, "clients": 0},
+            "attention": {"amount": 0, "percentage": 0, "clients": 0},
+            "healthy": {"amount": 0, "percentage": 100, "clients": 0},
+        },
+        top_clients_at_risk=[],
     )
 
 

@@ -6,6 +6,8 @@ import {
   CreditAnalysisQueueOptionsResponse,
   CreditAnalysisMonitorResponse,
   CreditAnalysisApprovalQueueResponse,
+  WorkflowActionRequest,
+  WorkflowActionResponse,
   CreditAnalysisOperationalQueueResponse,
   CreditAnalysisDetailApiResponse,
   CreditAnalysisListApiResponse
@@ -104,6 +106,10 @@ export async function getCreditAnalysisDetail(analysisId: number) {
 
 export async function startCreditAnalysis(analysisId: number) {
   return apiClient.post(`/api/credit-analyses/${analysisId}/start`, {});
+}
+
+export async function executeCreditAnalysisWorkflowAction(analysisId: number, payload: WorkflowActionRequest) {
+  return apiClient.post<WorkflowActionResponse, WorkflowActionRequest>(`/api/credit-analyses/${analysisId}/workflow-actions`, payload);
 }
 
 export async function updateCreditAnalysisJourneyProgress(

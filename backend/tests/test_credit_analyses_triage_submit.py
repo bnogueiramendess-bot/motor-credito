@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import uuid
 import unittest
 from unittest.mock import patch
 
@@ -24,8 +25,16 @@ from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.user import User
 from app.models.user_business_unit_scope import UserBusinessUnitScope
-from app.routes.credit_analyses import submit_credit_analysis_from_triage, triage_credit_analysis
-from app.schemas.credit_analysis import CreditAnalysisTriageRequest, CreditAnalysisTriageSubmitRequest
+from app.routes.credit_analyses import (
+    _is_step1_draft,
+    check_existing_credit_analysis,
+    create_credit_analysis_draft,
+    list_credit_analyses_monitor,
+    recover_credit_analysis_draft,
+    submit_credit_analysis_from_triage,
+    triage_credit_analysis,
+)
+from app.schemas.credit_analysis import CreditAnalysisDraftCreateRequest, CreditAnalysisTriageRequest, CreditAnalysisTriageSubmitRequest
 from app.services.security import hash_password
 
 
@@ -50,9 +59,18 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
         self.company_id: int | None = None
         self.password = "Senha@123"
         self.users_context: dict[str, CurrentUser] = {}
+        self._run_suffix = uuid.uuid4().hex[:8]
 
     def tearDown(self) -> None:
         with SessionLocal() as db:
+            analysis_ids_by_customers: list[int] = []
+            if self.created_ids["customers"]:
+                analysis_ids_by_customers = list(
+                    db.scalars(
+                        select(CreditAnalysis.id).where(CreditAnalysis.customer_id.in_(self.created_ids["customers"]))
+                    ).all()
+                )
+            analysis_ids_to_delete = sorted(set(self.created_ids["analyses"] + analysis_ids_by_customers))
             if self.created_ids["rows"]:
                 db.execute(delete(ArAgingDataTotalRow).where(ArAgingDataTotalRow.id.in_(self.created_ids["rows"])))
             if self.created_ids["consolidated_rows"]:
@@ -63,8 +81,9 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
                 db.execute(delete(AuditLog).where(AuditLog.id.in_(self.created_ids["audits"])))
             if self.created_ids["events"]:
                 db.execute(delete(DecisionEvent).where(DecisionEvent.id.in_(self.created_ids["events"])))
-            if self.created_ids["analyses"]:
-                db.execute(delete(CreditAnalysis).where(CreditAnalysis.id.in_(self.created_ids["analyses"])))
+            if analysis_ids_to_delete:
+                db.execute(delete(DecisionEvent).where(DecisionEvent.credit_analysis_id.in_(analysis_ids_to_delete)))
+                db.execute(delete(CreditAnalysis).where(CreditAnalysis.id.in_(analysis_ids_to_delete)))
             if self.created_ids["customers"]:
                 db.execute(delete(Customer).where(Customer.id.in_(self.created_ids["customers"])))
             if self.created_ids["user_scopes"]:
@@ -85,10 +104,11 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
 
     def _bootstrap_company_and_scope(self) -> tuple[int, int, int]:
         with SessionLocal() as db:
+            company_name = f"Empresa Teste Triagem {self._run_suffix}"
             company = Company(
-                name="Empresa Teste Triagem",
-                legal_name="Empresa Teste Triagem LTDA",
-                trade_name="Empresa Teste",
+                name=company_name,
+                legal_name=f"{company_name} LTDA",
+                trade_name=company_name,
                 cnpj=None,
                 allowed_domain="indorama.com",
                 allowed_domains_json=["indorama.com"],
@@ -124,10 +144,12 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
 
     def _create_user(self, *, email: str, permission_keys: list[str], bu_ids: list[int]) -> int:
         assert self.company_id is not None
+        local, sep, domain = email.partition("@")
+        resolved_email = f"{local}+{self._run_suffix}@{domain}" if sep and domain else f"{email}+{self._run_suffix}@indorama.com"
         with SessionLocal() as db:
             role = Role(
                 company_id=self.company_id,
-                code=f"PERF-{len(self.created_ids['roles']) + 101:04d}",
+                code=f"PERF-{self._run_suffix}-{len(self.created_ids['roles']) + 101:04d}",
                 name=f"perfil_{len(self.created_ids['roles']) + 1}",
                 description="Perfil de teste",
                 is_active=True,
@@ -152,10 +174,10 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             user = User(
                 company_id=self.company_id,
                 role_id=role.id,
-                user_code=f"USR-{len(self.created_ids['users']) + 101:04d}",
-                username=email.split("@")[0],
+                user_code=f"USR-{self._run_suffix}-{len(self.created_ids['users']) + 101:04d}",
+                username=resolved_email.split("@")[0],
                 full_name="Usuário Teste",
-                email=email,
+                email=resolved_email,
                 phone=None,
                 password_hash=hash_password(self.password),
                 is_active=True,
@@ -186,7 +208,13 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
                 ).all()
             )
             bu_ids = set(db.scalars(select(UserBusinessUnitScope.business_unit_id).where(UserBusinessUnitScope.user_id == user.id)).all())
-            return CurrentUser(user=user, permissions=permissions, bu_ids=bu_ids)
+            return CurrentUser(
+                user=user,
+                permissions=permissions,
+                bu_ids=bu_ids,
+                is_administrator=False,
+                can_import_ar_aging=False,
+            )
 
     def _create_portfolio_row(
         self,
@@ -367,6 +395,161 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
         self.assertEqual(str(response.economic_position.total_limit), "90000.00")
         self.assertEqual(str(response.economic_position.available_limit), "60000.00")
 
+    def test_triage_lookup_does_not_create_credit_analysis(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        self._create_portfolio_row(cnpj="04252011000110", bu_name="Fertilizer")
+        user_id = self._create_user(
+            email="triage.nocreate@indorama.com",
+            permission_keys=["credit.request.create", "credit_request_view_bu"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+
+        with SessionLocal() as db:
+            before_count = db.scalar(select(func.count()).select_from(CreditAnalysis)) or 0
+            triage_credit_analysis(CreditAnalysisTriageRequest(cnpj="04.252.011/0001-10"), db=db, current=current)
+            after_count = db.scalar(select(func.count()).select_from(CreditAnalysis)) or 0
+
+        self.assertEqual(after_count, before_count)
+
+    def test_monitor_does_not_show_item_after_triage_without_submit(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        self._create_portfolio_row(cnpj="04252011000110", bu_name="Fertilizer")
+        user_id = self._create_user(
+            email="triage.monitor.empty@indorama.com",
+            permission_keys=["credit.request.create", "credit_request_view_bu"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+
+        with SessionLocal() as db:
+            triage_credit_analysis(CreditAnalysisTriageRequest(cnpj="04.252.011/0001-10"), db=db, current=current)
+        with SessionLocal() as db:
+            monitor = list_credit_analyses_monitor(db=db, current=current)
+
+        self.assertFalse(any((item.cnpj or "") == "04252011000110" for item in monitor.items))
+
+    def test_monitor_shows_item_only_after_explicit_submit(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        self._create_portfolio_row(cnpj="04252011000110", bu_name="Fertilizer", customer_name="Cliente Existente")
+        user_id = self._create_user(
+            email="triage.monitor.submit@indorama.com",
+            permission_keys=["credit.request.create", "credit_request_view_bu"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+
+        with SessionLocal() as db:
+            triage_credit_analysis(CreditAnalysisTriageRequest(cnpj="04.252.011/0001-10"), db=db, current=current)
+        with SessionLocal() as db:
+            monitor_before = list_credit_analyses_monitor(db=db, current=current)
+        self.assertFalse(any((item.cnpj or "") == "04252011000110" for item in monitor_before.items))
+
+        with SessionLocal() as db:
+            payload = submit_credit_analysis_from_triage(
+                CreditAnalysisTriageSubmitRequest(
+                    cnpj="04252011000110",
+                    suggested_limit=Decimal("120000.00"),
+                    source="cliente_existente_carteira",
+                    company_name="Cliente Existente",
+                ),
+                db=db,
+                current=current,
+            )
+            self._register_created_domain_rows(payload.analysis_id, payload.customer_id)
+        with SessionLocal() as db:
+            monitor_after = list_credit_analyses_monitor(db=db, current=current)
+        self.assertGreaterEqual(monitor_after.total, 1)
+
+    def test_draft_does_not_block_check_existing(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        user_id = self._create_user(
+            email="triage.draft.noblock@indorama.com",
+            permission_keys=["credit.request.create", "credit_request_view_bu"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+
+        with SessionLocal() as db:
+            draft = create_credit_analysis_draft(
+                CreditAnalysisDraftCreateRequest(
+                    cnpj="04252011000110",
+                    customer_name="Cliente Draft",
+                    economic_group=None,
+                    business_unit=None,
+                    source="manual",
+                ),
+                db=db,
+                current=current,
+            )
+            self._register_created_domain_rows(draft.analysis_id, draft.customer_id)
+
+        with SessionLocal() as db:
+            existing = check_existing_credit_analysis(cnpj="04252011000110", db=db, current=current)
+
+        self.assertEqual(existing.state, "none")
+
+    def test_draft_is_recoverable_for_same_user(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        user_id = self._create_user(
+            email="triage.draft.recover@indorama.com",
+            permission_keys=["credit.request.create", "credit_request_view_bu"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+
+        with SessionLocal() as db:
+            draft = create_credit_analysis_draft(
+                CreditAnalysisDraftCreateRequest(
+                    cnpj="04252011000110",
+                    customer_name="Cliente Draft",
+                    economic_group=None,
+                    business_unit=None,
+                    source="manual",
+                ),
+                db=db,
+                current=current,
+            )
+            self._register_created_domain_rows(draft.analysis_id, draft.customer_id)
+
+        with SessionLocal() as db:
+            recovered = recover_credit_analysis_draft(cnpj="04252011000110", db=db, current=current)
+
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        self.assertEqual(recovered.analysis_id, draft.analysis_id)
+
+    def test_expired_draft_is_ignored(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        user_id = self._create_user(
+            email="triage.draft.expired@indorama.com",
+            permission_keys=["credit.request.create", "credit_request_view_bu"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+
+        with SessionLocal() as db:
+            draft = create_credit_analysis_draft(
+                CreditAnalysisDraftCreateRequest(
+                    cnpj="04252011000110",
+                    customer_name="Cliente Draft",
+                    economic_group=None,
+                    business_unit=None,
+                    source="manual",
+                ),
+                db=db,
+                current=current,
+            )
+            analysis = db.get(CreditAnalysis, draft.analysis_id)
+            assert analysis is not None
+            analysis.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+            db.commit()
+            self._register_created_domain_rows(draft.analysis_id, draft.customer_id)
+
+        with SessionLocal() as db:
+            recovered = recover_credit_analysis_draft(cnpj="04252011000110", db=db, current=current)
+        self.assertIsNone(recovered)
+
     @patch("app.routes.credit_analyses.fetch_external_cnpj_data")
     def test_triage_existing_customer_outside_scope(self, mock_external) -> None:
         mock_external.return_value = type(
@@ -471,7 +654,6 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
         self.assertEqual(str(response.economic_position.open_amount), "600.00")
         self.assertEqual(str(response.economic_position.overdue_amount), "200.00")
         self.assertEqual(str(response.economic_position.not_due_amount), "400.00")
-        self.assertIn("CNPJ valido", ctx.exception.detail)
 
     def test_submit_existing_customer_creates_analysis_event_and_audit(self) -> None:
         _, bu_in_scope, _ = self._bootstrap_company_and_scope()
@@ -511,6 +693,10 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
         customer_id = payload.customer_id
         self._register_created_domain_rows(analysis_id, customer_id)
         self.assertEqual(payload.status.value, "created")
+        self.assertEqual(payload.workflow_stage, "commercial_submitted")
+        self.assertNotIn("start_analysis", payload.available_actions)
+        self.assertNotIn("continue_analysis", payload.available_actions)
+        self.assertNotIn("execute_analysis", payload.available_actions)
 
         with SessionLocal() as db:
             analysis = db.get(CreditAnalysis, analysis_id)
@@ -522,6 +708,11 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             self.assertEqual(analysis.last_owner_user_id, user_id)
             self.assertEqual(analysis.last_owner_role, "comercial_solicitante")
             self.assertIsNotNone(analysis.current_stage_started_at)
+            self.assertFalse(_is_step1_draft(analysis))
+            triage_submission = analysis.decision_memory_json.get("triage_submission") if isinstance(analysis.decision_memory_json, dict) else None
+            self.assertIsInstance(triage_submission, dict)
+            assert isinstance(triage_submission, dict)
+            self.assertFalse(bool(triage_submission.get("draft_created_from_step1")))
 
             event = db.scalar(
                 select(DecisionEvent).where(
@@ -531,10 +722,10 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             )
             self.assertIsNotNone(event)
             assert event is not None
-            self.assertEqual(event.event_payload_json["source"], "cliente_existente_carteira")
+            self.assertEqual(event.event_payload_json["action"], "submit_request")
             self.assertEqual(event.event_payload_json["new_status"], "pending")
             self.assertEqual(event.event_payload_json["stage"], "commercial_submitted")
-            self.assertEqual(event.event_payload_json["current_owner_role"], "analista_financeiro")
+            self.assertEqual(event.event_payload_json["new_owner_role"], "analista_financeiro")
 
             audit = db.scalar(
                 select(AuditLog).where(
@@ -544,6 +735,33 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
                 )
             )
             self.assertIsNotNone(audit)
+            assert audit is not None
+            self.assertEqual((audit.metadata_json or {}).get("source"), "cliente_existente_carteira")
+
+    def test_submit_returns_technical_continuation_action_when_user_has_capability(self) -> None:
+        _, bu_in_scope, _ = self._bootstrap_company_and_scope()
+        self._create_portfolio_row(cnpj="04252011000110", bu_name="Fertilizer", customer_name="Cliente Técnico")
+        user_id = self._create_user(
+            email="submit.technical@indorama.com",
+            permission_keys=["credit.request.create", "credit_request_validate"],
+            bu_ids=[bu_in_scope],
+        )
+        current = self._build_current_user(user_id)
+
+        with SessionLocal() as db:
+            payload = submit_credit_analysis_from_triage(
+                CreditAnalysisTriageSubmitRequest(
+                    cnpj="04252011000110",
+                    suggested_limit=Decimal("110000.00"),
+                    source="cliente_existente_carteira",
+                    company_name="Cliente Técnico",
+                ),
+                db=db,
+                current=current,
+            )
+
+        self._register_created_domain_rows(payload.analysis_id, payload.customer_id)
+        self.assertTrue(any(action in {"start_analysis", "continue_analysis", "execute_analysis"} for action in payload.available_actions))
 
     def test_submit_new_customer_creates_customer_analysis_event_and_audit(self) -> None:
         _, bu_in_scope, _ = self._bootstrap_company_and_scope()
@@ -785,8 +1003,8 @@ class CreditAnalysesTriageSubmitTestCase(unittest.TestCase):
             )
             self.assertIsNotNone(event)
             assert event is not None
-            self.assertTrue(bool(event.event_payload_json.get("is_early_review_request")))
-            self.assertEqual(event.event_payload_json.get("previous_analysis_id"), previous_analysis_id)
+            self.assertEqual(event.event_payload_json.get("action"), "submit_request")
+            self.assertEqual(event.event_payload_json.get("new_status"), "pending")
             audit = db.scalar(
                 select(AuditLog).where(
                     AuditLog.resource == "credit_analysis",

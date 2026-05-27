@@ -355,14 +355,14 @@ export function DashboardPageView({ context = "clientes" }: DashboardPageViewPro
 
   if (agingQuery.isLoading) {
     return (
-      <section className="mx-auto w-full max-w-[min(1800px,calc(100vw-64px))] space-y-6 px-4 sm:px-6 lg:px-8 2xl:px-10">
+      <section className="mx-auto w-full max-w-[min(1800px,calc(100vw-64px))] space-y-3 px-4 sm:px-6 lg:px-8 2xl:px-10">
         <div className="h-16 animate-pulse rounded-2xl bg-white" />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {Array.from({ length: 5 }).map((_, index) => (
             <div key={index} className="h-32 animate-pulse rounded-2xl bg-white" />
           ))}
         </div>
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
           <div className="h-[360px] animate-pulse rounded-2xl bg-white" />
           <div className="h-[360px] animate-pulse rounded-2xl bg-white" />
         </div>
@@ -386,7 +386,7 @@ export function DashboardPageView({ context = "clientes" }: DashboardPageViewPro
   }
 
   return (
-    <section className="mx-auto w-full max-w-[min(1800px,calc(100vw-64px))] space-y-6 xl:space-y-8 2xl:space-y-10 px-4 sm:px-6 lg:px-8 2xl:px-10">
+    <section className="mx-auto w-full max-w-[min(1800px,calc(100vw-64px))] space-y-3 xl:space-y-4 2xl:space-y-4 px-4 sm:px-6 lg:px-8 2xl:px-10">
       <OperationalContextBar>
         {buContextQuery.data ? (
           <BusinessUnitContextSelector
@@ -477,7 +477,7 @@ export function DashboardPageView({ context = "clientes" }: DashboardPageViewPro
         />
       ) : null}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <div className="rounded-xl border border-[#dbe3ef] bg-white px-4 py-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#64748b]">Total Not Due</p>
           <p className="mt-1 text-xl font-bold text-[#0f172a]">{formatCurrencyInThousands(kpis.totalNotDueAmount)}</p>
@@ -488,7 +488,7 @@ export function DashboardPageView({ context = "clientes" }: DashboardPageViewPro
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <StackedBucketsChart
           title="A Vencer (Not Due)"
           subtitle="Distribuição por faixa de vencimento"

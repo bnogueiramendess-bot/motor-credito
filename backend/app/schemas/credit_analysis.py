@@ -119,6 +119,10 @@ class CreditAnalysisTriageSubmitResponse(BaseModel):
     analysis_id: int
     customer_id: int
     status: AnalysisStatus
+    current_owner_user_id: int | None = None
+    current_owner_role: str | None = None
+    workflow_stage: str
+    available_actions: list[str] = Field(default_factory=list)
     reused_existing: bool = False
 
 
@@ -148,6 +152,14 @@ class CreditAnalysisDraftCreateResponse(BaseModel):
     status: str
     cnpj: str
     reused_existing: bool = False
+
+
+class CreditAnalysisDraftRecoveryResponse(BaseModel):
+    analysis_id: int
+    customer_id: int
+    cnpj: str
+    status: str
+    expires_at: datetime
 
 
 class CreditAnalysisQueueItem(BaseModel):
@@ -239,6 +251,48 @@ class CreditAnalysisMonitorItem(BaseModel):
     applicable_doa_code: str | None = None
     applicable_doa_range: str | None = None
     available_actions: list[str]
+
+
+class CreditAnalysisApprovalFlowSummary(BaseModel):
+    analysis_id: int
+    current_status: str
+    status_label: str
+    workflow_stage: str
+    applicable_doa_code: str | None = None
+    applicable_doa_range: str | None = None
+    available_actions: list[str] = Field(default_factory=list)
+    current_owner_user_id: int | None = None
+    current_owner_role: str | None = None
+    submitted_for_approval_at: datetime | None = None
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
+    returned_for_revision_at: datetime | None = None
+    last_decision_event_at: datetime | None = None
+    completed_steps: list[str] = Field(default_factory=list)
+    pending_steps: list[str] = Field(default_factory=list)
+    required_approval_roles: list[str] = Field(default_factory=list)
+    sequential_approval_mode: bool = False
+    sequential_approval_note: str | None = None
+    approval_flow_state: str = "not_submitted"
+    display_status: str = ""
+    display_stage: str = ""
+    decision_actor_name: str | None = None
+    decision_actor_role: str | None = None
+    predicted_doa_code: str | None = None
+    predicted_doa_range: str | None = None
+    matrix_amount: Decimal | None = None
+    decision_basis: str | None = None
+    predicted_approvers: list[dict] = Field(default_factory=list)
+    flow_state: str = "not_submitted"
+    expected_approvers: list[dict] = Field(default_factory=list)
+    pending_approvers: list[dict] = Field(default_factory=list)
+    approved_approvers: list[dict] = Field(default_factory=list)
+    rejected_approvers: list[dict] = Field(default_factory=list)
+    returned_approvers: list[dict] = Field(default_factory=list)
+    events: list[dict] = Field(default_factory=list)
+    steps: list[dict] = Field(default_factory=list)
+    display_title: str = ""
+    display_message: str = ""
 
 
 class CreditAnalysisMonitorKpis(BaseModel):

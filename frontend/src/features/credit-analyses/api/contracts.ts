@@ -321,6 +321,98 @@ export type CreditAnalysisApprovalQueueResponse = {
   page_size: number;
 };
 
+export type CreditAnalysisApprovalFlowSummaryDto = {
+  analysis_id: number;
+  current_status: string;
+  status_label: string;
+  workflow_stage: string;
+  applicable_doa_code?: string | null;
+  applicable_doa_range?: string | null;
+  available_actions: string[];
+  current_owner_user_id?: number | null;
+  current_owner_role?: string | null;
+  submitted_for_approval_at?: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  returned_for_revision_at?: string | null;
+  last_decision_event_at?: string | null;
+  completed_steps: string[];
+  pending_steps: string[];
+  required_approval_roles: string[];
+  sequential_approval_mode: boolean;
+  sequential_approval_note?: string | null;
+  approval_flow_state: "not_submitted" | "in_approval" | "approved" | "rejected" | "request_changes" | string;
+  flow_state?: "not_submitted" | "in_approval" | "approved" | "rejected" | "request_changes" | string;
+  display_status: string;
+  display_stage: string;
+  decision_actor_name?: string | null;
+  decision_actor_role?: string | null;
+  predicted_doa_code?: string | null;
+  predicted_doa_range?: string | null;
+  matrix_amount?: number | string | null;
+  decision_basis?: string | null;
+  predicted_approvers: Array<{
+    role: string;
+    role_label: string;
+    user_id?: number | null;
+    user_name?: string | null;
+    user_email?: string | null;
+    sequence: number;
+    status: "predicted" | "pending" | "approved" | "rejected" | string;
+  }>;
+  expected_approvers?: Array<Record<string, unknown>>;
+  pending_approvers?: Array<Record<string, unknown>>;
+  approved_approvers?: Array<Record<string, unknown>>;
+  rejected_approvers?: Array<Record<string, unknown>>;
+  returned_approvers?: Array<Record<string, unknown>>;
+  events?: Array<{
+    event_type: "submitted_for_approval" | "approved" | "rejected" | "request_changes" | string;
+    timestamp?: string | null;
+    actor_name?: string | null;
+    actor_role?: string | null;
+    comment?: string | null;
+  }>;
+  steps?: Array<{
+    status: "not_submitted" | "submitted" | "pending" | "approved" | "rejected" | "request_changes" | string;
+    label: string;
+    timestamp?: string | null;
+    actor_name?: string | null;
+    actor_role?: string | null;
+    comment?: string | null;
+  }>;
+  display_title: string;
+  display_message: string;
+};
+
+export type WorkflowActionType =
+  | "submit_approval"
+  | "submit_for_approval"
+  | "request_changes"
+  | "request_maintenance"
+  | "return_to_analysis"
+  | "finalize"
+  | "approve"
+  | "reject";
+
+export type WorkflowActionRequest = {
+  action: WorkflowActionType;
+  justification?: string | null;
+};
+
+export type WorkflowActionResponse = {
+  analysis_id: number;
+  current_status: string;
+  next_status: string;
+  current_owner: string | null;
+  next_owner: string | null;
+  current_stage: string | null;
+  next_stage: string | null;
+  timeline_event: string;
+  audit_event: string;
+  available_actions: string[];
+  workflow_context: Record<string, unknown>;
+};
+
 export type CreditAnalysisDetailApiResponse = {
   analysis: CreditAnalysisDto;
   customer: CustomerDto | null;
@@ -328,4 +420,5 @@ export type CreditAnalysisDetailApiResponse = {
   decision: DecisionResultDto | null;
   final_decision: FinalDecisionResultDto | null;
   events: DecisionEventDto[];
+  approval_flow_summary: CreditAnalysisApprovalFlowSummaryDto | null;
 };
