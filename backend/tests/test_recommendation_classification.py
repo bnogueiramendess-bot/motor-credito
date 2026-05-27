@@ -85,3 +85,29 @@ def test_new_customer_rejection_zero_limit() -> None:
     )
     assert result["label"] == "Reprovação recomendada"
 
+
+def test_existing_customer_maintenance_when_engine_above_coface_at_current_limit() -> None:
+    result = classify_recommendation(
+        requested_limit=Decimal("5000000"),
+        current_approved_limit=Decimal("4500000"),
+        coface_coverage_limit=Decimal("4500000"),
+        engine_recommended_limit=Decimal("5000000"),
+        is_existing_customer=True,
+        motor_result=MotorResult.MANUAL_REVIEW,
+    )
+    assert result["code"] == "maintain_current_limit"
+    assert result["final_suggested_limit"] == "4500000.00"
+    assert result["financial_impact"] == "0.00"
+
+
+def test_coface_does_not_reduce_when_coverage_is_above_engine_limit() -> None:
+    result = classify_recommendation(
+        requested_limit=Decimal("5000000"),
+        current_approved_limit=Decimal("3000000"),
+        coface_coverage_limit=Decimal("6000000"),
+        engine_recommended_limit=Decimal("4200000"),
+        is_existing_customer=True,
+        motor_result=MotorResult.MANUAL_REVIEW,
+    )
+    assert result["final_suggested_limit"] == "4200000.00"
+    assert result["code"] == "partial_approval"

@@ -874,8 +874,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         ? (analysisRecord.decision_memory_json.workspace_state as Record<string, unknown>)
         : null;
     const buName = typeof triageSubmission?.business_unit === "string" ? triageSubmission.business_unit : "";
+    const fallbackCustomerName = typeof triageSubmission?.company_name === "string" ? triageSubmission.company_name.trim() : "";
+    const fallbackCustomerDocument = typeof triageSubmission?.cnpj === "string" ? sanitizeDigits(triageSubmission.cnpj) : "";
+    const resolvedCustomerName = (customerRecord?.company_name ?? fallbackCustomerName).trim();
+    const resolvedCustomerDocument = sanitizeDigits(customerRecord?.document_number ?? fallbackCustomerDocument);
+    const resolvedCustomerId = customerRecord?.id ?? analysisRecord?.customer_id ?? null;
 
-    if (!analysisRecord?.id || !analysisRecord?.customer_id || !customerRecord?.id || !customerRecord?.document_number || !customerRecord?.company_name || !buName) {
+    if (!analysisRecord?.id || !analysisRecord?.customer_id || !resolvedCustomerName || !resolvedCustomerDocument) {
       setWorkspaceError("Não foi possível abrir o workspace: dados obrigatórios da análise estão incompletos.");
       return;
     }
@@ -907,12 +912,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       ? (savedImports.coface as Record<string, unknown>)
       : null;
 
-    setExistingCustomerId(customerRecord.id);
+    setExistingCustomerId(resolvedCustomerId);
     setTriageSelectedBusinessUnit(buName);
     setCustomer((prev) => ({
       ...prev,
-      companyName: customerRecord.company_name,
-      cnpj: formatCnpj(customerRecord.document_number),
+      companyName: resolvedCustomerName,
+      cnpj: formatCnpj(resolvedCustomerDocument),
     }));
     setAnalysis((prev) => ({
       ...prev,
@@ -1014,9 +1019,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           (triageSubmission.portfolio_data as Record<string, unknown>).total_open_amount !== undefined
         )
       );
-      if (!hasMappedPortfolioData && customerRecord.document_number) {
+      if (!hasMappedPortfolioData && resolvedCustomerDocument) {
         try {
-          const triageSnapshot = await triageCreditRequest({ cnpj: customerRecord.document_number });
+          const triageSnapshot = await triageCreditRequest({ cnpj: resolvedCustomerDocument });
           const econ = triageSnapshot?.economic_position;
           if (econ) {
             setWorkspaceInternalPosition({
@@ -1032,7 +1037,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           // fallback silencioso: mantém comportamento atual sem bloquear workspace
           try {
             const portfolioCustomers = await getPortfolioCustomers({
-              cnpj: customerRecord.document_number,
+              cnpj: resolvedCustomerDocument,
               snapshot_id: "current",
             });
             const portfolioMatch = portfolioCustomers[0];
@@ -2181,16 +2186,16 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? Math.max(parsed, 0) : null;
   })();
-  const executiveCofaceFloorApplied =
+  const executiveCofaceCeilingApplied =
     preliminaryRecommendedLimit !== null &&
     technicalCoverageValue !== null &&
-    technicalCoverageValue > preliminaryRecommendedLimit;
+    preliminaryRecommendedLimit > technicalCoverageValue;
   const executiveDisplayedRecommendedLimit =
     backendFinalSuggestedLimit !== null
       ? backendFinalSuggestedLimit
       : preliminaryRecommendedLimit === null
         ? (technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : null)
-        : (technicalCoverageValue !== null ? Math.max(preliminaryRecommendedLimit, technicalCoverageValue) : preliminaryRecommendedLimit);
+        : (technicalCoverageValue !== null ? Math.min(preliminaryRecommendedLimit, technicalCoverageValue) : preliminaryRecommendedLimit);
   const executiveCoverageAvailable = technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : 0;
   const executiveNetInternalExposure = executiveDisplayedRecommendedLimit !== null
     ? Math.max(executiveDisplayedRecommendedLimit - executiveCoverageAvailable, 0)
@@ -2231,9 +2236,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const insightCofaceCoverageText = technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "Não identificado";
   const insightCofaceMessage = technicalCoverageValue === null
     ? "Sem cobertura COFACE identificada"
-    : executiveCofaceFloorApplied
-      ? "Seguro utilizado como piso para suportar o limite recomendado"
-      : "Cobertura considerada, sem necessidade de ajuste de piso";
+    : executiveCofaceCeilingApplied
+      ? "Cobertura COFACE aplicada como teto da recomendação"
+      : "Cobertura considerada sem necessidade de limitar a recomendação";
   const insightExposureText = executiveNetInternalExposure !== null ? formatCurrencyBRLCompactExecutive(executiveNetInternalExposure) : "Não informado";
   const insightImpactText = recommendationClassification?.financial_impact !== undefined && recommendationClassification?.financial_impact !== null
     ? formatCurrencyBRLCompactExecutive(Number(recommendationClassification.financial_impact))
@@ -3973,7 +3978,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   <div className="flex min-h-[114px] flex-col justify-between rounded-[18px] border border-[#D7E1EC] bg-[linear-gradient(180deg,#0b1f3a_0%,#102a4c_100%)] px-4 py-3 text-white shadow-[0_10px_20px_rgba(15,23,42,0.18)]">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[#bfdbfe]">Limite recomendado</p>
                     <p className="text-[28px] font-extrabold leading-none text-white">{formatCurrencyBRLCompactExecutive(executiveDisplayedRecommendedLimit)}</p>
-                    <p className="text-[11px] text-[#dbeafe]">{executiveCofaceFloorApplied ? "Cobertura COFACE utilizada como piso decisório." : "Recomendação preliminar da política institucional."}</p>
+                    <p className="text-[11px] text-[#dbeafe]">{executiveCofaceCeilingApplied ? "Cobertura COFACE aplicada como teto da recomendação final." : "Recomendação preliminar da política institucional."}</p>
                   </div>
                   <div className="rounded-[18px] border border-[#E8EEF5] bg-[rgba(248,250,252,0.78)] p-2.5">
                     <div className="grid gap-2.5 sm:grid-cols-3">
@@ -4097,8 +4102,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </div>
             </div>
           </section>
-          <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
-            <div>
+          <div className="mt-5 grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
+            <div className="self-start space-y-3">
               {(() => {
                 const recommended = executiveDisplayedRecommendedLimit ?? 0;
                 const requested = technicalRequestedLimit;
@@ -4136,13 +4141,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 const shouldShowCurrentLimit = recommendationClassification?.show_current_limit === true && currentApprovedLimitFromBackend !== null && currentApprovedLimitFromBackend > 0;
 
                 return (
-                  <article className="h-full w-full">
-                    <div className="flex h-full items-stretch gap-3 rounded-[20px] border border-[#d7e3f2] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] px-4 py-3.5 shadow-[0_5px_12px_rgba(10,29,64,.035)]">
+                  <article className="w-full self-start">
+                    <div className="flex items-start gap-3 rounded-[20px] border border-[#d7e3f2] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] px-5 py-4 shadow-[0_5px_12px_rgba(10,29,64,.035)]">
                       <div className="w-[2px] rounded-full bg-[linear-gradient(180deg,rgba(74,119,179,.82)_0%,rgba(133,161,198,.42)_100%)] shadow-[0_0_8px_rgba(77,122,184,.20)]" />
-                      <div className="flex min-w-0 flex-1 flex-col justify-between">
+                      <div className="flex min-w-0 flex-1 flex-col">
                         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#5a6f89]">Decisão Executiva</p>
-                        <p className={`mt-1.5 text-[10px] font-semibold uppercase tracking-[0.13em] ${recommendationToneClass}`}>Recomendação final</p>
-                        <p className="mt-2 text-[22px] font-black leading-[1.2] tracking-[-0.012em] text-[#0f2747]">
+                        <p className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.13em] ${recommendationToneClass}`}>Recomendação final</p>
+                        <p className="mt-2 text-[24px] font-black leading-[1.18] tracking-[-0.014em] text-[#0f2747]">
                           {recommendationLabel}
                           {!hideRecommendedLimitInHeader ? (
                             <>
@@ -4152,7 +4157,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                             </>
                           ) : null}
                         </p>
-                        <p className="mt-2 text-[12px] leading-[1.5] text-[#4f647a]">
+                        <p className="mt-1.5 text-[12px] leading-[1.5] text-[#4f647a]">
                           <span className="font-semibold text-[#334155]">Solicitado:</span> <span className="font-semibold text-[#0f2747]">{requested > 0 ? formatCurrencyBRLCompactExecutive(requested) : "—"}</span>
                           {shouldShowCurrentLimit ? (
                             <>
@@ -4165,7 +4170,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                           {" · "}
                           <span className="font-semibold text-[#334155]">Exposição residual:</span> <span className="font-semibold text-[#0f2747]">{formatCurrencyBRLCompactExecutive(exposureResidual)}</span>
                         </p>
-                        <p className="mt-2 text-[12px] leading-[1.55] text-[#2f4157]">
+                        <p className="mt-1.5 text-[12px] leading-[1.55] text-[#2f4157]">
                           <span className="font-semibold text-[#334155]">Justificativa:</span> {executiveRationale}
                         </p>
                       </div>
@@ -4173,87 +4178,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   </article>
                 );
               })()}
-            </div>
-            <article className="rounded-[22px] border border-[#dfe8f2] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] p-5 shadow-[0_8px_20px_rgba(10,29,64,.045)]">
-              <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Parecer técnico do analista</p>
-              {analysis.comment.trim() ? (
-                <div className="mt-3 min-h-[120px] rounded-[14px] border border-[#e3ebf5] bg-[linear-gradient(180deg,#fcfdff_0%,#f6faff_100%)] px-4 py-3.5 text-[13px] leading-[1.82] tracking-[0.002em] text-[#22384f]">{analysis.comment.trim()}</div>
-              ) : (
-                <div className="mt-3 min-h-[120px] rounded-[14px] border border-[#e3ebf5] bg-[linear-gradient(180deg,#fbfdff_0%,#f7faff_100%)] px-4 py-3.5 text-[#41556f]">
-                  <div>
-                    <p className="text-[13px] font-semibold tracking-[0.002em] text-[#1f344d]">Parecer técnico ainda não registrado.</p>
-                    <p className="mt-1 text-[12px] leading-[1.7] text-[#5b7089]">O analista poderá consolidar observações adicionais antes do envio para aprovação.</p>
-                  </div>
-                </div>
-              )}
-            </article>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
-            <InstitutionalScoreCard
-              score={institutionalScore}
-              breakdown={institutionalScoreBreakdown}
-              hasValidCofaceCoverage={hasValidCofaceCoverage}
-              guaranteeCoverageHelperText={guaranteeCoverageHelperText}
-              paymentPillarHelperText={paymentPillarHelperText}
-              relationshipPillarHelperText={relationshipPillarHelperText}
-            />
-            <article className="rounded-[22px] border border-[#dfe8f2] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] p-5 shadow-[0_9px_20px_rgba(10,29,64,.045)]">
-              <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Trilha da solicitação</p>
-              <p className="mt-1 text-[12px] leading-[1.55] text-[#6a7d93]">Fluxo consolidado para aprovação institucional.</p>
-              <div className="relative mt-4">
-                <div className="pointer-events-none absolute bottom-2 top-2 left-[18px] w-[1.5px] rounded-full bg-[linear-gradient(180deg,rgba(143,164,189,0.14)_0%,rgba(118,143,174,0.45)_48%,rgba(143,164,189,0.14)_100%)]" />
-                {(() => {
-                  const step5Completed = approvalFlowState === "approved" || approvalFlowState === "rejected";
-                  const step5Active = approvalFlowState === "in_approval" || step5Completed;
-                  const step4Completed = step5Active;
-                  const trailItems = [
-                    { key: "1", mark: "✓", title: "Solicitação criada", description: "Cliente identificado e limite comercial informado.", tone: "done" as const },
-                    { key: "2", mark: "✓", title: "Coleta de informações", description: "Dados internos, documentos e bureaus consolidados.", tone: "done" as const },
-                    { key: "3", mark: "✓", title: "Mesa de análise", description: "Score, explicabilidade e parecer técnico consolidados.", tone: "done" as const },
-                    {
-                      key: "4",
-                      mark: step4Completed ? "✓" : "›",
-                      title: "Revisão e envio",
-                      description: "Perfil corporativo revisado e encaminhado para aprovação.",
-                      tone: step4Completed ? ("done" as const) : ("active" as const),
-                    },
-                    {
-                      key: "5",
-                      mark: step5Completed ? "✓" : "5",
-                      title: "Aprovação",
-                      description: "Decisão da alçada aprovadora e conclusão institucional.",
-                      tone: step5Completed ? ("done" as const) : step5Active ? ("active" as const) : ("pending" as const),
-                    },
-                  ];
-                  return trailItems.map(({ mark, title, description, tone }) => (
-                  <div key={title} className="relative mb-5 grid grid-cols-[36px_minmax(0,1fr)] items-start gap-3 last:mb-0">
-                    <div className="relative z-10 flex w-9 shrink-0 justify-center">
-                      <div className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${
-                      tone === "done"
-                        ? "border border-[#9cc8b0] bg-[linear-gradient(180deg,#5a9b78_0%,#4a8868_100%)] text-white shadow-[0_2px_8px_rgba(74,136,104,0.20)]"
-                        : tone === "active"
-                          ? "border border-[#7ea6d8] bg-[linear-gradient(180deg,#3f6fa7_0%,#335f91_100%)] text-white shadow-[0_2px_8px_rgba(51,95,145,0.20)]"
-                          : "border border-[#c7d4e3] bg-[#edf3f9] text-[#7f95ac]"
-                      }`}>{mark}</div>
-                    </div>
-                    <div className="min-w-0 pt-[1px]">
-                      <p className={`text-[12.5px] font-semibold leading-[1.35] tracking-[0.006em] ${
-                        tone === "active" ? "text-[#0f2747]" : tone === "done" ? "text-[#13243a]" : "text-[#445a73]"
-                      }`}>{title}</p>
-                      <p className={`mt-1 text-[11px] leading-[1.65] ${
-                        tone === "active" ? "text-[#607a97]" : tone === "done" ? "text-[#6f8398]" : "text-[#90a2b5]"
-                      }`}>{description}</p>
-                    </div>
-                  </div>
-                ));
-                })()}
-              </div>
-            </article>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
-            <div className="space-y-4">
+              <InstitutionalScoreCard
+                score={institutionalScore}
+                breakdown={institutionalScoreBreakdown}
+                hasValidCofaceCoverage={hasValidCofaceCoverage}
+                guaranteeCoverageHelperText={guaranteeCoverageHelperText}
+                paymentPillarHelperText={paymentPillarHelperText}
+                relationshipPillarHelperText={relationshipPillarHelperText}
+              />
               <RecommendationInsightsCard
                 riskPrimary={insightRiskPrimary}
                 riskSecondary={insightRiskSecondary}
@@ -4403,7 +4335,72 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 </div>
               </article>
             </div>
-            <aside className="space-y-4">
+            <div className="space-y-3">
+              <article className="rounded-[22px] border border-[#dfe8f2] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] p-5 shadow-[0_8px_20px_rgba(10,29,64,.045)]">
+                <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Parecer técnico do analista</p>
+                {analysis.comment.trim() ? (
+                  <div className="mt-3 min-h-[120px] max-h-[260px] overflow-y-auto overflow-x-hidden rounded-[14px] border border-[#e3ebf5] bg-[linear-gradient(180deg,#fcfdff_0%,#f6faff_100%)] px-4 py-3.5 text-[13px] leading-[1.82] tracking-[0.002em] text-[#22384f] whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{analysis.comment.trim()}</div>
+                ) : (
+                  <div className="mt-3 min-h-[120px] rounded-[14px] border border-[#e3ebf5] bg-[linear-gradient(180deg,#fbfdff_0%,#f7faff_100%)] px-4 py-3.5 text-[#41556f]">
+                    <div>
+                      <p className="text-[13px] font-semibold tracking-[0.002em] text-[#1f344d]">Parecer técnico ainda não registrado.</p>
+                      <p className="mt-1 text-[12px] leading-[1.7] text-[#5b7089]">O analista poderá consolidar observações adicionais antes do envio para aprovação.</p>
+                    </div>
+                  </div>
+                )}
+              </article>
+              <article className="rounded-[22px] border border-[#dfe8f2] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] p-5 shadow-[0_9px_20px_rgba(10,29,64,.045)]">
+                <p className="text-[18px] font-semibold tracking-[-0.01em] text-[#0f172a]">Trilha da solicitação</p>
+                <p className="mt-1 text-[12px] leading-[1.55] text-[#6a7d93]">Fluxo consolidado para aprovação institucional.</p>
+                <div className="relative mt-4">
+                  <div className="pointer-events-none absolute bottom-2 top-2 left-[18px] w-[1.5px] rounded-full bg-[linear-gradient(180deg,rgba(143,164,189,0.14)_0%,rgba(118,143,174,0.45)_48%,rgba(143,164,189,0.14)_100%)]" />
+                  {(() => {
+                    const step5Completed = approvalFlowState === "approved" || approvalFlowState === "rejected";
+                    const step5Active = approvalFlowState === "in_approval" || step5Completed;
+                    const step4Completed = step5Active;
+                    const trailItems = [
+                      { key: "1", mark: "✓", title: "Solicitação criada", description: "Cliente identificado e limite comercial informado.", tone: "done" as const },
+                      { key: "2", mark: "✓", title: "Coleta de informações", description: "Dados internos, documentos e bureaus consolidados.", tone: "done" as const },
+                      { key: "3", mark: "✓", title: "Mesa de análise", description: "Score, explicabilidade e parecer técnico consolidados.", tone: "done" as const },
+                      {
+                        key: "4",
+                        mark: step4Completed ? "✓" : "›",
+                        title: "Revisão e envio",
+                        description: "Perfil corporativo revisado e encaminhado para aprovação.",
+                        tone: step4Completed ? ("done" as const) : ("active" as const),
+                      },
+                      {
+                        key: "5",
+                        mark: step5Completed ? "✓" : "5",
+                        title: "Aprovação",
+                        description: "Decisão da alçada aprovadora e conclusão institucional.",
+                        tone: step5Completed ? ("done" as const) : step5Active ? ("active" as const) : ("pending" as const),
+                      },
+                    ];
+                    return trailItems.map(({ mark, title, description, tone }) => (
+                    <div key={title} className="relative mb-5 grid grid-cols-[36px_minmax(0,1fr)] items-start gap-3 last:mb-0">
+                      <div className="relative z-10 flex w-9 shrink-0 justify-center">
+                        <div className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${
+                        tone === "done"
+                          ? "border border-[#9cc8b0] bg-[linear-gradient(180deg,#5a9b78_0%,#4a8868_100%)] text-white shadow-[0_2px_8px_rgba(74,136,104,0.20)]"
+                          : tone === "active"
+                            ? "border border-[#7ea6d8] bg-[linear-gradient(180deg,#3f6fa7_0%,#335f91_100%)] text-white shadow-[0_2px_8px_rgba(51,95,145,0.20)]"
+                            : "border border-[#c7d4e3] bg-[#edf3f9] text-[#7f95ac]"
+                        }`}>{mark}</div>
+                      </div>
+                      <div className="min-w-0 pt-[1px]">
+                        <p className={`text-[12.5px] font-semibold leading-[1.35] tracking-[0.006em] ${
+                          tone === "active" ? "text-[#0f2747]" : tone === "done" ? "text-[#13243a]" : "text-[#445a73]"
+                        }`}>{title}</p>
+                        <p className={`mt-1 text-[11px] leading-[1.65] ${
+                          tone === "active" ? "text-[#607a97]" : tone === "done" ? "text-[#6f8398]" : "text-[#90a2b5]"
+                        }`}>{description}</p>
+                      </div>
+                    </div>
+                  ));
+                  })()}
+                </div>
+              </article>
               {approvalFlowSummary ? (
                 <article className="rounded-[18px] border border-[#e5edf6] bg-white px-4 py-4 shadow-[0_6px_14px_rgba(10,29,64,.04)]">
                   <p className="text-[15px] font-semibold tracking-[-0.01em] text-[#0f172a]">Fluxo de Aprovação</p>
@@ -4567,8 +4564,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   <p className="mt-4 text-[12px] leading-[1.6] text-[#6a7d93]">Cliente sem posição interna identificada na carteira atual.</p>
                 )}
               </article>
-            </aside>
+            </div>
           </div>
+
           {submitMutation.isError ? <p className="mt-3 text-[12px] text-[#b91c1c]">{submitMutation.error.message}</p> : null}
         </div>
       ) : null}

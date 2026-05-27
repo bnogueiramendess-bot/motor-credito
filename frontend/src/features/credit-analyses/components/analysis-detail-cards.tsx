@@ -89,6 +89,17 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   });
   const milestones = buildMilestones({ analysis, events });
   const decisionMemory = (decision?.decision_memory_json ?? analysis.decision_memory_json) as Record<string, unknown> | null;
+  const recommendationClassification =
+    decisionMemory && typeof decisionMemory.recommendation_classification === "object"
+      ? (decisionMemory.recommendation_classification as Record<string, unknown>)
+      : null;
+  const canonicalFinalSuggestedLimit = (() => {
+    if (!recommendationClassification) return null;
+    const raw = recommendationClassification.final_suggested_limit;
+    if (raw === undefined || raw === null) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  })();
   const approvalPreview =
     decisionMemory && typeof decisionMemory.approval_matrix_preview === "object"
       ? (decisionMemory.approval_matrix_preview as Record<string, unknown>)
@@ -109,7 +120,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
         : "Revisar antes de decidir";
 
   const recommendationLimit = noInfo(
-    formatCurrency(finalDecision?.final_limit ?? decision?.suggested_limit ?? analysis.suggested_limit)
+    formatCurrency(finalDecision?.final_limit ?? canonicalFinalSuggestedLimit ?? decision?.suggested_limit ?? analysis.suggested_limit)
   );
 
   const positiveFactorsRaw = explainabilityRows.filter((item) => item.statusLabel === "Atendida").slice(0, 3);
@@ -183,7 +194,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
     tone: item.tone === "success" ? ("green" as const) : item.tone === "warning" ? ("amber" as const) : ("blue" as const)
   }));
 
-  const kpiLimitValue = noInfo(formatCurrency(decision?.suggested_limit ?? analysis.suggested_limit));
+  const kpiLimitValue = noInfo(formatCurrency(canonicalFinalSuggestedLimit ?? decision?.suggested_limit ?? analysis.suggested_limit));
   const annualRevenue = noInfo(formatCurrency(analysis.annual_revenue_estimated), "Informação não disponível");
   const annualRevenueMissing = annualRevenue === "Informação não disponível";
   const exposureValue = noInfo(formatCurrency(analysis.exposure_amount), "Informação não disponível");
