@@ -4,6 +4,7 @@ from app.routes.ar_aging_imports import router as ar_aging_imports_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.credit_report_reads import router as credit_report_reads_router
 from app.routes.credit_policy import router as credit_policy_router
+from app.routes.credit_decision_policies import router as credit_decision_policies_router
 from app.routes.admin import router as admin_router
 from app.routes.customers import router as customers_router
 from app.routes.external import router as external_router
@@ -16,6 +17,7 @@ __all__ = [
     "portfolio_router",
     "credit_report_reads_router",
     "credit_policy_router",
+    "credit_decision_policies_router",
     "admin_router",
     "customers_router",
     "external_router",

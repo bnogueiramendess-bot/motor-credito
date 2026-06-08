@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     credit_approval_matrix_enforcement_enabled: bool = True
     credit_approval_legacy_fallback_enabled: bool = True
+    credit_decision_policy_engine_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[3] / ".env",

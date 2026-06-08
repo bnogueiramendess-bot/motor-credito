@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ReportReadStatus = Literal["pending", "processing", "valid", "valid_with_warnings", "invalid", "error"]
+AgriskReportType = Literal["AGRISK_SCORE_RISK", "AGRISK_FINANCIAL_ANALYSIS"]
 
 
 class AgriskReportReadCreate(BaseModel):
@@ -54,6 +55,7 @@ class AgriskReportReadResponse(BaseModel):
 
     id: int
     source_type: Literal["agrisk"]
+    report_type: AgriskReportType
     status: ReportReadStatus
     original_filename: str
     mime_type: str

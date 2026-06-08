@@ -95,12 +95,14 @@ export type AnalysisJourneySubmitResponse = {
 
 export type ReportImportStatus = "pending" | "processing" | "valid" | "valid_with_warnings" | "invalid" | "error";
 export type AgriskImportStatus = ReportImportStatus;
+export type AgriskReportType = "AGRISK_SCORE_RISK" | "AGRISK_FINANCIAL_ANALYSIS";
 
 export type AgriskReportReadResponse = {
   id: number;
   credit_analysis_id?: number | null;
   analysis_document_id?: number | null;
   source_type: "agrisk";
+  report_type?: AgriskReportType;
   status: ReportImportStatus;
   original_filename: string;
   mime_type: string;
@@ -114,6 +116,7 @@ export type AgriskReportReadResponse = {
   warnings: string[];
   confidence: "high" | "medium" | "low" | null;
   read_payload: {
+    report_type?: AgriskReportType;
     company?: {
       name?: string | null;
       document?: string | null;
@@ -122,7 +125,28 @@ export type AgriskReportReadResponse = {
       legal_nature?: string | null;
       capital_social?: number | null;
       status?: string | null;
+      company_size?: string | null;
     };
+    analysis_period?: {
+      start_date?: string | null;
+      end_date?: string | null;
+    };
+    financial_indicators?: {
+      liquidity_general?: number | null;
+      liquidity_current?: number | null;
+      liquidity_immediate?: number | null;
+      liquidity_quick?: number | null;
+      indebtedness?: number | null;
+      ebitda?: number | null;
+      cash_flow?: number | null;
+      gross_margin?: number | null;
+      operational_index?: number | null;
+      financial_leverage?: number | null;
+      dre_result?: number | null;
+    };
+    strengths?: string[];
+    attention_points?: string[];
+    ai_conclusion?: string;
     credit?: {
       score?: number | null;
       score_source?: string | null;
@@ -130,6 +154,7 @@ export type AgriskReportReadResponse = {
       default_probability?: number | null;
       default_probability_label?: string | null;
       secondary_scores?: Array<{
+        label?: string | null;
         source?: string | null;
         score?: number | null;
         rating?: string | null;
@@ -390,6 +415,7 @@ export type AnalysisReportReadSummaryDto = {
   credit_analysis_id: number | null;
   analysis_document_id: number | null;
   source_type: string;
+  report_type?: AgriskReportType | string | null;
   status: string;
   original_filename: string;
   mime_type: string;

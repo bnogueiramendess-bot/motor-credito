@@ -6,8 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, Check, ChevronDown, ChevronsLeft, ChevronsRight, Filter, Search, ShieldAlert, UserRoundCheck } from "lucide-react";
 
-import { executeCreditAnalysisWorkflowAction, WorkflowActionRequest } from "@/features/credit-analyses/api/credit-analyses.api";
-import { CreditAnalysisMonitorItemDto } from "@/features/credit-analyses/api/contracts";
+import { executeCreditAnalysisWorkflowAction } from "@/features/credit-analyses/api/credit-analyses.api";
+import { CreditAnalysisMonitorItemDto, WorkflowActionRequest } from "@/features/credit-analyses/api/contracts";
 import { useCreditAnalysesApprovalQueueQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-approval-queue-query";
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
 import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
@@ -149,7 +149,7 @@ function formatDoaRange(range: string | null | undefined): string {
 
   const min = parseFlexibleNumber(matches[0]);
   const max = parseFlexibleNumber(matches[1]);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return range;
+  if (min === null || max === null || !Number.isFinite(min) || !Number.isFinite(max)) return range;
 
   return `${formatCompactRangeValue(min)} a ${formatCompactRangeValue(max)}`;
 }

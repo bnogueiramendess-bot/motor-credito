@@ -111,6 +111,19 @@ MONITOR_ACTION_TO_WORKFLOW_ACTION = {
     "view_tracking": "view_tracking",
 }
 
+TECHNICAL_DOSSIER_REQUIREMENTS: tuple[tuple[str, str, str], ...] = (
+    (
+        "decision_not_calculated",
+        "Calcular decisão técnica",
+        "Execute o cálculo da decisão antes de enviar para aprovação.",
+    ),
+    (
+        "motor_result_not_available",
+        "Gerar resultado do motor",
+        "Execute o motor de crédito para consolidar o resultado técnico.",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class WorkflowAuthorizationContext:
@@ -247,6 +260,33 @@ def _can_view_in_scope(db: Session, current: CurrentUser, business_unit: str | N
     allowed_bu_names = get_user_allowed_business_units(db, current)
     has_all_scope = user_has_all_bu_scope(current)
     return bu_name_in_scope(allowed_bu_names, business_unit, has_all_scope=has_all_scope)
+
+
+def _is_technical_dossier_completed(analysis: CreditAnalysis) -> bool:
+    return getattr(analysis, "motor_result", None) is not None and getattr(analysis, "decision_calculated_at", None) is not None
+
+
+def resolve_technical_dossier_status(analysis: CreditAnalysis) -> dict:
+    missing: list[dict[str, str]] = []
+    decision_calculated_at = getattr(analysis, "decision_calculated_at", None)
+    motor_result = getattr(analysis, "motor_result", None)
+
+    if decision_calculated_at is None:
+        code, label, description = TECHNICAL_DOSSIER_REQUIREMENTS[0]
+        missing.append({"code": code, "label": label, "description": description})
+    if motor_result is None:
+        code, label, description = TECHNICAL_DOSSIER_REQUIREMENTS[1]
+        missing.append({"code": code, "label": label, "description": description})
+
+    return {
+        "is_completed": len(missing) == 0,
+        "missing_requirements": missing,
+        "display_message": (
+            "Dossiê técnico concluído e elegível para envio à aprovação."
+            if len(missing) == 0
+            else "Conclua as pendências técnicas para liberar o envio à aprovação."
+        ),
+    }
 
 
 def resolve_credit_workflow_action(
@@ -406,6 +446,8 @@ def resolve_credit_workflow_available_actions(
 ) -> list[str]:
     available: list[str] = []
     for monitor_action, workflow_action in MONITOR_ACTION_TO_WORKFLOW_ACTION.items():
+        if workflow_action == "submit_approval" and not _is_technical_dossier_completed(analysis):
+            continue
         resolution = resolve_credit_workflow_action(
             db,
             current,

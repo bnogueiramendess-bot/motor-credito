@@ -112,6 +112,14 @@ export async function executeCreditAnalysisWorkflowAction(analysisId: number, pa
   return apiClient.post<WorkflowActionResponse, WorkflowActionRequest>(`/api/credit-analyses/${analysisId}/workflow-actions`, payload);
 }
 
+export async function calculateCreditAnalysisScore(analysisId: number) {
+  return apiClient.post(`/api/credit-analyses/${analysisId}/score/calculate`, {});
+}
+
+export async function calculateCreditAnalysisDecision(analysisId: number) {
+  return apiClient.post(`/api/credit-analyses/${analysisId}/decision/calculate`, {});
+}
+
 export async function updateCreditAnalysisJourneyProgress(
   analysisId: number,
   payload: CreditAnalysisJourneyProgressUpdateRequest

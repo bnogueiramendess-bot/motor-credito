@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import unittest
@@ -8,7 +9,11 @@ from unittest.mock import patch
 
 from app.models.enums import AnalysisStatus, FinalDecision
 from app.services.workflow_transition_engine import resolve_credit_workflow_transition
-from app.services.workflow_authorization import resolve_credit_workflow_action, resolve_credit_workflow_available_actions
+from app.services.workflow_authorization import (
+    resolve_credit_workflow_action,
+    resolve_credit_workflow_available_actions,
+    resolve_technical_dossier_status,
+)
 
 
 @dataclass
@@ -43,6 +48,7 @@ class DummyAnalysis:
     analyst_notes: str | None = None
     decision_memory_json: dict | None = None
     submitted_for_approval_at: object | None = None
+    decision_calculated_at: object | None = datetime.now(timezone.utc)
     analysis_started_at: object | None = None
     claimed_at: object | None = None
     completed_at: object | None = None
@@ -197,6 +203,36 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
         with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=[]):
             actions = resolve_credit_workflow_available_actions(db=object(), current=current, analysis=analysis, business_unit=None)  # type: ignore[arg-type]
         self.assertEqual(actions, [])
+
+    def test_available_actions_hides_submit_approval_when_dossier_incomplete(self) -> None:
+        current = DummyCurrentUser(
+            user=DummyUser(id=11, email="analista@indorama.com", full_name="Analista"),
+            permissions={"credit.request.submit"},
+            bu_ids={1},
+        )
+        analysis = DummyAnalysis(motor_result=object(), decision_calculated_at=None)
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_OPINION"]):
+            actions = resolve_credit_workflow_available_actions(db=object(), current=current, analysis=analysis, business_unit=None)  # type: ignore[arg-type]
+        self.assertNotIn("submit_approval", actions)
+
+    def test_technical_dossier_status_reports_missing_requirements(self) -> None:
+        analysis = DummyAnalysis(motor_result=None, decision_calculated_at=None)
+        status = resolve_technical_dossier_status(analysis)  # type: ignore[arg-type]
+        self.assertFalse(status["is_completed"])
+        missing_codes = {item["code"] for item in status["missing_requirements"]}
+        self.assertIn("decision_not_calculated", missing_codes)
+        self.assertIn("motor_result_not_available", missing_codes)
+
+    def test_technical_dossier_status_is_incomplete_without_decision_timestamp_even_with_memory(self) -> None:
+        analysis = DummyAnalysis(
+            motor_result=object(),
+            decision_calculated_at=None,
+            decision_memory_json={"recommendation_classification": {"final_suggested_limit": "4500000.00"}},
+        )
+        status = resolve_technical_dossier_status(analysis)  # type: ignore[arg-type]
+        self.assertFalse(status["is_completed"])
+        missing_codes = {item["code"] for item in status["missing_requirements"]}
+        self.assertIn("decision_not_calculated", missing_codes)
 
     def test_route_has_no_direct_workflow_assignment(self) -> None:
         route_path = Path(__file__).resolve().parents[1] / "app" / "routes" / "credit_analyses.py"

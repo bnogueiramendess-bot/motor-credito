@@ -117,6 +117,7 @@ export function MonitorPageView() {
   const searchParams = useSearchParams();
   const businessUnitContext = searchParams.get("business_unit_context") ?? "";
   const showSubmissionSuccess = searchParams.get("submission") === "success";
+  const showApprovalSubmissionSuccess = searchParams.get("approvalSubmission") === "success";
   const buContextQuery = useBusinessUnitContextQuery();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -184,6 +185,11 @@ export function MonitorPageView() {
         <p className="text-[30px] font-semibold tracking-[-0.02em] text-[#0F172A]">Monitor de Solicitações</p>
         <p className="text-[14px] text-[#64748B]">Acompanhe solicitações de crédito, pendências operacionais e decisões em andamento.</p>
       </div>
+      {showApprovalSubmissionSuccess ? (
+        <div className="mb-3 rounded-[10px] border border-[#BBF7D0] bg-[#F0FDF4] px-3 py-2 text-[13px] text-[#166534]">
+          Solicitação enviada para aprovação com sucesso.
+        </div>
+      ) : null}
       {showSubmissionSuccess ? (
         <div className="mb-3 rounded-[10px] border border-[#BBF7D0] bg-[#F0FDF4] px-3 py-2 text-[13px] text-[#166534]">
           Solicitação submetida com sucesso. Ela foi encaminhada para análise financeira.

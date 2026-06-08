@@ -9,6 +9,7 @@ from app.models.ar_aging_remark_row import ArAgingRemarkRow
 from app.models.credit_report_read import CreditReportRead
 from app.models.credit_policy import CreditPolicy
 from app.models.credit_policy_rule import CreditPolicyRule
+from app.models.credit_decision_policy import CreditDecisionPolicy
 from app.models.customer import Customer
 from app.models.decision_event import DecisionEvent
 from app.models.enums import (
@@ -55,6 +56,7 @@ __all__ = [
     "CreditReportRead",
     "CreditPolicy",
     "CreditPolicyRule",
+    "CreditDecisionPolicy",
     "CreditPolicyStatus",
     "Customer",
     "DecisionEvent",

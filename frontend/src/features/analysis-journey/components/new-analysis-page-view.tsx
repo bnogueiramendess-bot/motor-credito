@@ -3,15 +3,15 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Building2, Check, ChevronLeft, ChevronRight, CircleAlert, CreditCard, FileText, FolderOpen, Info, Lock, Search, ShieldCheck, Upload, X } from "lucide-react";
 
 import { checkExistingCreditAnalysis, createCommercialReference, createCreditAnalysisDraft, deleteAnalysisDocument, deleteCommercialReference, discardCreditAnalysisDraft, downloadAnalysisDocument, getAgriskReportRead, getAnalysisRequestMetadata, getCofaceReportRead, listAnalysisDocuments, listAnalysisReportReads, listCommercialReferences, lookupExternalCnpj, readAgriskReport, readCofaceReport, recoverCreditAnalysisDraft, saveAnalysisRequestMetadata, submitAnalysisJourney, submitTriageCreditRequest, triageCreditRequest, uploadAnalysisDocument } from "@/features/analysis-journey/api/analysis-journey.api";
-import { AgriskImportStatus, AgriskReportReadResponse, AnalysisDocumentDto, AnalysisJourneySubmitRequest, AnalysisReportReadSummaryDto, CofaceReportReadResponse, CommercialReference, CreditAnalysisDraftRecoveryResponse, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageSubmitRequest, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
+import { AgriskImportStatus, AgriskReportReadResponse, AgriskReportType, AnalysisDocumentDto, AnalysisJourneySubmitRequest, AnalysisReportReadSummaryDto, CofaceReportReadResponse, CommercialReference, CreditAnalysisDraftRecoveryResponse, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageSubmitRequest, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
 import { InstitutionalScoreCard } from "@/features/analysis-journey/components/institutional-score-card";
 import { RecommendationInsightsCard } from "@/features/analysis-journey/components/recommendation-insights-card";
-import { getCreditAnalysisDetail, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
-import { getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
+import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
+import { createExternalDataEntry, getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
 import { getPortfolioCustomers } from "@/features/portfolio/api/portfolio.api";
 import {
   formatCnpj,
@@ -29,7 +29,9 @@ import { getCurrentUserDisplayName } from "@/shared/lib/auth/current-user";
 
 const steps = ["Identificação do cliente", "Coleta de informações", "Mesa de análise", "Revisão e envio"];
 const TECHNICAL_CONTINUATION_ACTIONS = new Set(["start_analysis", "continue_analysis", "execute_analysis"]);
-type ImportSource = "agrisk" | "coface";
+const AGRISK_SCORE_RISK: AgriskReportType = "AGRISK_SCORE_RISK";
+const AGRISK_FINANCIAL_ANALYSIS: AgriskReportType = "AGRISK_FINANCIAL_ANALYSIS";
+type ImportSource = "agrisk" | "agrisk_financial" | "coface";
 type ImportStatus = "empty" | AgriskImportStatus | "success";
 
 type ImportState = {
@@ -230,7 +232,7 @@ function importMonitorTitle(_: ImportSource) {
 }
 
 function importMonitorSourceName(source: ImportSource) {
-  if (source === "agrisk") return "Origem: Agrisk";
+  if (source === "agrisk" || source === "agrisk_financial") return "Origem: Agrisk";
   if (source === "coface") return "Origem: COFACE";
   return "Origem: Externa";
 }
@@ -404,7 +406,7 @@ function formatDoaRangeExecutive(range: string | null | undefined): string {
   };
   const min = parseFlexible(matches[0]);
   const max = parseFlexible(matches[1]);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return range;
+  if (min === null || max === null || !Number.isFinite(min) || !Number.isFinite(max)) return range;
   return `${formatDoaBoundary(min)} a ${formatDoaBoundary(max)}`;
 }
 
@@ -480,12 +482,232 @@ function formatAgriskWarning(warning: string) {
 
 function importMonitorValueText(source: ImportSource) {
   if (source === "agrisk") return "Score, restrições e indicadores extraídos automaticamente.";
+  if (source === "agrisk_financial") return "Indicadores financeiros e conclusão da IA extraídos automaticamente.";
   if (source === "coface") return "DRA e indicadores corporativos extraídos automaticamente.";
   return "Dados estruturados para análise.";
 }
 
 function removeActionLabel(_: ImportSource) {
   return "Remover relatório";
+}
+
+function isAgriskValidatedImport(state: ImportState) {
+  return state.status === "valid" || state.status === "valid_with_warnings";
+}
+
+function canClearLocalImport(state: ImportState) {
+  return state.status === "invalid" || state.status === "error";
+}
+
+function isAgriskFinancialSource(source: ImportSource) {
+  return source === "agrisk_financial";
+}
+
+function expectedAgriskReportType(source: ImportSource): AgriskReportType {
+  return isAgriskFinancialSource(source) ? AGRISK_FINANCIAL_ANALYSIS : AGRISK_SCORE_RISK;
+}
+
+function normalizeAgriskReportType(value: string | null | undefined): AgriskReportType {
+  return value === AGRISK_FINANCIAL_ANALYSIS ? AGRISK_FINANCIAL_ANALYSIS : AGRISK_SCORE_RISK;
+}
+
+function isExpectedAgriskReport(response: AgriskReportReadResponse, source: ImportSource) {
+  return normalizeAgriskReportType(response.report_type ?? response.read_payload?.report_type) === expectedAgriskReportType(source);
+}
+
+function agriskSubreportTitle(source: ImportSource) {
+  if (source === "agrisk_financial") return "Relatório de Análise Financeira";
+  return "Relatório de Score/Risco";
+}
+
+function formatNullableNumber(value: number | null | undefined, suffix = "") {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Não informado";
+  return `${value.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}${suffix}`;
+}
+
+function AgriskSubreportPanel({
+  source,
+  state,
+  onImport,
+  onRemove,
+  onView
+}: {
+  source: ImportSource;
+  state: ImportState;
+  onImport: () => void;
+  onRemove: () => void;
+  onView: () => void;
+}) {
+  const isReady = isAgriskValidatedImport(state) && Boolean(state.agriskReadPayload);
+  const hasFile = state.files.length > 0;
+  const isInvalid = state.status === "invalid" || state.status === "error";
+  const fileName = state.files[0]?.original_filename ?? "Nenhum arquivo importado";
+  const metadata = hasFile
+    ? `${formatFileSize(state.files[0]?.file_size ?? 0)}${state.importedAt ? ` · ${formatImportedAt(state.importedAt)}` : ""}`
+    : importMonitorValueText(source);
+  const shortIssue = state.status === "invalid" && isDocumentDivergenceMessage(state.errorMessage)
+    ? "CNPJ divergente"
+    : state.status === "error"
+      ? "Falha na leitura"
+      : state.errorMessage;
+  const detailText = isInvalid && shortIssue ? shortIssue : metadata;
+
+  return (
+    <div className="group py-2">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <span className={`mt-1 h-8 w-0.5 shrink-0 rounded-full ${isReady ? "bg-[#10B981]" : isInvalid ? "bg-[#EF4444]" : "bg-[#D7E1EC]"}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <p className="truncate text-[11px] font-semibold leading-tight text-[#102033]">{agriskSubreportTitle(source)}</p>
+            <span className={`shrink-0 rounded-full px-1.5 py-[1px] text-[9px] font-medium ${importStatusBadgeClass(state.status)}`}>
+              {state.status === "empty" ? "Não importado" : agriskStatusBadgeLabel(state)}
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-[10px] leading-tight text-[#4F647A]" title={fileName}>
+            {fileName}
+          </p>
+          <p className={`mt-0.5 truncate text-[10px] leading-tight ${isInvalid ? "text-[#B91C1C]" : "text-[#64748B]"}`} title={isInvalid ? state.errorMessage ?? undefined : metadata}>
+            {detailText}
+          </p>
+          {state.status === "valid_with_warnings" ? (
+            <p className="mt-0.5 truncate text-[10px] leading-tight text-[#92400E]" title={state.agriskWarnings.join(" | ") || "Validado com alertas de leitura."}>
+              Validado com alertas de leitura.
+            </p>
+          ) : null}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-medium">
+          {isReady ? (
+            <button type="button" onClick={onView} className="text-[#295B9A] underline-offset-2 hover:underline">
+              Ver dados
+            </button>
+          ) : null}
+          {isReady ? <span className="text-[#C5D1DD]">|</span> : null}
+          <button type="button" onClick={onImport} className="text-[#295B9A] underline-offset-2 hover:underline">
+            {hasFile ? "Substituir" : "Importar"}
+          </button>
+          {hasFile ? (
+            <>
+              <span className="text-[#C5D1DD]">|</span>
+              <button type="button" onClick={onRemove} className="text-[#B91C1C] underline-offset-2 hover:underline">
+                Remover
+              </button>
+            </>
+          ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatIsoDateCompact(value: string | null | undefined) {
+  if (!value) return "Não informado";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("pt-BR");
+}
+
+function formatMoneyFromPayload(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Não informado";
+  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function AgriskFinancialDrawer({
+  state,
+  onClose
+}: {
+  state: ImportState;
+  onClose: () => void;
+}) {
+  const payload = state.agriskReadPayload;
+  const indicators = payload?.financial_indicators;
+  const indicatorRows = [
+    ["Liquidez Geral", formatNullableNumber(indicators?.liquidity_general)],
+    ["Liquidez Corrente", formatNullableNumber(indicators?.liquidity_current)],
+    ["Liquidez Imediata", formatNullableNumber(indicators?.liquidity_immediate)],
+    ["Liquidez Seca", formatNullableNumber(indicators?.liquidity_quick)],
+    ["Endividamento", formatNullableNumber(indicators?.indebtedness)],
+    ["EBITDA", formatMoneyFromPayload(indicators?.ebitda)],
+    ["Fluxo de Caixa", formatMoneyFromPayload(indicators?.cash_flow)],
+    ["Margem Bruta", formatNullableNumber(indicators?.gross_margin, "%")],
+    ["Índice Operacional", formatNullableNumber(indicators?.operational_index, "%")],
+    ["Alavancagem Financeira", formatNullableNumber(indicators?.financial_leverage)],
+    ["Resultado DRE", formatMoneyFromPayload(indicators?.dre_result)]
+  ];
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-[#0D1B2A]/45" onClick={onClose}>
+      <div className="flex h-full w-full max-w-[620px] flex-col bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
+          <div>
+            <p className="text-[15px] font-semibold text-[#102033]">Relatório Financeiro Agrisk</p>
+            <p className="text-[12px] text-[#4F647A]">Dados estruturados da análise financeira importada.</p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="mb-6">
+            <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Empresa</p>
+            <div className="grid gap-2 text-[12px] text-[#4F647A] md:grid-cols-2">
+              <p><span className="font-medium text-[#102033]">Razão social:</span> {payload?.company?.name || "Não informado"}</p>
+              <p><span className="font-medium text-[#102033]">CNPJ:</span> {payload?.company?.document || "Não informado"}</p>
+              <p><span className="font-medium text-[#102033]">Porte:</span> {payload?.company?.company_size || "Não informado"}</p>
+              <p><span className="font-medium text-[#102033]">Abertura:</span> {formatIsoDateCompact(payload?.company?.opened_at)}</p>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Período analisado</p>
+            <div className="grid gap-2 text-[12px] text-[#4F647A] md:grid-cols-2">
+              <p><span className="font-medium text-[#102033]">Data inicial:</span> {formatIsoDateCompact(payload?.analysis_period?.start_date)}</p>
+              <p><span className="font-medium text-[#102033]">Data final:</span> {formatIsoDateCompact(payload?.analysis_period?.end_date)}</p>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Indicadores financeiros</p>
+            <div className="grid gap-2 md:grid-cols-2">
+              {indicatorRows.map(([label, value]) => (
+                <div key={label} className="rounded-[8px] border border-[#E2EAF4] bg-[#F8FBFF] px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-[0.5px] text-[#8FA3B4]">{label}</p>
+                  <p className="mt-1 text-[13px] font-semibold text-[#102033]">{value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Pontos Fortes</p>
+            {(payload?.strengths ?? []).length > 0 ? (
+              <ul className="list-disc space-y-2 pl-4 text-[12px] leading-relaxed text-[#4F647A]">
+                {(payload?.strengths ?? []).map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            ) : (
+              <p className="text-[12px] text-[#4F647A]">Nenhum ponto forte estruturado.</p>
+            )}
+          </div>
+
+          <div className="mb-6">
+            <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Pontos de Atenção</p>
+            {(payload?.attention_points ?? []).length > 0 ? (
+              <ul className="list-disc space-y-2 pl-4 text-[12px] leading-relaxed text-[#4F647A]">
+                {(payload?.attention_points ?? []).map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            ) : (
+              <p className="text-[12px] text-[#4F647A]">Nenhum ponto de atenção estruturado.</p>
+            )}
+          </div>
+
+          <div>
+            <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Conclusão da IA</p>
+            <p className="text-[12px] leading-relaxed text-[#4F647A]">{payload?.ai_conclusion || "Não informado"}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const step1DocumentDefinitions: Array<{ key: Step1DocumentType; label: string }> = [
@@ -519,6 +741,7 @@ type NewAnalysisPageViewProps = {
 
 export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysisPageViewProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const isWorkspaceMode = mode === "workspace";
   const effectivePermissions = useMemo(() => getEffectivePermissions(), []);
   const hasTechnicalContinuationCapability = hasPermission("credit.analysis.execute", effectivePermissions);
@@ -567,8 +790,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   });
   const [manualConfigured, setManualConfigured] = useState(false);
   const [ocr] = useState<OcrState>(buildDefaultOcrState());
-  const [agriskImport, setAgriskImport] = useState<ImportState>(buildDefaultImportState());
+  const [agriskScoreImport, setAgriskScoreImport] = useState<ImportState>(buildDefaultImportState());
+  const [agriskFinancialImport, setAgriskFinancialImport] = useState<ImportState>(buildDefaultImportState());
   const [cofaceImport, setCofaceImport] = useState<ImportState>(buildDefaultImportState());
+  const agriskImport = agriskScoreImport;
+  const setAgriskImport = setAgriskScoreImport;
 
   const [importModalSource, setImportModalSource] = useState<ImportSource>("agrisk");
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -577,6 +803,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const [pendingImportError, setPendingImportError] = useState<string | null>(null);
   const [isManualDrawerOpen, setIsManualDrawerOpen] = useState(false);
   const [isAgriskDataDrawerOpen, setIsAgriskDataDrawerOpen] = useState(false);
+  const [isAgriskFinancialDataDrawerOpen, setIsAgriskFinancialDataDrawerOpen] = useState(false);
   const [isCofaceDataDrawerOpen, setIsCofaceDataDrawerOpen] = useState(false);
   const [manualPanel, setManualPanel] = useState({
     scoreSource: "Serasa",
@@ -622,6 +849,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const [isDocumentLibraryOpen, setIsDocumentLibraryOpen] = useState(false);
   const [expandedImportedSummary, setExpandedImportedSummary] = useState<"coface" | "agrisk" | "internal" | "references" | null>(null);
   const [workspaceInternalPosition, setWorkspaceInternalPosition] = useState<InternalEconomicPosition | null>(null);
+  const [approvalSubmissionSuccessModalOpen, setApprovalSubmissionSuccessModalOpen] = useState(false);
+  const [isStep3AdvancePending, setIsStep3AdvancePending] = useState(false);
+  const [step3AdvanceError, setStep3AdvanceError] = useState<string | null>(null);
   const persistJourneyProgressMutation = useMutation({
     mutationFn: ({ id, currentStep, lastCompletedStep }: { id: number; currentStep: number; lastCompletedStep: number }) =>
       updateCreditAnalysisJourneyProgress(id, {
@@ -707,6 +937,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   const hasAgriskImported = agriskImport.status === "valid" || agriskImport.status === "valid_with_warnings";
   const hasInvalidAgriskImport = agriskImport.files.length > 0 && (agriskImport.status === "invalid" || agriskImport.status === "error");
+  const hasAgriskFinancialImported = isAgriskValidatedImport(agriskFinancialImport);
+  const hasInvalidAgriskFinancialImport = agriskFinancialImport.files.length > 0 && (agriskFinancialImport.status === "invalid" || agriskFinancialImport.status === "error");
   const hasCofaceImported = isCofaceValidatedStatus(cofaceImport.status);
   const cofaceDecisionAmount = hasCofaceImported ?cofaceImport.cofaceReadPayload?.coface?.decision_amount ?? null : null;
   const hasCofaceCoverageImported = hasCofaceImported && cofaceDecisionAmount !== null;
@@ -795,6 +1027,41 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         // fallback conservador: usuário segue para monitor se não for possível validar continuidade técnica
       }
       router.push("/analises/monitor?submission=success");
+    }
+  });
+  const submitForApprovalMutation = useMutation({
+    mutationFn: (id: number) => executeCreditAnalysisWorkflowAction(id, { action: "submit_approval" }),
+    onSuccess: async (_, id) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workspace-analysis-detail", id] }),
+        queryClient.invalidateQueries({ queryKey: ["credit-analysis-detail", id] }),
+        queryClient.invalidateQueries({ queryKey: ["workspace-analysis-external-data", id] }),
+        queryClient.invalidateQueries({ queryKey: ["credit-analyses-monitor"] }),
+        queryClient.invalidateQueries({ queryKey: ["credit-analyses-approval-queue"] })
+      ]);
+      setApprovalSubmissionSuccessModalOpen(true);
+    },
+    onError: (error: Error) => {
+      const message = error.message || "";
+      if (message.includes("403")) {
+        setStepError("Você não possui autorização para enviar esta solicitação para aprovação.");
+        return;
+      }
+      if (message.includes("409")) {
+        setStepError("A análise não está em status elegível para envio à aprovação ou ainda possui pendências técnicas.");
+        return;
+      }
+      if (message.includes("422") || message.toLowerCase().includes("dossie tecnico concluido")) {
+        setStepError("O dossiê técnico ainda não está concluído para envio à aprovação.");
+        return;
+      }
+      setStepError("Não foi possível enviar o dossiê para aprovação. Revise os pré-requisitos e tente novamente.");
+    }
+  });
+  const calculateTechnicalDossierMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await calculateCreditAnalysisScore(id);
+      await calculateCreditAnalysisDecision(id);
     }
   });
   const triageSubmitMutation = useMutation({
@@ -888,13 +1155,16 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const toCurrency = (value: number | string | null | undefined) => formatCurrencyBRL(String(value ?? 0));
     const entries = external.entries ?? [];
     const byNewestReads = [...reportReads].sort((a, b) => (new Date(b.created_at).getTime() || 0) - (new Date(a.created_at).getTime() || 0));
-    const agriskRead = byNewestReads.find((entry) => entry.source_type === "agrisk");
+    const agriskReads = byNewestReads.filter((entry) => entry.source_type === "agrisk");
+    const agriskRead = agriskReads.find((entry) => normalizeAgriskReportType(entry.report_type) === AGRISK_SCORE_RISK);
+    const agriskFinancialRead = agriskReads.find((entry) => normalizeAgriskReportType(entry.report_type) === AGRISK_FINANCIAL_ANALYSIS);
     const cofaceRead = byNewestReads.find((entry) => entry.source_type === "coface");
 
     const analysisDocuments = step1DocumentsQuery.data ?? [];
     const findDocumentForRead = (read: AnalysisReportReadSummaryDto | undefined) =>
       read?.analysis_document_id ? analysisDocuments.find((doc) => doc.id === read.analysis_document_id) : undefined;
     const agriskDocument = findDocumentForRead(agriskRead);
+    const agriskFinancialDocument = findDocumentForRead(agriskFinancialRead);
     const cofaceDocument = findDocumentForRead(cofaceRead);
     const savedManualPanel = workspaceState?.manual_panel && typeof workspaceState.manual_panel === "object"
       ? (workspaceState.manual_panel as Record<string, unknown>)
@@ -907,6 +1177,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       : null;
     const savedAgriskImport = savedImports?.agrisk && typeof savedImports.agrisk === "object"
       ? (savedImports.agrisk as Record<string, unknown>)
+      : null;
+    const savedAgriskFinancialImport = savedImports?.agrisk_financial && typeof savedImports.agrisk_financial === "object"
+      ? (savedImports.agrisk_financial as Record<string, unknown>)
       : null;
     const savedCofaceImport = savedImports?.coface && typeof savedImports.coface === "object"
       ? (savedImports.coface as Record<string, unknown>)
@@ -967,6 +1240,31 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           : prev.files
       }));
     }
+    setAgriskFinancialImport((prev) => ({
+      ...prev,
+      files: agriskFinancialDocument ? [{
+        original_filename: agriskFinancialDocument.original_filename,
+        mime_type: agriskFinancialDocument.mime_type,
+        file_size: agriskFinancialDocument.file_size
+      }] : [],
+      status: (agriskFinancialRead?.status as ImportStatus) ?? "empty",
+      importedAt: agriskFinancialRead?.created_at ?? null,
+      agriskReadId: agriskFinancialRead?.id ?? null,
+      agriskWarnings: agriskFinancialRead?.warnings ?? [],
+      errorMessage: agriskFinancialRead?.validation_message ?? null,
+      agriskReadPayload: (agriskFinancialRead?.read_payload as AgriskReportReadResponse["read_payload"] | null) ?? null,
+    }));
+    if (savedAgriskFinancialImport) {
+      setAgriskFinancialImport((prev) => ({
+        ...prev,
+        status: (savedAgriskFinancialImport.status as ImportStatus) ?? prev.status,
+        importedAt: (savedAgriskFinancialImport.imported_at as string | null) ?? prev.importedAt,
+        agriskReadId: (savedAgriskFinancialImport.read_id as number | null) ?? prev.agriskReadId,
+        files: savedAgriskFinancialImport.original_filename
+          ? [{ original_filename: String(savedAgriskFinancialImport.original_filename), mime_type: "application/pdf", file_size: Number(savedAgriskFinancialImport.file_size ?? 0) }]
+          : prev.files
+      }));
+    }
     setCofaceImport((prev) => ({
       ...prev,
       files: cofaceDocument ? [{
@@ -998,11 +1296,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     setWorkspaceHydrated(true);
     void (async () => {
       const agriskReadId = (savedAgriskImport?.read_id as number | null) ?? agriskRead?.id ?? null;
+      const agriskFinancialReadId = (savedAgriskFinancialImport?.read_id as number | null) ?? agriskFinancialRead?.id ?? null;
       const cofaceReadId = (savedCofaceImport?.read_id as number | null) ?? cofaceRead?.id ?? null;
       if (agriskReadId) {
         try {
           const response = await getAgriskReportRead(agriskReadId);
           setAgriskImport((prev) => ({ ...prev, status: response.status, agriskReadId: response.id, agriskReadPayload: response.read_payload, agriskWarnings: response.warnings, errorMessage: response.validation_message }));
+        } catch {}
+      }
+      if (agriskFinancialReadId) {
+        try {
+          const response = await getAgriskReportRead(agriskFinancialReadId);
+          setAgriskFinancialImport((prev) => ({ ...prev, status: response.status, agriskReadId: response.id, agriskReadPayload: response.read_payload, agriskWarnings: response.warnings, errorMessage: response.validation_message }));
         } catch {}
       }
       if (cofaceReadId) {
@@ -1021,41 +1326,25 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       );
       if (!hasMappedPortfolioData && resolvedCustomerDocument) {
         try {
-          const triageSnapshot = await triageCreditRequest({ cnpj: resolvedCustomerDocument });
-          const econ = triageSnapshot?.economic_position;
-          if (econ) {
+          const portfolioCustomers = await getPortfolioCustomers({
+            cnpj: resolvedCustomerDocument,
+            snapshot_id: "current",
+          });
+          const portfolioMatch = portfolioCustomers[0];
+          if (portfolioMatch) {
+            const openAmount = Number(portfolioMatch.total_open_amount ?? 0);
+            const totalLimit = Number(portfolioMatch.approved_credit_amount ?? 0);
+            const availableLimit = Math.max(0, totalLimit - openAmount);
             setWorkspaceInternalPosition({
-              open_amount: Number(econ.open_amount ?? 0),
-              total_limit: Number(econ.total_limit ?? 0),
-              available_limit: Number(econ.available_limit ?? 0),
-              overdue_amount: econ.overdue_amount !== null && econ.overdue_amount !== undefined ? Number(econ.overdue_amount) : null,
-              not_due_amount: econ.not_due_amount !== null && econ.not_due_amount !== undefined ? Number(econ.not_due_amount) : null,
+              open_amount: openAmount,
+              total_limit: totalLimit,
+              available_limit: availableLimit,
+              overdue_amount: null,
+              not_due_amount: null,
               base_date: null
             });
           }
-        } catch {
-          // fallback silencioso: mantém comportamento atual sem bloquear workspace
-          try {
-            const portfolioCustomers = await getPortfolioCustomers({
-              cnpj: resolvedCustomerDocument,
-              snapshot_id: "current",
-            });
-            const portfolioMatch = portfolioCustomers[0];
-            if (portfolioMatch) {
-              const openAmount = Number(portfolioMatch.total_open_amount ?? 0);
-              const totalLimit = Number(portfolioMatch.approved_credit_amount ?? 0);
-              const availableLimit = Math.max(0, totalLimit - openAmount);
-              setWorkspaceInternalPosition({
-                open_amount: openAmount,
-                total_limit: totalLimit,
-                available_limit: availableLimit,
-                overdue_amount: null,
-                not_due_amount: null,
-                base_date: null
-              });
-            }
-          } catch {}
-        }
+        } catch {}
       }
     })();
   }, [
@@ -1069,7 +1358,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     workspaceExternalDataQuery.error,
     workspaceExternalDataQuery.isError,
     workspaceExternalDataQuery.isLoading,
-    reportReadsQuery.data
+    reportReadsQuery.data,
+    setAgriskImport,
+    step1DocumentsQuery.data
   ]);
 
   const triageLookupMutation = useMutation({
@@ -1289,40 +1580,158 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     return null;
   }
 
-  function navigateToStep(targetStep: number) {
-    if (targetStep === step) return;
-    if (isOperationalSubmitOnlyFlow && targetStep > 1) {
-      setStepError("Esta solicitação será apenas submetida para análise financeira. O avanço para a Etapa 2 não é permitido para seu acesso.");
-      return;
-    }
-    if (isJourneyReadOnly && targetStep < 4) {
-      setStepError("A análise já foi encaminhada para aprovação/conclusão e não pode voltar para edição.");
-      return;
-    }
-    if (isStep1GovernanceBlocked && targetStep > 1) {
-      setStepError("Não é possível avançar enquanto existir bloqueio de governança para este CNPJ.");
-      return;
-    }
-    if (targetStep < step) {
+  async function navigateToStep(targetStep: number): Promise<{ advanced: boolean; errorMessage?: string }> {
+    try {
+      console.warn("[STEP3_ADVANCE] navigateToStep called", { currentStep: step, targetStep });
+      if (targetStep === step) {
+        console.warn("[STEP3_ADVANCE] blocked before technical consolidation", { reason: "targetStep === step", step, targetStep });
+        return { advanced: true };
+      }
+      console.warn("[STEP3_ADVANCE] before validations");
+      if (isOperationalSubmitOnlyFlow && targetStep > 1) {
+        const message = "Esta solicitação será apenas submetida para análise financeira. O avanço para a Etapa 2 não é permitido para seu acesso.";
+        setStepError(message);
+        console.warn("[STEP3_ADVANCE] validation result", { result: "blocked", reason: "isOperationalSubmitOnlyFlow && targetStep > 1" });
+        console.warn("[STEP3_ADVANCE] blocked before technical consolidation", { reason: "isOperationalSubmitOnlyFlow && targetStep > 1", step, targetStep });
+        return { advanced: false, errorMessage: message };
+      }
+      if (isJourneyReadOnly && targetStep < 4) {
+        const message = "A análise já foi encaminhada para aprovação/conclusão e não pode voltar para edição.";
+        setStepError(message);
+        console.warn("[STEP3_ADVANCE] validation result", { result: "blocked", reason: "isJourneyReadOnly && targetStep < 4" });
+        console.warn("[STEP3_ADVANCE] blocked before technical consolidation", { reason: "isJourneyReadOnly && targetStep < 4", step, targetStep });
+        return { advanced: false, errorMessage: message };
+      }
+      if (isStep1GovernanceBlocked && targetStep > 1) {
+        const message = "Não é possível avançar enquanto existir bloqueio de governança para este CNPJ.";
+        setStepError(message);
+        console.warn("[STEP3_ADVANCE] validation result", { result: "blocked", reason: "isStep1GovernanceBlocked && targetStep > 1" });
+        console.warn("[STEP3_ADVANCE] blocked before technical consolidation", { reason: "isStep1GovernanceBlocked && targetStep > 1", step, targetStep });
+        return { advanced: false, errorMessage: message };
+      }
+      if (targetStep < step) {
+        console.warn("[STEP3_ADVANCE] validation result", { result: "ok", reason: "targetStep < step" });
+        setStepError(null);
+        setStep(targetStep);
+        return { advanced: true };
+      }
+
+      for (let s = step; s < targetStep; s += 1) {
+        console.warn("[STEP3_ADVANCE] loop checkpoint", { s, targetStep, stepSnapshot: step });
+        const error = validateStep(s);
+        if (error) {
+          console.debug("[STEP3_ADVANCE] before return", { reason: `validateStep(${s}) blocked`, s, targetStep });
+          console.warn("[STEP3_ADVANCE] validation result", { result: "blocked", reason: `validateStep(${s})`, error });
+          const message = `Não é possível avançar para a etapa ${targetStep}. ${error}`;
+          setStepError(message);
+          console.warn("[STEP3_ADVANCE] blocked before technical consolidation", { reason: `validateStep(${s})`, step, targetStep });
+          return { advanced: false, errorMessage: message };
+        }
+        console.warn("[STEP3_ADVANCE] validation result", { result: "ok", reason: `validateStep(${s})` });
+        if (s === 2) {
+          console.debug("[STEP3_ADVANCE] after validateStep(2)", { stepSnapshot: step, targetStep });
+        }
+        if (targetStep === 4 && s === 2) {
+          console.warn("[STEP3_ADVANCE] before validateStep(3)");
+          const step3Validation = validateStep(3);
+          console.warn("[STEP3_ADVANCE] validation result", {
+            result: step3Validation ? "blocked" : "ok",
+            reason: "validateStep(3)",
+          });
+          if (step3Validation) {
+            const message = `Não é possível avançar para a etapa ${targetStep}. ${step3Validation}`;
+            setStepError(message);
+            console.debug("[STEP3_ADVANCE] before return", { reason: "validateStep(3) blocked", stepSnapshot: step, targetStep });
+            console.warn("[STEP3_ADVANCE] blocked before technical consolidation", { reason: "validateStep(3)", step, targetStep });
+            return { advanced: false, errorMessage: message };
+          }
+        }
+        console.debug("[STEP3_ADVANCE] before next iteration", { nextS: s + 1, targetStep, willContinue: s + 1 < targetStep });
+      }
+
+      const shouldRunTechnicalConsolidation =
+        isWorkspaceMode &&
+        (
+          (step === 2 && targetStep >= 3) ||
+          targetStep === 4
+        );
+      if (shouldRunTechnicalConsolidation) {
+        setIsStep3AdvancePending(true);
+        try {
+          console.warn("[STEP3_ADVANCE] starting technical dossier consolidation");
+          await ensureTechnicalDossierCalculatedForStep4();
+        } catch (error) {
+          console.error("[STEP3_ADVANCE] failed", error);
+          const message = normalizeTechnicalConsolidationErrorMessage(error);
+          setStepError(message);
+          return { advanced: false, errorMessage: message };
+        } finally {
+          setIsStep3AdvancePending(false);
+        }
+      }
       setStepError(null);
+      console.debug("[STEP3_ADVANCE] before setStep", { fromStep: step, toStep: targetStep });
       setStep(targetStep);
-      return;
+      console.debug("[STEP3_ADVANCE] after setStep", { toStep: targetStep });
+      if (isWorkspaceMode) {
+        persistAnalystComment(analysis.comment);
+      }
+      if (isWorkspaceMode && activeAnalysisId) {
+        const lastCompleted = Math.max(1, targetStep - 1);
+        persistJourneyProgressMutation.mutate({ id: activeAnalysisId, currentStep: targetStep, lastCompletedStep: lastCompleted });
+      }
+      return { advanced: true };
+    } catch (error) {
+      console.error("[STEP3_ADVANCE] unexpected navigateToStep failure", error);
+      const message = "Falha inesperada ao avançar para revisão. Tente novamente.";
+      setStepError(message);
+      console.debug("[STEP3_ADVANCE] before return", { reason: "unexpected exception", stepSnapshot: step, targetStep });
+      console.warn("[STEP3_ADVANCE] blocked before technical consolidation", { reason: "unexpected exception", step, targetStep });
+      return { advanced: false, errorMessage: message };
     }
-    for (let s = step; s < targetStep; s += 1) {
-      const error = validateStep(s);
-      if (error) {
-        setStepError(`Não é possível avançar para a etapa ${targetStep}. ${error}`);
+  }
+
+  async function handleAdvanceFromStep3ToStep4() {
+    console.warn("[STEP3_ADVANCE] click captured", { step, analysisId: activeAnalysisId, workspace: isWorkspaceMode });
+    setStep3AdvanceError(null);
+    setStepError(null);
+    setIsStep3AdvancePending(true);
+
+    try {
+      const result = await navigateToStep(4);
+      if (!result.advanced) {
+        const message = result.errorMessage ?? "Não foi possível avançar para revisão. Verifique os dados da Etapa 3.";
+        setStep3AdvanceError(message);
         return;
       }
+      await workspaceDetailQuery.refetch();
+    } catch (error) {
+      console.error("[STEP3_ADVANCE] failed", error);
+      const message = normalizeTechnicalConsolidationErrorMessage(error);
+      setStep3AdvanceError(message);
+      setStepError(message);
+      return;
+    } finally {
+      setIsStep3AdvancePending(false);
     }
+  }
+
+  async function handleAdvanceFromStep2ToStep3() {
+    console.warn("[STEP2_ADVANCE] click captured", { step, analysisId: activeAnalysisId, workspace: isWorkspaceMode });
     setStepError(null);
-    setStep(targetStep);
-    if (isWorkspaceMode) {
-      persistAnalystComment(analysis.comment);
-    }
-    if (isWorkspaceMode && activeAnalysisId) {
-      const lastCompleted = Math.max(1, targetStep - 1);
-      persistJourneyProgressMutation.mutate({ id: activeAnalysisId, currentStep: targetStep, lastCompletedStep: lastCompleted });
+    setIsStep3AdvancePending(true);
+    try {
+      const result = await navigateToStep(3);
+      if (!result.advanced) {
+        const message = result.errorMessage ?? "Não foi possível avançar para a Mesa de Análise. Verifique os dados da etapa 2.";
+        setStepError(message);
+      }
+    } catch (error) {
+      console.error("[STEP2_ADVANCE] failed", error);
+      const message = normalizeTechnicalConsolidationErrorMessage(error);
+      setStepError(message);
+    } finally {
+      setIsStep3AdvancePending(false);
     }
   }
 
@@ -1343,7 +1752,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   function openImportModal(source: ImportSource) {
     setImportModalSource(source);
     setPendingImportFile(
-      source === "agrisk" ? agriskImport.files[0] ?? null : cofaceImport.files[0] ?? null
+      source === "agrisk"
+        ? agriskImport.files[0] ?? null
+        : source === "agrisk_financial"
+          ? agriskFinancialImport.files[0] ?? null
+          : cofaceImport.files[0] ?? null
     );
     setPendingImportError(null);
     setPendingImportRawFile(null);
@@ -1367,6 +1780,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setPendingImportError("Arquivo inválido. O tamanho máximo permitido é 10 MB.");
       if (importModalSource === "agrisk") {
         setAgriskImport((prev) => ({ ...prev, status: "error", errorMessage: "Falha na leitura do arquivo (tamanho excedido)." }));
+      } else if (importModalSource === "agrisk_financial") {
+        setAgriskFinancialImport((prev) => ({ ...prev, status: "error", errorMessage: "Falha na leitura do arquivo (tamanho excedido)." }));
       } else if (importModalSource === "coface") {
         setCofaceImport((prev) => ({ ...prev, status: "error", errorMessage: "Falha na leitura do arquivo (tamanho excedido)." }));
       }
@@ -1382,12 +1797,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     if (!pendingImportFile) return;
     const importedAt = new Date().toISOString();
 
-    if (importModalSource === "agrisk") {
+    if (importModalSource === "agrisk" || importModalSource === "agrisk_financial") {
       if (!pendingImportRawFile) {
         setPendingImportError("Não foi possível ler o arquivo selecionado.");
         return;
       }
-      setAgriskImport((prev) => ({
+      const targetSource = importModalSource;
+      const setTargetImport = targetSource === "agrisk_financial" ? setAgriskFinancialImport : setAgriskImport;
+      setTargetImport((prev) => ({
         ...prev,
         files: [pendingImportFile],
         status: "processing",
@@ -1400,11 +1817,34 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setPendingImportError(null);
       setPendingImportFile(null);
       setPendingImportRawFile(null);
-      setIsAgriskDataDrawerOpen(false);
+      if (targetSource === "agrisk_financial") {
+        setIsAgriskFinancialDataDrawerOpen(false);
+      } else {
+        setIsAgriskDataDrawerOpen(false);
+      }
       setIsImportModalOpen(false);
       try {
         const response = await readAgriskReport(pendingImportRawFile, sanitizeDigits(customer.cnpj), activeAnalysisId ?? null);
-        setAgriskImport((prev) => ({
+        if (!isExpectedAgriskReport(response, targetSource)) {
+          const detectedLabel = normalizeAgriskReportType(response.report_type ?? response.read_payload?.report_type) === AGRISK_FINANCIAL_ANALYSIS
+            ? "Relatório de Análise Financeira"
+            : "Relatório de Score/Risco";
+          setTargetImport((prev) => ({
+            ...prev,
+            files: [pendingImportFile],
+            status: "invalid",
+            importedAt,
+            errorMessage: `O arquivo foi identificado como ${detectedLabel}. Envie-o na seção correspondente.`,
+            agriskReadId: response.id,
+            agriskReadPayload: response.read_payload,
+            agriskWarnings: response.warnings
+          }));
+          if (isWorkspaceMode) {
+            await Promise.all([step1DocumentsQuery.refetch(), reportReadsQuery.refetch()]);
+          }
+          return;
+        }
+        setTargetImport((prev) => ({
           ...prev,
           files: [pendingImportFile],
           status: response.status,
@@ -1419,20 +1859,22 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         } else {
           await step1DocumentsQuery.refetch();
         }
-        persistWorkspaceStatePatch({
-          imports: {
-            agrisk: {
-              read_id: response.id,
-              status: response.status,
-              imported_at: importedAt,
-              original_filename: pendingImportFile.original_filename,
-              file_size: pendingImportFile.file_size
+        if (isAgriskValidatedStatus(response.status)) {
+          persistWorkspaceStatePatch({
+            imports: {
+              [targetSource === "agrisk_financial" ? "agrisk_financial" : "agrisk"]: {
+                read_id: response.id,
+                status: response.status,
+                imported_at: importedAt,
+                original_filename: pendingImportFile.original_filename,
+                file_size: pendingImportFile.file_size
+              }
             }
-          }
-        });
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ?error.message : "Falha ao processar o relatório AgRisk.";
-        setAgriskImport((prev) => ({ ...prev, status: "error", errorMessage: message }));
+        setTargetImport((prev) => ({ ...prev, status: "error", errorMessage: message }));
       }
       return;
     } else if (importModalSource === "coface") {
@@ -1498,10 +1940,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   function removeImport(source: ImportSource) {
     if (isWorkspaceMode) {
-      const persistedReadId = source === "agrisk" ? agriskImport.agriskReadId : cofaceImport.cofaceReadId;
+      const currentImport =
+        source === "agrisk"
+          ? agriskImport
+          : source === "agrisk_financial"
+            ? agriskFinancialImport
+            : cofaceImport;
+      const persistedReadId = source === "coface" ? currentImport.cofaceReadId : currentImport.agriskReadId;
       if (persistedReadId) {
-        setStepError("Este relatório já está vinculado ao dossiê. Envie um novo arquivo para substituir.");
-        return;
+        if (!canClearLocalImport(currentImport)) {
+          setStepError("Este relatório já está vinculado ao dossiê. Envie um novo arquivo para substituir.");
+          return;
+        }
       }
     }
     const shouldRemove = window.confirm("Deseja remover o relatório importado desta fonte?");
@@ -1510,6 +1960,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setIsAgriskDataDrawerOpen(false);
       setAgriskImport(buildDefaultImportState());
       persistWorkspaceStatePatch({ imports: { agrisk: null } });
+      return;
+    }
+    if (source === "agrisk_financial") {
+      setIsAgriskFinancialDataDrawerOpen(false);
+      setAgriskFinancialImport(buildDefaultImportState());
+      persistWorkspaceStatePatch({ imports: { agrisk_financial: null } });
       return;
     }
     if (source === "coface") {
@@ -1660,6 +2116,133 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     submitMutation.mutate(payload);
   }
 
+  function submitForApproval() {
+    if (!isWorkspaceMode || !activeAnalysisId || activeAnalysisId <= 0) {
+      setStepError("A análise ativa não está disponível para envio à aprovação.");
+      return;
+    }
+    setStepError(null);
+    submitForApprovalMutation.mutate(activeAnalysisId);
+  }
+
+  function toIsoDate(value: string | null | undefined): string | null {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toISOString().slice(0, 10);
+  }
+
+  function normalizeTechnicalConsolidationErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    const normalized = message.toLowerCase();
+    if (normalized.includes("no external data found for this analysis")) {
+      return "Não foi possível consolidar o dossiê técnico. Verifique se há dados importados vinculados à análise.";
+    }
+    if (normalized.includes("score result not found for this analysis")) {
+      return "Não foi possível consolidar o dossiê técnico. O score institucional não foi gerado para esta análise.";
+    }
+    if (normalized.includes("no positive revenue basis available for decision calculation")) {
+      return "Não foi possível consolidar o dossiê técnico. Informe base de receita válida para cálculo da decisão.";
+    }
+    if (normalized.includes("403")) {
+      return "Você não possui autorização para consolidar tecnicamente esta análise.";
+    }
+    if (normalized.includes("422")) {
+      return "Não foi possível consolidar o dossiê técnico. Verifique os dados importados e tente novamente.";
+    }
+    return message || "Não foi possível consolidar o dossiê técnico. Verifique os dados importados e tente novamente.";
+  }
+
+  async function ensureExternalDataEntryForTechnicalCalculation(analysisIdValue: number) {
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[dossie-step3] ensureExternalDataEntryForTechnicalCalculation:start", {
+        analysisId: analysisIdValue,
+        existingEntries: workspaceExternalDataQuery.data?.entries?.length ?? 0,
+      });
+    }
+    const existingEntries = workspaceExternalDataQuery.data?.entries ?? [];
+    if (existingEntries.length > 0) return;
+
+    const agriskRestrictionsCount = Number(agriskImport.agriskReadPayload?.restrictions?.negative_events_count ?? 0);
+    const agriskProtestsCount = Number(agriskImport.agriskReadPayload?.protests?.count ?? 0);
+    const agriskProtestsAmount = Number(agriskImport.agriskReadPayload?.protests?.total_amount ?? 0);
+    const agriskBouncedChecks = agriskImport.agriskReadPayload?.checks_without_funds?.has_records ? 1 : 0;
+    const manualLawsuitsCount = manual.activeLawsuits ? 1 : 0;
+    const manualLawsuitsAmount = manual.activeLawsuits ? Math.max(0, toNumberInput(manual.negativationsAmount)) : 0;
+    const declaredRevenue = Math.max(0, toNumberInput(manualPanel.internalRevenue12m));
+    const declaredIndebtedness = Math.max(0, mappedInternalOpenAmount ?? toNumberInput(manualPanel.outstandingValue));
+    const hasRestrictions =
+      agriskRestrictionsCount > 0 ||
+      agriskProtestsCount > 0 ||
+      agriskBouncedChecks > 0 ||
+      manualLawsuitsCount > 0;
+
+    const payload = {
+      entry_method: "upload" as const,
+      source_type: hasAgriskImported ? ("agrisk" as const) : ("other" as const),
+      report_date: toIsoDate(agriskImport.importedAt ?? cofaceImport.importedAt ?? null),
+      source_score: hasAgriskImported ? Number(agriskImport.agriskReadPayload?.credit?.score ?? 0) : Number(manualPanel.scoreValue ?? 0),
+      source_rating: hasAgriskImported
+        ? (agriskImport.agriskReadPayload?.credit?.rating ?? null)
+        : (manualPanel.scoreSource ? `Manual:${manualPanel.scoreSource}` : null),
+      has_restrictions: hasRestrictions,
+      protests_count: hasRestrictions ? agriskProtestsCount : 0,
+      protests_amount: hasRestrictions ? Math.max(0, agriskProtestsAmount) : 0,
+      lawsuits_count: hasRestrictions ? manualLawsuitsCount : 0,
+      lawsuits_amount: hasRestrictions ? manualLawsuitsAmount : 0,
+      bounced_checks_count: hasRestrictions ? agriskBouncedChecks : 0,
+      declared_revenue: declaredRevenue > 0 ? declaredRevenue : null,
+      declared_indebtedness: declaredIndebtedness > 0 ? declaredIndebtedness : null,
+      notes: [
+        hasAgriskImported ? "AgRisk importado na etapa 2." : "Sem AgRisk importado; base manual consolidada.",
+        hasCofaceImported ? "COFACE importado na etapa 2." : "Sem COFACE importado.",
+        "Entrada gerada automaticamente para viabilizar cálculo canônico de score e decisão."
+      ].join(" ")
+    };
+
+    await createExternalDataEntry(analysisIdValue, payload);
+    await workspaceExternalDataQuery.refetch();
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[dossie-step3] ensureExternalDataEntryForTechnicalCalculation:created", {
+        analysisId: analysisIdValue,
+      });
+    }
+  }
+
+  async function ensureTechnicalDossierCalculatedForStep4() {
+    if (!isWorkspaceMode || !activeAnalysisId || activeAnalysisId <= 0) return;
+    console.warn("[STEP3_ADVANCE] ensure started");
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[dossie-step3] ensureTechnicalDossierCalculatedForStep4:start", {
+        analysisId: activeAnalysisId,
+        step,
+        availableActions: workflowAvailableActions,
+      });
+    }
+    const status = workspaceDetailQuery.data?.analysis?.technical_dossier_status;
+    if (status?.is_completed === true) return;
+    console.warn("[STEP3_ADVANCE] ensuring external data");
+    await ensureExternalDataEntryForTechnicalCalculation(activeAnalysisId);
+    console.warn("[STEP3_ADVANCE] calculating score");
+    console.warn("[STEP3_ADVANCE] calculating decision");
+    await calculateTechnicalDossierMutation.mutateAsync(activeAnalysisId);
+    console.warn("[STEP3_ADVANCE] refetching detail");
+    await workspaceDetailQuery.refetch();
+    console.warn("[STEP3_ADVANCE] ensure completed");
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[dossie-step3] ensureTechnicalDossierCalculatedForStep4:done", {
+        analysisId: activeAnalysisId,
+        motorResult: workspaceDetailQuery.data?.analysis?.motor_result,
+        decisionCalculatedAt: workspaceDetailQuery.data?.analysis?.decision_calculated_at,
+      });
+    }
+  }
+
+  function handleApprovalSubmissionSuccessClose() {
+    setApprovalSubmissionSuccessModalOpen(false);
+    router.push("/analises/monitor?approvalSubmission=success");
+  }
+
   function handleTriageLookup() {
     const digits = sanitizeDigits(customer.cnpj);
     if (digits.length !== 14) {
@@ -1690,7 +2273,25 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const submitBlockingError = isOperationalSubmitOnlyFlow
     ? (validateStep(1) ?? (toNumberInput(analysis.requestedLimit) <= 0 ? "Preencha Limite solicitado com valor maior que zero." : null))
     : (validateStep(1) ?? validateStep(2) ?? validateStep(3));
-  const isSubmitPending = submitMutation.isPending || triageSubmitMutation.isPending;
+  const workflowAvailableActions = workspaceDetailQuery.data?.analysis?.available_actions ?? [];
+  const canSubmitForApproval = isWorkspaceMode && workflowAvailableActions.includes("submit_approval");
+  const technicalDossierStatus = workspaceDetailQuery.data?.analysis?.technical_dossier_status ?? null;
+  const hasCanonicalTechnicalDecision =
+    technicalDossierStatus?.is_completed === true &&
+    workspaceDetailQuery.data?.analysis?.motor_result !== null &&
+    workspaceDetailQuery.data?.analysis?.decision_calculated_at !== null;
+  const shouldShowTechnicalPendingGuidance =
+    isWorkspaceMode &&
+    step === 4 &&
+    !canSubmitForApproval &&
+    Boolean(technicalDossierStatus) &&
+    technicalDossierStatus?.is_completed === false;
+  const isTechnicalDossierCalculationPending = calculateTechnicalDossierMutation.isPending || isStep3AdvancePending;
+  const isSubmitPending =
+    submitMutation.isPending ||
+    triageSubmitMutation.isPending ||
+    submitForApprovalMutation.isPending ||
+    isTechnicalDossierCalculationPending;
   const canSubmitJourney = !submitBlockingError && !isSubmitPending && !isStep1GovernanceBlocked;
   const guaranteeOriginText = hasCofaceCoverageImported
     ? "COFACE (valor de cobertura)"
@@ -2217,6 +2818,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     return Math.max(0, technicalRequestedLimit * scoreFactor);
   })();
   const recommendationClassification = backendRecommendationClassification;
+  const step4RecommendationClassification = hasCanonicalTechnicalDecision ? recommendationClassification : null;
+  const step4DisplayedRecommendedLimit = hasCanonicalTechnicalDecision ? executiveDisplayedRecommendedLimit : null;
   const recommendationClassificationLabel = (() => {
     const label = recommendationClassification?.label;
     return typeof label === "string" && label.trim() ? label : null;
@@ -2249,11 +2852,17 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     : mappedInternalOverdue > 0
       ? "Overdue interno identificado"
       : "Sem overdue interno relevante";
-  const insightRiskPrimary = institutionalScore !== null
+  const insightRiskPrimary = !hasCanonicalTechnicalDecision
+    ? "Cálculo técnico pendente"
+    : institutionalScore !== null
     ? `${insightRiskProfileText} · Score ${insightRiskScoreText}`
     : "Perfil não identificado";
-  const insightRiskSecondary = `Limite Calculado: ${insightRiskLimitText}`;
-  const insightCofacePrimary = technicalCoverageValue !== null
+  const insightRiskSecondary = !hasCanonicalTechnicalDecision
+    ? "Execute score e decisão técnica para consolidar o limite."
+    : `Limite Calculado: ${insightRiskLimitText}`;
+  const insightCofacePrimary = !hasCanonicalTechnicalDecision
+    ? "Cobertura será aplicada após cálculo técnico."
+    : technicalCoverageValue !== null
     ? `Cobertura ativa: ${insightCofaceCoverageText}`
     : "Sem cobertura COFACE identificada";
   const cofaceCoverageLimitedRecommendation =
@@ -2262,7 +2871,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     executiveDisplayedRecommendedLimit !== null &&
     preliminaryRiskLimitValue > technicalCoverageValue &&
     Math.abs(executiveDisplayedRecommendedLimit - technicalCoverageValue) < 1;
-  const insightCofaceSecondary = technicalCoverageValue !== null
+  const insightCofaceSecondary = !hasCanonicalTechnicalDecision
+    ? "A recomendação final ainda não está persistida."
+    : technicalCoverageValue !== null
     ? cofaceCoverageLimitedRecommendation
       ? "Recomendação limitada à cobertura disponível"
       : "Cobertura suficiente para suportar a recomendação"
@@ -2286,13 +2897,17 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     coverageLimitValue !== null &&
     Math.abs(recommendedLimitValue - currentApprovedLimit) < 1 &&
     recommendedLimitValue <= coverageLimitValue;
-  const insightExposurePrimary = executiveNetInternalExposure === null
+  const insightExposurePrimary = !hasCanonicalTechnicalDecision
+    ? "Exposição pendente de cálculo"
+    : executiveNetInternalExposure === null
     ? "Sem dado disponível"
     : executiveNetInternalExposure > 0
       ? "Exposição residual identificada"
       : "Sem exposição residual";
   const insightExposureSecondary =
-    executiveNetInternalExposure !== null && executiveNetInternalExposure > 0
+    !hasCanonicalTechnicalDecision
+      ? "Finalize o cálculo técnico para apurar impacto e exposição residual."
+      : executiveNetInternalExposure !== null && executiveNetInternalExposure > 0
       ? `Exposição residual: ${insightExposureText}`
       : isMaintenanceWithinCoverage
         ? "Limite mantido dentro da cobertura disponível"
@@ -2305,8 +2920,12 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               : impactValue !== null
                 ? `${impactValue > 0 ? "Incremento aprovado" : "Redução recomendada"}: ${impactValue > 0 ? "+" : ""}${insightImpactText}`
                 : "Sem dado disponível";
-  const insightOverduePrimary = insightOverdueMessage;
-  const insightOverdueSecondary = mappedInternalOverdue === null
+  const insightOverduePrimary = !hasCanonicalTechnicalDecision
+    ? "Overdue aguardando consolidação técnica"
+    : insightOverdueMessage;
+  const insightOverdueSecondary = !hasCanonicalTechnicalDecision
+    ? "A leitura final será exibida após o cálculo canônico."
+    : mappedInternalOverdue === null
     ? "Sem dado disponível"
     : mappedInternalOverdue > 0
       ? `Overdue atual: ${insightOverdueText}`
@@ -3106,14 +3725,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       ) : null}
 
       {step === 2 && !isOperationalSubmitOnlyFlow ?(
-        <div className={`flex items-center gap-3 bg-white ${step === 4 ?"h-[44px] border-b border-[#D7E1EC] px-7" : "rounded-[10px] border border-[#D7E1EC] px-5 py-3"}`}>
+        <div className="flex items-center gap-3 rounded-[10px] border border-[#D7E1EC] bg-white px-5 py-3">
           <div className="mr-1 text-[11px] text-[#8FA3B4]">Cliente da solicitação</div>
-          <div className={`flex items-center justify-center rounded-[6px] text-[10px] font-bold ${step === 4 ?"h-[26px] w-[26px] bg-[#295B9A] text-white" : "h-7 w-7 bg-[#EEF3F8] text-[#295B9A]"}`}>
+          <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-[#EEF3F8] text-[10px] font-bold text-[#295B9A]">
             {toInitials(customer.companyName || "Cliente")}
           </div>
           <div className="text-[13px] font-semibold text-[#102033]">{customer.companyName || "Cliente não informado"}</div>
           <div className="text-[11px] text-[#4F647A]">{customer.cnpj || "CNPJ não informado"}</div>
-          <div className={`ml-auto rounded-full bg-[#EEF3F8] px-2.5 py-1 font-medium ${step === 4 ?"text-[11px] text-[#295B9A]" : "text-[10px] text-[#4F647A]"}`}>Etapa {step} de 4</div>
+          <div className="ml-auto rounded-full bg-[#EEF3F8] px-2.5 py-1 text-[10px] font-medium text-[#4F647A]">Etapa {step} de 4</div>
         </div>
       ) : null}
 
@@ -3165,116 +3784,39 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             {step === 2 ? (
             <>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <button
-                type="button"
-                onClick={() => openImportModal("agrisk")}
+              <div
                 className={`relative flex h-full flex-col rounded-[16px] border-2 ${
-                  agriskImport.status !== "empty" ? "border-[#10B981]" : "border-[#295B9A]"
-                } bg-white p-6 text-left transition hover:-translate-y-0.5 ${
-                  agriskImport.status !== "empty" ?"cursor-pointer hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]" : ""
-                }`}
+                  agriskImport.status !== "empty" || agriskFinancialImport.status !== "empty" ? "border-[#10B981]" : "border-[#295B9A]"
+                } bg-white px-4 pb-3 pt-4 text-left transition hover:-translate-y-0.5 hover:shadow-[0_10px_30px_rgba(16,32,51,0.08)]`}
               >
-                {agriskImport.status === "empty" ?(
-                  <>
-                    <span className="absolute left-6 top-0 -translate-y-1/2 rounded-full bg-[#295B9A] px-3 py-1 text-[10px] font-semibold text-white">Principal</span>
-                    <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#EEF3F8]">
-                      <Upload className="h-5 w-5 text-[#295B9A]" />
-                    </div>
-                    <p className="mb-1 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
-                    <p className="mb-2 text-[15px] font-semibold text-[#102033]">Importação Agrisk</p>
-                    <p className="flex-1 text-[12px] leading-relaxed text-[#4F647A]">
-                      Importe o relatório exportado da Agrisk para leitura automática e estruturação dos dados de crédito.
-                    </p>
-                    <p className="mt-2 border-t border-[#EEF3F8] pt-2 text-[11px] leading-relaxed text-[#8FA3B4]">
-                      O sistema identifica automaticamente score, restrições e indicadores relevantes para a análise.
-                    </p>
-                    <span className="mt-4 inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
-                      Importar relatório Agrisk <ChevronRight className="ml-1 h-3.5 w-3.5" />
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <div className="mb-3 flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
-                        <p className="text-[15px] font-semibold text-[#102033]">Importação Agrisk</p>
-                      </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${importStatusBadgeClass(agriskImport.status)}`}>
-                        {agriskStatusBadgeLabel(agriskImport)}
-                      </span>
-                    </div>
-                    <div className="mb-3 flex flex-1 flex-col justify-between rounded-[10px] border border-[#D7E1EC] bg-[#F8FBFF] p-3">
-                      <div>
-                        <p className="text-[10px] font-medium uppercase tracking-[0.5px] text-[#8FA3B4]">{importMonitorSourceName("agrisk")}</p>
-                        <p className="mt-1 text-[11px] font-semibold text-[#102033]">{importMonitorTitle("agrisk")}</p>
-                        <p className="mt-1 truncate text-[11px] text-[#102033]">{agriskImport.files[0]?.original_filename ?? "Sem arquivo vinculado"}</p>
-                        <p className="text-[10px] text-[#64748B]">
-                          {agriskImport.files[0] ?`${formatFileSize(agriskImport.files[0].file_size)} · ${agriskImport.importedAt ?`Importado em ${formatImportedAt(agriskImport.importedAt)}` : "Importado"}` : agriskImport.errorMessage ?? "Falha na leitura do arquivo."}
-                        </p>
-                        <p className="mt-1 text-[10px] text-[#4F647A]">{importMonitorValueText("agrisk")}</p>
-                        {agriskImport.status === "valid" ?(
-                          <p className="mt-1 text-[10px] text-[#4F647A]">Relatório validado e pronto para análise.</p>
-                        ) : null}
-                        {agriskImport.status === "valid_with_warnings" ?(
-                          <>
-                            <p className="mt-1 text-[10px] text-[#92400E]">Relatório validado com alertas de leitura.</p>
-                            <p className="mt-1 text-[10px] text-[#4F647A]">Confira os detalhes em Ver dados importados.</p>
-                          </>
-                        ) : null}
-                        {!isAgriskValidatedStatus(agriskImport.status) && !(agriskImport.status === "invalid" && isDocumentDivergenceMessage(agriskImport.errorMessage)) ?(
-                          <p className={`mt-1 text-[10px] ${agriskImport.status === "invalid" || agriskImport.status === "error" ?"text-[#B91C1C]" : "text-[#4F647A]"}`}>
-                            {importMonitorStatusText("agrisk", agriskImport.status)}
-                          </p>
-                        ) : null}
-                        {!isAgriskValidatedStatus(agriskImport.status) && agriskImport.errorMessage && !isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
-                          <p className={`mt-1 text-[10px] ${agriskImport.status === "invalid" ?"text-[#B91C1C]" : "text-[#4F647A]"}`}>
-                            {agriskImport.errorMessage}
-                          </p>
-                        ) : null}
-                        {agriskImport.status === "invalid" && isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
-                          <p className="mt-1 text-[10px] text-[#B91C1C]">
-                            O CNPJ do relatório não corresponde ao cliente informado.
-                          </p>
-                        ) : null}
-                        {(agriskImport.status === "invalid" || agriskImport.status === "error") && !isDocumentDivergenceMessage(agriskImport.errorMessage) ?(
-                          <p className="mt-1 text-[10px] text-[#B91C1C]">
-                            Este relatório não será considerado apto para análise até ser substituído.
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-medium">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            removeImport("agrisk");
-                          }}
-                          className="rounded-[8px] border border-[#F5D0D0] px-3 py-1.5 text-[#B91C1C] transition hover:bg-[#FEF2F2]"
-                        >
-                          {removeActionLabel("agrisk")}
-                        </button>
-                        {isAgriskValidatedStatus(agriskImport.status) && agriskImport.agriskReadPayload ?(
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setIsAgriskDataDrawerOpen(true);
-                            }}
-                            className="rounded-[8px] border border-[#D7E1EC] bg-white px-3 py-1.5 text-[11px] font-medium text-[#295B9A]"
-                          >
-                            Ver dados importados
-                          </button>
-                        ) : null}
-                        {(agriskImport.status === "invalid" || agriskImport.status === "error") ?(
-                          <span className="inline-flex items-center justify-center rounded-[9px] bg-[#295B9A] px-4 py-2 text-[12px] font-medium text-white">
-                            Substituir relatório <ChevronRight className="ml-1 h-3.5 w-3.5" />
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </button>
+                <span className="absolute left-4 top-0 -translate-y-1/2 rounded-full bg-[#295B9A] px-3 py-1 text-[10px] font-semibold text-white">Principal</span>
+                <div className="mb-1.5 flex items-start gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#EEF3F8]">
+                    <Upload className="h-3.5 w-3.5 text-[#295B9A]" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="mb-0.5 text-[10px] uppercase tracking-[0.6px] text-[#8FA3B4]">Consulta externa</p>
+                    <p className="text-[15px] font-semibold text-[#102033]">Agrisk</p>
+                    <p className="mt-0.5 text-[11px] leading-snug text-[#4F647A]">Score/riscos e análise financeira.</p>
+                  </div>
+                </div>
+                <div className="divide-y divide-[#EEF3F8]">
+                  <AgriskSubreportPanel
+                    source="agrisk"
+                    state={agriskImport}
+                    onImport={() => openImportModal("agrisk")}
+                    onRemove={() => removeImport("agrisk")}
+                    onView={() => setIsAgriskDataDrawerOpen(true)}
+                  />
+                  <AgriskSubreportPanel
+                    source="agrisk_financial"
+                    state={agriskFinancialImport}
+                    onImport={() => openImportModal("agrisk_financial")}
+                    onRemove={() => removeImport("agrisk_financial")}
+                    onView={() => setIsAgriskFinancialDataDrawerOpen(true)}
+                  />
+                </div>
+              </div>
 
               <button
                 type="button"
@@ -3573,14 +4115,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 <div className="mb-5 flex items-start justify-between">
                   <div>
                     <p className="text-[16px] font-semibold text-[#102033]">
-                      {importModalSource === "agrisk"
-                        ?"Importar relatório Agrisk"
-                        : "Importar relatório COFACE"}
+                      {importModalSource === "coface"
+                        ? "Importar relatório COFACE"
+                        : importModalSource === "agrisk_financial"
+                          ? "Importar análise financeira Agrisk"
+                          : "Importar relatório Agrisk"}
                     </p>
                     <p className="text-[12px] text-[#4F647A]">
-                      {importModalSource === "agrisk"
-                        ?"Selecione ou arraste o arquivo exportado da Agrisk para processamento automático."
-                        : "Selecione ou arraste o arquivo exportado da COFACE para leitura automática do DRA e indicadores de risco."}
+                      {importModalSource === "coface"
+                        ? "Selecione ou arraste o arquivo exportado da COFACE para leitura automática do DRA e indicadores de risco."
+                        : importModalSource === "agrisk_financial"
+                          ? "Selecione ou arraste o Relatório de Análise Financeira exportado da Agrisk."
+                          : "Selecione ou arraste o Relatório de Score/Risco exportado da Agrisk."}
                     </p>
                   </div>
                   <button type="button" onClick={() => setIsImportModalOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
@@ -3612,9 +4158,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                     </div>
                     <div className="mt-3 flex items-center gap-2 rounded-[8px] border border-[#CFE0F4] bg-white px-3 py-2 text-[11px] text-[#295B9A]">
                       <Check className="h-3.5 w-3.5" />
-                      {importModalSource === "agrisk"
-                        ?"Pronto para importação. A validação do CNPJ será realizada após clicar em Importar."
-                        : "Pronto para importação."}
+                      {importModalSource === "coface"
+                        ? "Pronto para importação."
+                        : "Pronto para importação. O tipo de relatório e o CNPJ serão validados após clicar em Importar."}
                     </div>
                   </div>
                 ) : (
@@ -3758,6 +4304,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 </div>
               </div>
             </div>
+          ) : null}
+
+          {isAgriskFinancialDataDrawerOpen ?(
+            <AgriskFinancialDrawer state={agriskFinancialImport} onClose={() => setIsAgriskFinancialDataDrawerOpen(false)} />
           ) : null}
 
           {isCofaceDataDrawerOpen ?(
@@ -4040,7 +4590,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 <div className="mt-4 rounded-[18px] border border-[#D7E6F6] bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F6FD_100%)] p-4">
                   <p className="text-[16px] font-extrabold text-[#0b1f3a]">Dossiê técnico consolidado</p>
                   <p className="mt-2 max-w-[560px] text-[13px] leading-relaxed text-[#475569]">O dossiê consolida score institucional, parecer técnico, mitigadores, exposição, condições recomendadas e trilha decisória para submissão à aprovação.</p>
-                  <button type="button" onClick={() => navigateToStep(4)} className="mt-4 inline-flex items-center rounded-full bg-[#0b1f3a] px-5 py-2.5 text-[13px] font-extrabold text-white">Avançar para revisão</button>
+                  <button type="button" onClick={handleAdvanceFromStep3ToStep4} disabled={isTechnicalDossierCalculationPending} className="mt-4 inline-flex items-center rounded-full bg-[#0b1f3a] px-5 py-2.5 text-[13px] font-extrabold text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]">{isTechnicalDossierCalculationPending ? "Consolidando dossiê..." : "Avançar para revisão"}</button>
+                  {isTechnicalDossierCalculationPending ? (
+                    <p className="mt-2 text-[12px] text-[#475569]">Consolidando dossiê técnico. Aguarde...</p>
+                  ) : null}
+                  {step3AdvanceError ? (
+                    <p className="mt-2 text-[12px] text-[#b91c1c]">{step3AdvanceError}</p>
+                  ) : null}
                 </div>
               </article>
             </aside>
@@ -4105,30 +4661,37 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           <div className="mt-5 grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
             <div className="self-start space-y-3">
               {(() => {
-                const recommended = executiveDisplayedRecommendedLimit ?? 0;
+                const recommended = step4DisplayedRecommendedLimit ?? 0;
                 const requested = technicalRequestedLimit;
                 const exposureResidual = executiveNetInternalExposure ?? 0;
                 const hasCoverage = technicalCoverageValue !== null && technicalCoverageValue > 0;
-                const recommendationLabel =
-                  recommendationClassificationLabel ?? (
-                    recommended <= 0
-                      ? "Reprovação recomendada"
-                      : requested > 0 && recommended < requested
-                        ? "Aprovação parcial recomendada"
-                        : "Aprovação integral recomendada"
-                  );
-                const recommendationCode = typeof recommendationClassification?.code === "string"
-                  ? recommendationClassification.code
+                const recommendationLabel = hasCanonicalTechnicalDecision
+                  ? (
+                    recommendationClassificationLabel ?? (
+                      recommended <= 0
+                        ? "Reprovação recomendada"
+                        : requested > 0 && recommended < requested
+                          ? "Aprovação parcial recomendada"
+                          : "Aprovação integral recomendada"
+                    )
+                  )
+                  : "Decisão técnica pendente de cálculo";
+                const recommendationCode = typeof step4RecommendationClassification?.code === "string"
+                  ? step4RecommendationClassification.code
                   : null;
                 const hideRecommendedLimitInHeader = recommendationCode === "maintain_current_limit";
                 const recommendationToneClass =
-                  recommendationLabel === "Reprovação recomendada"
+                  !hasCanonicalTechnicalDecision
+                    ? "text-[#92400e]"
+                    : recommendationLabel === "Reprovação recomendada"
                     ? "text-[#9f1239]"
                     : recommendationLabel === "Aprovação parcial recomendada" || recommendationLabel === "Manutenção do limite atual recomendada" || recommendationLabel === "Manutenção do Limite Atual"
                       ? "text-[#92400e]"
                       : "text-[#166534]";
-                const classificationJustification = recommendationClassification?.justification;
-                const executiveRationale = typeof classificationJustification === "string" && classificationJustification.trim()
+                const classificationJustification = step4RecommendationClassification?.justification;
+                const executiveRationale = !hasCanonicalTechnicalDecision
+                  ? "A recomendação final será exibida após concluir o cálculo canônico de score e decisão técnica."
+                  : typeof classificationJustification === "string" && classificationJustification.trim()
                   ? classificationJustification
                   : hasCoverage && exposureResidual <= 0
                   ? "Cobertura COFACE integral mitigando a exposição da operação."
@@ -4137,8 +4700,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                     : hasCoverage
                       ? "Cobertura COFACE considerada na recomendação final submetida para aprovação."
                       : "Recomendação fundamentada no limite institucional preliminar e nos insumos consolidados da análise.";
-                const currentApprovedLimitFromBackend = toNullableNumeric(recommendationClassification?.current_approved_limit);
-                const shouldShowCurrentLimit = recommendationClassification?.show_current_limit === true && currentApprovedLimitFromBackend !== null && currentApprovedLimitFromBackend > 0;
+                const currentApprovedLimitFromBackend = toNullableNumeric(step4RecommendationClassification?.current_approved_limit);
+                const shouldShowCurrentLimit = step4RecommendationClassification?.show_current_limit === true && currentApprovedLimitFromBackend !== null && currentApprovedLimitFromBackend > 0;
 
                 return (
                   <article className="w-full self-start">
@@ -4149,7 +4712,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         <p className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.13em] ${recommendationToneClass}`}>Recomendação final</p>
                         <p className="mt-2 text-[24px] font-black leading-[1.18] tracking-[-0.014em] text-[#0f2747]">
                           {recommendationLabel}
-                          {!hideRecommendedLimitInHeader ? (
+                          {hasCanonicalTechnicalDecision && !hideRecommendedLimitInHeader ? (
                             <>
                               {" "}
                               <span className="font-semibold text-[#33506f]">·</span>{" "}
@@ -4168,7 +4731,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                           {" · "}
                           <span className="font-semibold text-[#334155]">COFACE:</span> <span className="font-semibold text-[#0f2747]">{technicalCoverageValue !== null ? formatCurrencyBRLCompactExecutive(technicalCoverageValue) : "—"}</span>
                           {" · "}
-                          <span className="font-semibold text-[#334155]">Exposição residual:</span> <span className="font-semibold text-[#0f2747]">{formatCurrencyBRLCompactExecutive(exposureResidual)}</span>
+                          <span className="font-semibold text-[#334155]">Exposição residual:</span> <span className="font-semibold text-[#0f2747]">{hasCanonicalTechnicalDecision ? formatCurrencyBRLCompactExecutive(exposureResidual) : "—"}</span>
                         </p>
                         <p className="mt-1.5 text-[12px] leading-[1.55] text-[#2f4157]">
                           <span className="font-semibold text-[#334155]">Justificativa:</span> {executiveRationale}
@@ -4568,6 +5131,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           </div>
 
           {submitMutation.isError ? <p className="mt-3 text-[12px] text-[#b91c1c]">{submitMutation.error.message}</p> : null}
+          {submitForApprovalMutation.isError && stepError ? <p className="mt-3 text-[12px] text-[#b91c1c]">{stepError}</p> : null}
         </div>
       ) : null}
 
@@ -4585,13 +5149,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             </button>
             <button
               type="button"
-              onClick={() => navigateToStep(3)}
-              disabled={!hasStep2Source}
+              onClick={handleAdvanceFromStep2ToStep3}
+              disabled={!hasStep2Source || isTechnicalDossierCalculationPending}
               className="inline-flex items-center rounded-[8px] bg-[#0D1B2A] px-5 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
             >
-              Avançar · Mesa de análise <ChevronRight className="ml-1 h-3.5 w-3.5" />
+              {isTechnicalDossierCalculationPending ? "Consolidando dados técnicos..." : <>Avançar · Mesa de análise <ChevronRight className="ml-1 h-3.5 w-3.5" /></>}
             </button>
           </div>
+          {stepError ? (
+            <div className="w-full rounded-[8px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#b91c1c]">
+              {stepError}
+            </div>
+          ) : null}
         </div>
       ) : step === 3 && !isOperationalSubmitOnlyFlow ?(
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#D7E1EC] bg-white px-7 py-4">
@@ -4606,34 +5175,69 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             </button>
             <button
               type="button"
-              onClick={() => navigateToStep(4)}
-              disabled={!canContinue}
+              onClick={handleAdvanceFromStep3ToStep4}
+              disabled={!canContinue || isTechnicalDossierCalculationPending}
               className="rounded-[8px] bg-[#0b1f3a] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
             >
-              Avançar para revisão
+              {isTechnicalDossierCalculationPending ? "Consolidando dossiê..." : "Avançar para revisão"}
             </button>
           </div>
+          {stepError ? (
+            <div className="w-full rounded-[8px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] text-[#b91c1c]">
+              {stepError}
+            </div>
+          ) : null}
         </div>
       ) : step === 4 && !isOperationalSubmitOnlyFlow ?(
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#D7E1EC] bg-white px-7 py-4">
-          <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
-            <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[#8FA3B4] text-[9px]">i</span>
-            Ao enviar, o motor de crédito será acionado automaticamente com as informações consolidadas.
+        <div className="mt-2 border-t border-[#D7E1EC] bg-white px-7 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
+              <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[#8FA3B4] text-[9px]">i</span>
+              {isWorkspaceMode
+                ? "Ao enviar, o dossiê técnico será encaminhado para a alçada de aprovação."
+                : "Ao enviar, o motor de crédito será acionado automaticamente com as informações consolidadas."}
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setStep(3)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-5 py-2 text-[12px] font-medium text-[#4F647A]">
+                <ChevronLeft className="mr-1 inline h-3.5 w-3.5" />
+                Voltar
+              </button>
+              {isWorkspaceMode ? (
+                canSubmitForApproval ? (
+                  <button
+                    type="button"
+                    onClick={submitForApproval}
+                    disabled={isSubmitPending}
+                    className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
+                  >
+                    {isSubmitPending ? "Enviando..." : "Enviar para aprovação"}
+                  </button>
+                ) : null
+              ) : (
+                <button
+                  type="button"
+                  onClick={submit}
+                  disabled={!canSubmitJourney}
+                  className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
+                >
+                  {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setStep(3)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-5 py-2 text-[12px] font-medium text-[#4F647A]">
-              <ChevronLeft className="mr-1 inline h-3.5 w-3.5" />
-              Voltar
-            </button>
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!canSubmitJourney}
-              className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
-            >
-              {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
-            </button>
-          </div>
+          {shouldShowTechnicalPendingGuidance ? (
+            <div className="mt-3 rounded-[10px] border border-[#FDE68A] bg-[#FFFBEB] p-3">
+              <p className="text-[12px] font-semibold text-[#92400E]">Envio para aprovação indisponível no momento</p>
+              <p className="mt-1 text-[12px] text-[#92400E]">{technicalDossierStatus?.display_message}</p>
+              <ul className="mt-2 space-y-1.5">
+                {(technicalDossierStatus?.missing_requirements ?? []).map((item) => (
+                  <li key={item.code} className="text-[12px] text-[#78350F]">
+                    <span className="font-medium">{item.label}:</span> {item.description}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="flex items-center justify-between rounded-[10px] border border-[#e2e5eb] bg-white p-3">
@@ -4646,10 +5250,21 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
               </button>
             ) : (
-              <button type="button" onClick={() => navigateToStep(Math.min(4, step + 1))} disabled={!canContinue} className="rounded-[6px] bg-[#1a2b5e] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
+              <button
+                type="button"
+                onClick={step === 2 ? handleAdvanceFromStep2ToStep3 : step === 3 ? handleAdvanceFromStep3ToStep4 : () => navigateToStep(Math.min(4, step + 1))}
+                disabled={!canContinue || ((step === 2 || step === 3) && isTechnicalDossierCalculationPending)}
+                className="rounded-[6px] bg-[#1a2b5e] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50"
+              >
                 Avançar
               </button>
             )
+          ) : isWorkspaceMode ? (
+            canSubmitForApproval ? (
+              <button type="button" onClick={submitForApproval} disabled={isSubmitPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
+                {isSubmitPending ? "Enviando..." : "Enviar para aprovação"}
+              </button>
+            ) : null
           ) : (
             <button type="button" onClick={submit} disabled={isSubmitPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
               {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
@@ -4658,6 +5273,25 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         </div>
       )}
       </div>
+      {approvalSubmissionSuccessModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-md [animation:overlayFadeIn_.18s_ease-out]">
+          <div className="w-full max-w-[560px] rounded-[20px] border border-[#D7E1EC] bg-white p-7 shadow-[0_22px_60px_rgba(2,6,23,0.28)] [animation:modalIn_.2s_ease-out]">
+            <h3 className="text-[20px] font-semibold text-[#102033]">Solicitação enviada para aprovação</h3>
+            <p className="mt-3 text-[14px] leading-[1.6] text-[#4F647A]">
+              O dossiê foi encaminhado para a alçada aprovadora. Você pode acompanhar o andamento pelo Monitor de Solicitações.
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleApprovalSubmissionSuccessClose}
+                className="rounded-[10px] bg-[#1EBD6A] px-5 py-2 text-[13px] font-medium text-white"
+              >
+                Ir para o Monitor
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {triageModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-md [animation:overlayFadeIn_.18s_ease-out]">
           <div className="flex max-h-[90vh] w-full max-w-[620px] flex-col overflow-hidden rounded-[20px] border border-[#D7E1EC] bg-white shadow-[0_22px_60px_rgba(2,6,23,0.28)] [animation:modalIn_.2s_ease-out]">

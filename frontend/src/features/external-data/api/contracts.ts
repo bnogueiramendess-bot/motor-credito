@@ -45,3 +45,20 @@ export type ExternalDataDashboardApiResponse = {
   events: DecisionEventDto[];
   entries: ExternalDataEntryDashboardDto[];
 };
+
+export type ExternalDataEntryCreateRequest = {
+  entry_method: EntryMethod;
+  source_type: SourceType;
+  report_date?: string | null;
+  source_score?: number | null;
+  source_rating?: string | null;
+  has_restrictions?: boolean;
+  protests_count?: number;
+  protests_amount?: number;
+  lawsuits_count?: number;
+  lawsuits_amount?: number;
+  bounced_checks_count?: number;
+  declared_revenue?: number | null;
+  declared_indebtedness?: number | null;
+  notes?: string | null;
+};

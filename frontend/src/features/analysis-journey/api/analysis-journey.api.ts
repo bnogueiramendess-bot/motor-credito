@@ -106,7 +106,7 @@ export async function downloadAnalysisDocument(analysisId: number, documentId: n
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(payload.detail ?? "Arquivo indisponÃ­vel no momento.");
+    throw new Error(payload.detail ?? "Arquivo indisponível no momento.");
   }
   return response;
 }
@@ -128,7 +128,7 @@ export async function deleteCommercialReference(analysisId: number, referenceId:
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(payload.detail ?? "Falha ao remover referÃªncia comercial.");
+    throw new Error(payload.detail ?? "Falha ao remover referência comercial.");
   }
 }
 
@@ -138,13 +138,13 @@ function toBase64(file: File) {
     reader.onload = () => {
       const result = reader.result;
       if (typeof result !== "string") {
-        reject(new Error("NÃ£o foi possÃ­vel ler o arquivo em base64."));
+        reject(new Error("Não foi possível ler o arquivo em base64."));
         return;
       }
       const commaIndex = result.indexOf(",");
       resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
     };
-    reader.onerror = () => reject(new Error("NÃ£o foi possÃ­vel ler o arquivo."));
+    reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
     reader.readAsDataURL(file);
   });
 }
@@ -166,7 +166,7 @@ export async function readAgriskReport(file: File, customerDocumentNumber: strin
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(payload.detail ?? "Falha ao processar o relatÃ³rio AgRisk.");
+    throw new Error(payload.detail ?? "Falha ao processar o relatório AgRisk.");
   }
 
   return (await response.json()) as AgriskReportReadResponse;
@@ -193,7 +193,7 @@ export async function readCofaceReport(file: File, customerDocumentNumber: strin
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(payload.detail ?? "Falha ao processar o relatÃ³rio COFACE.");
+    throw new Error(payload.detail ?? "Falha ao processar o relatório COFACE.");
   }
 
   return (await response.json()) as CofaceReportReadResponse;

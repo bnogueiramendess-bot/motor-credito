@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.models.credit_report_read import CreditReportRead
 from app.schemas.credit_report_read import AgriskReportReadCreate
-from app.services.credit_report_readers.agrisk import read_agrisk_report
+from app.services.credit_report_readers.agrisk_dispatcher import read_agrisk_report_auto
+from app.services.credit_report_readers.agrisk_types import get_agrisk_report_type_from_payload
 
 
 def _strip_nul_chars(value: str | None) -> str | None:
@@ -103,7 +104,7 @@ def create_agrisk_report_read(
     try:
         file_bytes = base64.b64decode(payload.file_content_base64)
         raw_text = _extract_pdf_text(file_bytes)
-        read_result = read_agrisk_report(raw_text)
+        read_result = read_agrisk_report_auto(raw_text)
         read_payload = _sanitize_json_value(read_result.model_dump())
         report_document = normalize_document_digits(read_result.company.document)
         warnings = [
@@ -121,8 +122,9 @@ def create_agrisk_report_read(
         entry.report_document_number = report_document or None
         entry.is_document_match = is_match
         entry.validation_message = _strip_nul_chars(validation_message)
-        entry.score_primary = read_result.credit.score
-        entry.score_source = _strip_nul_chars(read_result.credit.score_source)
+        credit_payload = read_payload.get("credit") if isinstance(read_payload, dict) else {}
+        entry.score_primary = credit_payload.get("score") if isinstance(credit_payload, dict) else None
+        entry.score_source = _strip_nul_chars(credit_payload.get("score_source") if isinstance(credit_payload, dict) else None)
         entry.warnings_json = warnings
         entry.confidence = read_result.read_quality.confidence
         entry.read_payload_json = read_payload
@@ -140,3 +142,8 @@ def create_agrisk_report_read(
     db.commit()
     db.refresh(entry)
     return entry
+
+
+def resolve_agrisk_report_type(entry: CreditReportRead) -> str:
+    payload = entry.read_payload_json if isinstance(entry.read_payload_json, dict) else {}
+    return get_agrisk_report_type_from_payload(payload)

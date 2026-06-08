@@ -106,6 +106,8 @@ class AgriskReportReadSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: Literal["agrisk"] = "agrisk"
+    report_type: Literal["AGRISK_SCORE_RISK"] = "AGRISK_SCORE_RISK"
+    schema_version: int = 1
     company: AgriskCompanySchema
     credit: AgriskCreditSchema
     restrictions: AgriskRestrictionsSchema

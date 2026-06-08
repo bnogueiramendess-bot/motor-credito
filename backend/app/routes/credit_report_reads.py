@@ -18,17 +18,20 @@ from app.schemas.credit_report_read import (
     CofaceReportReadResponse,
 )
 from app.services.bu_scope import assert_bu_in_scope, get_user_allowed_business_units, resolve_analysis_business_unit, user_has_all_bu_scope
-from app.services.credit_report_readers.agrisk_upload import create_agrisk_report_read
+from app.services.credit_report_readers.agrisk_upload import create_agrisk_report_read, resolve_agrisk_report_type
 from app.services.credit_report_readers.coface_upload import create_coface_report_read
+from app.services.report_links import upsert_agrisk_report_link
 
 router = APIRouter(prefix="/credit-report-reads", tags=["credit-report-reads"])
 logger = logging.getLogger(__name__)
 
 
 def _to_response(entry: CreditReportRead) -> AgriskReportReadResponse:
+    report_type = resolve_agrisk_report_type(entry)
     return AgriskReportReadResponse(
         id=entry.id,
         source_type="agrisk",
+        report_type=report_type,  # type: ignore[arg-type]
         status=entry.status,  # type: ignore[arg-type]
         original_filename=entry.original_filename,
         mime_type=entry.mime_type,
@@ -122,6 +125,7 @@ def create_agrisk_read(
     current: CurrentUser = Depends(require_permissions(["credit.dossier.edit"])),
 ) -> AgriskReportReadResponse:
     analysis_id = payload.analysis_id
+    document: AnalysisDocument | None = None
     if analysis_id is not None:
         analysis = db.get(CreditAnalysis, analysis_id)
         if analysis is None:
@@ -129,16 +133,6 @@ def create_agrisk_read(
         _enforce_analysis_scope_or_403(db, current, analysis)
         try:
             document = _persist_analysis_report_document(db=db, analysis=analysis, source_type="agrisk", payload=payload, current=current)
-            memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
-            links = memory.get("report_links") if isinstance(memory.get("report_links"), dict) else {}
-            links["agrisk"] = {
-                "analysis_document_id": document.id,
-                "updated_at": document.uploaded_at.isoformat() if document.uploaded_at else None,
-            }
-            memory["report_links"] = links
-            analysis.decision_memory_json = memory
-            db.commit()
-            db.refresh(analysis)
         except Exception:
             db.rollback()
             logger.exception("Falha ao persistir documento oficial do relatorio AgRisk para analysis_id=%s", analysis_id)
@@ -149,13 +143,16 @@ def create_agrisk_read(
         analysis = db.get(CreditAnalysis, analysis_id)
         if analysis is not None:
             try:
-                memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
-                links = memory.get("report_links") if isinstance(memory.get("report_links"), dict) else {}
-                source_link = links.get("agrisk") if isinstance(links.get("agrisk"), dict) else {}
-                source_link["read_id"] = entry.id
-                links["agrisk"] = source_link
-                memory["report_links"] = links
-                analysis.decision_memory_json = memory
+                report_type = resolve_agrisk_report_type(entry)
+                link_patch = {"read_id": entry.id}
+                if document is not None:
+                    link_patch["analysis_document_id"] = document.id
+                    link_patch["updated_at"] = document.uploaded_at.isoformat() if document.uploaded_at else None
+                analysis.decision_memory_json = upsert_agrisk_report_link(
+                    analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {},
+                    report_type=report_type,
+                    patch=link_patch,
+                )
                 db.commit()
             except Exception:
                 db.rollback()

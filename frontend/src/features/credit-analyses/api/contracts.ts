@@ -137,6 +137,15 @@ export type CreditAnalysisDto = {
   approved_at?: string | null;
   rejected_at?: string | null;
   available_actions?: string[];
+  technical_dossier_status?: {
+    is_completed: boolean;
+    missing_requirements: Array<{
+      code: string;
+      label: string;
+      description: string;
+    }>;
+    display_message: string;
+  } | null;
   created_at: string;
   completed_at: string | null;
 };

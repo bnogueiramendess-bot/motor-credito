@@ -6,6 +6,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.enums import AnalysisStatus, FinalDecision, MotorResult
 
 
+class TechnicalDossierMissingRequirement(BaseModel):
+    code: str
+    label: str
+    description: str
+
+
+class TechnicalDossierStatus(BaseModel):
+    is_completed: bool
+    missing_requirements: list[TechnicalDossierMissingRequirement] = Field(default_factory=list)
+    display_message: str
+
+
 class CreditAnalysisCreate(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -61,6 +73,7 @@ class CreditAnalysisRead(BaseModel):
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
     available_actions: list[str] = Field(default_factory=list)
+    technical_dossier_status: TechnicalDossierStatus | None = None
     created_at: datetime
     completed_at: datetime | None
 
@@ -343,6 +356,7 @@ class CreditAnalysisReportReadSummary(BaseModel):
     credit_analysis_id: int | None = None
     analysis_document_id: int | None = None
     source_type: str
+    report_type: str | None = None
     status: str
     original_filename: str
     mime_type: str

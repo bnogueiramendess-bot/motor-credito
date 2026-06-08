@@ -1,7 +1,11 @@
 import { apiClient } from "@/shared/lib/http/http-client";
 
-import { ExternalDataDashboardApiResponse } from "@/features/external-data/api/contracts";
+import { ExternalDataDashboardApiResponse, ExternalDataEntryCreateRequest, ExternalDataEntryDto } from "@/features/external-data/api/contracts";
 
 export async function getExternalDataDashboard(analysisId: number) {
   return apiClient.get<ExternalDataDashboardApiResponse>(`/api/credit-analyses/${analysisId}/external-data`);
+}
+
+export async function createExternalDataEntry(analysisId: number, payload: ExternalDataEntryCreateRequest) {
+  return apiClient.post<ExternalDataEntryDto, ExternalDataEntryCreateRequest>(`/api/credit-analyses/${analysisId}/external-data`, payload);
 }

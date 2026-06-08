@@ -85,6 +85,8 @@ from app.services.external_cnpj import fetch_external_cnpj_data, is_valid_cnpj
 from app.services.recommendation import classify_recommendation
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_text_key
 from app.services.credit_policy_config import MIN_EARLY_REVIEW_JUSTIFICATION_LENGTH, REANALYSIS_COOLDOWN_DAYS
+from app.services.credit_report_readers.agrisk_types import get_agrisk_report_type_from_payload
+from app.services.report_links import collect_report_read_ids_from_links, resolve_analysis_document_id_for_read
 from app.services.bu_scope import (
     assert_bu_in_scope,
     bu_name_in_scope,
@@ -101,6 +103,7 @@ from app.services.workflow_authorization import (
     can_view_approval_queue,
     resolve_credit_workflow_action,
     resolve_credit_workflow_available_actions,
+    resolve_technical_dossier_status,
 )
 from app.services.approval_matrix import resolve_required_approval_roles
 from app.services.workflow_transition_engine import resolve_credit_workflow_transition
@@ -1026,6 +1029,10 @@ def _attach_available_actions_field(db: Session, current: CurrentUser, analysis:
         "available_actions",
         resolve_credit_workflow_available_actions(db, current, analysis=analysis, business_unit=bu_name),
     )
+
+
+def _attach_technical_dossier_status_field(analysis: CreditAnalysis) -> None:
+    setattr(analysis, "technical_dossier_status", resolve_technical_dossier_status(analysis))
 
 
 def _extract_coface_coverage_limit(analysis: CreditAnalysis, db: Session, customer: Customer | None) -> Decimal | None:
@@ -2191,12 +2198,7 @@ def list_credit_analysis_report_reads(
     _enforce_technical_access_or_403(db, current, analysis)
 
     memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
-    links = memory.get("report_links") if isinstance(memory.get("report_links"), dict) else {}
-    read_ids: list[int] = []
-    for source in ("agrisk", "coface"):
-        item = links.get(source)
-        if isinstance(item, dict) and isinstance(item.get("read_id"), int):
-            read_ids.append(int(item["read_id"]))
+    read_ids = collect_report_read_ids_from_links(memory)
 
     reads: list[CreditReportRead] = []
     if read_ids:
@@ -2218,16 +2220,19 @@ def list_credit_analysis_report_reads(
                 .limit(20)
             ).all()
         )
-    return [
-        CreditAnalysisReportReadSummary(
+    summaries: list[CreditAnalysisReportReadSummary] = []
+    for entry in reads:
+        report_type = (
+            get_agrisk_report_type_from_payload(entry.read_payload_json if isinstance(entry.read_payload_json, dict) else {})
+            if entry.source_type == "agrisk"
+            else None
+        )
+        summaries.append(CreditAnalysisReportReadSummary(
             id=entry.id,
             credit_analysis_id=analysis_id,
-            analysis_document_id=(
-                links.get(entry.source_type).get("analysis_document_id")
-                if isinstance(links.get(entry.source_type), dict)
-                else None
-            ),
+            analysis_document_id=resolve_analysis_document_id_for_read(memory, entry.source_type, report_type),
             source_type=entry.source_type,
+            report_type=report_type,
             status=entry.status,
             original_filename=entry.original_filename,
             mime_type=entry.mime_type,
@@ -2238,9 +2243,8 @@ def list_credit_analysis_report_reads(
             warnings=entry.warnings_json or [],
             read_payload=entry.read_payload_json or {},
             created_at=entry.created_at,
-        )
-        for entry in reads
-    ]
+        ))
+    return summaries
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -3007,6 +3011,7 @@ def get_credit_analysis(
     _attach_journey_progress_fields(db, analysis)
     _attach_recommendation_classification(db, analysis)
     _attach_available_actions_field(db, current, analysis)
+    _attach_technical_dossier_status_field(analysis)
     return analysis
 
 
