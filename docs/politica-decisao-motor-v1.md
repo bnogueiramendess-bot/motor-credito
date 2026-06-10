@@ -18,11 +18,43 @@ Estado atual da base:
 2. Receita/faturamento não é obrigatória globalmente.
 3. Cálculo financeiro é obrigatório apenas quando a decisão depender da capacidade financeira própria do cliente.
 4. Com cobertura COFACE suficiente, a decisão pode ser determinística.
-5. Quando houver exposição descoberta, o motor deve explicitar a exposição.
-6. Cliente existente considera limite atual e histórico interno.
-7. Cliente novo considera COFACE, Agrisk e complemento financeiro/manual.
-8. Backend é a fonte da verdade para decisão.
-9. Frontend não recalcula decisão.
+5. Limite COFACE é teto automático para recomendações do motor quando houver cobertura válida.
+6. Quando houver exposição descoberta, o motor deve explicitar a exposição.
+7. Cliente existente considera limite atual e histórico interno.
+8. Cliente novo considera COFACE, Agrisk e complemento financeiro/manual.
+9. Agrisk severo gera alerta, mas não bloqueia decisão baseada em COFACE.
+10. Backend é a fonte da verdade para decisão.
+11. Frontend não recalcula decisão.
+
+## 2.1 Estratégia de Decisão
+A Política deve separar explicitamente cálculo, recomendação e aprovação.
+
+### Tipo 1 — Decisão Determinística
+Aplicável quando a política possuir regra objetiva suficiente para recomendação automática.
+
+Exemplo:
+- Cliente existente com COFACE válida.
+- Cliente novo com COFACE válida, conforme regras do cenário C.
+
+Resultado:
+- Motor gera recomendação objetiva.
+- Motor registra a base da recomendação no dossiê.
+- Recomendação pode ser automática quando não houver bloqueio ou exigência complementar definida na política.
+
+### Tipo 2 — Decisão Assistida
+Aplicável quando a política não deve executar decisão automática.
+
+Exemplos:
+- Cliente existente sem COFACE.
+- Cliente novo sem COFACE.
+
+Resultado:
+- Motor não decide automaticamente.
+- Motor não recomenda aumento, redução ou manutenção de limite.
+- Motor organiza evidências.
+- Motor produz dossiê.
+- Motor sugere análise.
+- Destino: Comitê de Crédito.
 
 ## 3. Cenários de Decisão
 Grupos principais:
@@ -82,16 +114,18 @@ Condição de entrada:
 - Cliente existente.
 - Sem COFACE válida.
 
-Proposta funcional inicial (pendente de validação):
-- Exige cálculo financeiro: `sim`.
-- Usa histórico interno (carteira/pagamento/overdue), Agrisk e complemento manual.
-- Receita/faturamento: obrigatória em aumento de limite; manutenção sem aumento permanece pendente de regra final.
+Regra definida:
+- Estratégia de decisão: `Decisão Assistida`.
+- Não executa decisão automática.
+- Não recomenda aumento de limite.
+- Não recomenda redução de limite.
+- Não recomenda manutenção de limite.
+- Dossiê é montado normalmente com as evidências disponíveis.
+- Resultado: `Encaminhar ao Comitê de Crédito`.
 
-Possíveis saídas:
-- Manutenção (quando risco interno forte e sem deterioração relevante) — pendente.
-- Redução por risco/overdue.
-- Aprovação parcial por capacidade financeira.
-- Revisão manual obrigatória quando dados insuficientes.
+Justificativa:
+- Cliente existente sem cobertura COFACE válida.
+- Necessidade de avaliação colegiada pelo Comitê de Crédito.
 
 ### 4.3 Cenário C — Cliente novo com COFACE
 Condição de entrada:
@@ -111,25 +145,28 @@ Condição de entrada:
 - Exige receita: `não` (padrão v1)
 - Exige cálculo financeiro: `não`
 
-Pendências de regra:
-- Agrisk obrigatório mesmo com COFACE.
-- Severidade Agrisk capaz de bloquear decisão COFACE-first.
+Regra Agrisk:
+- Agrisk severo não bloqueia decisão baseada em COFACE.
+- O motor deve registrar alerta no dossiê.
+- O motor deve destacar o risco identificado.
+- A recomendação deve permanecer baseada na cobertura COFACE.
 
 ### 4.4 Cenário D — Cliente novo sem COFACE
 Condição de entrada:
 - Cliente novo.
 - Sem COFACE válida.
 
-Proposta funcional inicial:
-- Exige cálculo financeiro: `sim`.
-- Exige receita/faturamento: `sim`.
-- Agrisk: `obrigatório`.
-- Complemento manual/demonstrações: obrigatórios quando faltar base estruturada.
+Regra definida:
+- Estratégia de decisão: `Decisão Assistida`.
+- Não executa decisão automática.
+- Não recomenda aprovação total ou parcial.
+- Não recomenda aumento, redução ou manutenção de limite.
+- Dossiê é montado normalmente com as evidências disponíveis.
+- Resultado: `Encaminhar ao Comitê de Crédito`.
 
-Saídas esperadas:
-- `cálculo >= solicitado`: aprovação do solicitado com exposição descoberta explícita.
-- `cálculo < solicitado`: aprovação parcial com exposição.
-- dados insuficientes: revisão manual ou bloqueio de cálculo.
+Justificativa:
+- Cliente novo sem cobertura COFACE.
+- Necessidade de avaliação colegiada pelo Comitê de Crédito.
 
 ## 5. Entradas Obrigatórias e Opcionais
 Entradas base:
@@ -137,16 +174,16 @@ Entradas base:
 - `limite_atual` (decimal)
 - `limite_solicitado` (decimal)
 - `coface_limit` (decimal|nulo)
-- `agrisk_status/sinalizadores` (opcional por cenário, obrigatório em cenários sem COFACE para cliente novo)
+- `agrisk_status/sinalizadores` (recomendado para qualificar o dossiê; obrigatório apenas se a política/comitê definir como requisito documental mínimo)
 - `receita_faturamento` (condicional)
 - `indicadores internos` (overdue, histórico, exposição aberta)
 - `complemento_manual` (condicional)
 
 Obrigatórias por cenário:
 - A: limite atual, solicitado, COFACE.
-- B: limite atual, solicitado, dados internos e base financeira mínima.
-- C: solicitado, COFACE (e regra de Agrisk pendente).
-- D: solicitado, receita/faturamento, Agrisk e insumos financeiros.
+- B: limite atual, solicitado e dados internos disponíveis para montagem do dossiê.
+- C: solicitado, COFACE; Agrisk, quando disponível, gera alertas sem alterar a recomendação COFACE-first.
+- D: solicitado e evidências disponíveis para montagem do dossiê.
 
 ## 6. Uso dos Pilares
 Pesos atuais v1:
@@ -164,12 +201,132 @@ Regras de governança:
 
 Aplicação prática:
 - Cenários determinísticos COFACE-first: pilares podem ser informativos.
-- Cenários sem COFACE/alta exposição: pilares e cálculo financeiro tornam-se determinantes para limite.
+- Cenários sem COFACE: pilares e insumos financeiros podem compor o dossiê, mas não determinam limite automaticamente.
+- Em cenários com COFACE válida, o limite COFACE é o teto automático da recomendação do motor.
+
+### 6.1 Pilar 1 — Estabilidade Financeira e Liquidez
+O Pilar 1 representa a avaliação de estabilidade financeira e liquidez do cliente dentro do score institucional.
+
+Peso inicial do Pilar 1 no score institucional:
+- Estabilidade Financeira e Liquidez: `55%`
+
+Governança do peso:
+- O peso do Pilar 1 deve ser configurável na Política.
+- O peso não deve ser hardcoded no motor.
+- Toda alteração no peso do Pilar 1 deve gerar nova versão da política.
+- Política ativa não pode ser editada diretamente.
+
+#### 6.1.1 Regra Geral COFACE
+Cliente com COFACE:
+- Quando existir cobertura COFACE válida, o Pilar 1 recebe nota `10/10`.
+- Motivo: risco financeiro mitigado por Seguro de Crédito COFACE.
+- Neste cenário, não calcular indicadores financeiros.
+- Neste cenário, não processar Agrisk Financeiro.
+- Neste cenário, não executar fórmula financeira.
+- Registrar a justificativa no dossiê.
+- Agrisk severo deve gerar alerta no dossiê, sem bloquear a recomendação COFACE-first.
+
+Cliente sem COFACE:
+- Quando não existir cobertura COFACE válida, o Pilar 1 deve ser calculado.
+- A fonte principal do cálculo é o Relatório Agrisk de Análise Financeira.
+
+Cliente sem COFACE e sem Agrisk Financeiro:
+- Nota: `0/10`.
+- Status: `Não disponibilizado`.
+- Exibir a justificativa no dossiê.
+
+#### 6.1.2 Subgrupos do Pilar 1
+Estrutura inicial aprovada:
+
+| Subgrupo | Peso Inicial |
+|---|---:|
+| Liquidez | 35% |
+| Geração de Caixa | 25% |
+| Endividamento / Alavancagem | 20% |
+| Rentabilidade / Eficiência | 15% |
+| Qualidade dos Dados | 5% |
+
+Regras:
+- Pesos dos subgrupos são configuráveis.
+- Soma obrigatória dos pesos dos subgrupos: `100%`.
+- Não permitir salvar política com soma diferente de `100%`.
+
+#### 6.1.3 Indicadores por Subgrupo
+Liquidez:
+
+| Indicador | Peso Inicial |
+|---|---:|
+| Liquidez Corrente | 40% |
+| Liquidez Seca | 30% |
+| Liquidez Geral | 20% |
+| Liquidez Imediata | 10% |
+
+Geração de Caixa:
+
+| Indicador | Peso Inicial |
+|---|---:|
+| EBITDA | 40% |
+| Fluxo de Caixa | 35% |
+| Resultado DRE | 25% |
+
+Endividamento / Alavancagem:
+
+| Indicador | Peso Inicial |
+|---|---:|
+| Endividamento | 60% |
+| Alavancagem Financeira | 40% |
+
+Rentabilidade / Eficiência:
+
+| Indicador | Peso Inicial |
+|---|---:|
+| Margem Bruta | 60% |
+| Índice Operacional | 40% |
+
+Qualidade dos Dados:
+
+| Indicador | Peso Inicial |
+|---|---:|
+| Inconsistências Financeiras | 40% |
+| Alertas Críticos | 40% |
+| Anomalias Detectadas | 20% |
+
+Regras:
+- Pesos dos indicadores são configuráveis.
+- Soma obrigatória dos pesos dos indicadores de cada subgrupo: `100%`.
+- Não permitir salvar política com indicadores inconsistentes.
+
+#### 6.1.4 Níveis Parametrizáveis
+Todos os níveis do Pilar 1 são parametrizáveis pela Política:
+
+| Nível | Configuração |
+|---|---|
+| Nível 1 | Peso do Pilar |
+| Nível 2 | Peso dos Subgrupos |
+| Nível 3 | Peso dos Indicadores |
+| Nível 4 | Faixas de pontuação |
+
+Exemplo de faixas de pontuação:
+
+| Operador | Valor | Nota |
+|---|---:|---:|
+| >= | 1,50 | 10 |
+| >= | 1,20 | 8 |
+| >= | 1,00 | 6 |
+| >= | 0,80 | 4 |
+| > | 0 | 2 |
+| = | 0 | 0 |
+
+#### 6.1.5 Regras de Configuração
+Regras obrigatórias:
+- Soma dos pesos dos subgrupos do Pilar 1 deve ser `100%`.
+- Soma dos pesos dos indicadores de cada subgrupo deve ser `100%`.
+- A Política não deve permitir salvar configuração inconsistente.
+- Toda alteração deve gerar nova versão da política.
+- Política ativa não pode ser editada diretamente.
 
 ## 7. Obrigatoriedade de Receita/Faturamento
 Receita obrigatória quando:
-- Cliente novo sem COFACE.
-- Cliente existente sem COFACE e solicitando aumento.
 - Decisão depende de capacidade financeira própria.
 - Aprovação envolve exposição descoberta relevante.
 
@@ -177,9 +334,9 @@ Receita não obrigatória quando:
 - Cliente existente com COFACE suficiente.
 - Manutenção/redução baseada em COFACE.
 - Cliente novo com COFACE suficiente, salvo regra adicional de risco.
+- Cenários B e D, pois não há decisão automática e o caso é encaminhado ao Comitê de Crédito com dossiê.
 
 Pendências:
-- Manutenção de cliente existente sem COFACE sem receita.
 - Substituição parcial por EBITDA/lucro.
 - Limiar de “exposição relevante”.
 
@@ -191,7 +348,7 @@ Diretrizes:
 
 Exemplos:
 - Sem COFACE em cenário A/C: redirecionar para B/D.
-- Sem receita em D: bloquear cálculo automático e enviar para revisão manual.
+- Sem COFACE em B/D: montar dossiê e encaminhar ao Comitê de Crédito.
 - Agrisk ausente (quando obrigatório): revisão manual.
 
 ## 9. Resultado Esperado por Regra
@@ -204,13 +361,19 @@ Saída mínima por regra:
 - Necessidade de cálculo financeiro.
 - Necessidade de receita.
 - Necessidade de revisão manual.
+- Estratégia de decisão.
+- Destino da análise quando a decisão for assistida.
+- Alertas e riscos destacados no dossiê.
 
 ## 10. Impacto no Motor Configurável
 Objetivo de integração futura (não implementado nesta etapa):
 - Resolver cenário/regra na política ativa versionada.
 - Registrar `decision_basis` e trilha de auditoria por regra.
-- Executar cálculo financeiro apenas quando `requires_financial_calculation=true`.
+- Executar cálculo financeiro apenas quando `requires_financial_calculation=true` e a estratégia permitir decisão automática.
 - Preservar fallback/manual review para ausência de dados.
+- Encaminhar decisões assistidas para Comitê de Crédito com dossiê estruturado.
+- Respeitar COFACE como teto automático de recomendação quando houver cobertura válida.
+- Registrar alertas Agrisk sem bloquear recomendação COFACE-first.
 
 Restrições atuais:
 - Nenhuma conexão com o motor de decisão em produção.
@@ -223,10 +386,14 @@ Restrições atuais:
 | A2 | < limite atual | Sim | Obrigatório | Obrigatório | Não | Não | COFACE | Redução de Limite devido Exposição com a COFACE |
 | A3 | > limite atual e solicitado > COFACE | Sim | Obrigatório | Obrigatório | Não | Não | COFACE | Aumento do Limite conforme Cobertura da COFACE |
 | A4 | > limite atual e solicitado <= COFACE | Sim | Obrigatório | Obrigatório | Não | Não | Solicitado | Aprovação do Limite Solicitado conforme Cobertura da COFACE |
-| B | Ausente | Sim | Obrigatório | Obrigatório | Condicional (tende a sim em aumento) | Sim | Resultado do cálculo/fallback | Pendente de validação |
+| B | Ausente | Sim | Obrigatório | Obrigatório | Não para decisão automática | Não | N/A | Encaminhar ao Comitê de Crédito |
 | C1 | < solicitado | Não | N/A | Obrigatório | Não (v1) | Não (v1) | COFACE | Aprovação Parcial devido Exposição com a COFACE |
 | C2 | >= solicitado | Não | N/A | Obrigatório | Não (v1) | Não (v1) | Solicitado | Aprovação do Limite Solicitado conforme Cobertura da COFACE |
-| D | Ausente | Não | N/A | Obrigatório | Sim | Sim | Resultado do cálculo | Aprovação parcial/total com exposição ou revisão manual |
+| D | Ausente | Não | N/A | Obrigatório | Não para decisão automática | Não | N/A | Encaminhar ao Comitê de Crédito |
+
+Regra transversal da matriz:
+- Quando houver COFACE válida, o limite recomendado pelo motor não deve superar a cobertura COFACE.
+- Quando não houver COFACE válida, o motor não recomenda limite automaticamente e encaminha o caso ao Comitê de Crédito.
 
 ## 12. Resultado Técnico Esperado (Contrato de Regra)
 Campos técnicos por avaliação:
@@ -239,24 +406,27 @@ Campos técnicos por avaliação:
 - `financial_impact`
 - `requires_financial_calculation`
 - `requires_revenue`
+- `decision_strategy`
+- `analysis_destination`
 - `decision_basis`
 - `exposure_amount`
+- `alerts`
 - `manual_review_required`
 
 Semântica:
+- `decision_strategy`: `deterministic` para decisão objetiva ou `assisted` para montagem de dossiê sem decisão automática.
+- `analysis_destination`: destino da análise quando `decision_strategy=assisted`, como `credit_committee`.
 - `decision_basis`: identificador da política/versão/estratégia aplicada.
 - `exposure_amount`: `max(0, limite_solicitado - cobertura/limite_recomendado conforme regra)`.
+- `alerts`: lista de alertas e riscos destacados no dossiê, incluindo Agrisk severo quando aplicável.
 - `manual_review_required=true` quando não houver dados mínimos ou regra explicitamente exigir intervenção humana.
 
 ## 13. Pontos Pendentes de Decisão de Negócio
-1. Cliente existente sem COFACE pode manter limite sem receita?
-2. Cliente novo com COFACE exige Agrisk obrigatório?
-3. Agrisk com restrição severa pode bloquear decisão COFACE-first?
-4. Overdue interno deve sobrepor COFACE?
-5. Limite COFACE é teto absoluto em todos os casos?
-6. Aprovação com exposição descoberta pode ser automática ou sempre manual?
-7. EBITDA/lucro podem substituir receita em quais condições?
-8. Quais campos do Complemento Manual são mandatórios por cenário?
+1. Cliente novo com COFACE exige Agrisk obrigatório?
+2. Overdue interno deve sobrepor COFACE?
+3. Aprovação com exposição descoberta pode ser automática ou sempre manual?
+4. EBITDA/lucro podem substituir receita em quais condições?
+5. Quais campos do Complemento Manual são mandatórios por cenário?
 
 ## Recomendações de Próximos Passos
 1. Validar os pendentes com negócio/comitê de crédito e transformar em regras fechadas.

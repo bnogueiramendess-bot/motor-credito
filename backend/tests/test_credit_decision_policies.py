@@ -8,6 +8,7 @@ from sqlalchemy import func, inspect, select
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.main import ensure_active_credit_decision_policy_seed_if_enabled
 from app.models.credit_decision_policy import CreditDecisionPolicy
 from app.models.enums import MotorResult
 from app.models.user import User
@@ -174,6 +175,57 @@ class CreditDecisionPoliciesTestCase(unittest.TestCase):
 
     def test_feature_flag_default_false(self) -> None:
         self.assertFalse(settings.credit_decision_policy_engine_enabled)
+
+    def test_decision_policy_seed_flag_default_true(self) -> None:
+        self.assertTrue(settings.credit_decision_policy_seed_enabled)
+
+    def test_seed_flag_false_does_not_bootstrap_active_policy(self) -> None:
+        active_policies = self.db.scalars(
+            select(CreditDecisionPolicy).where(CreditDecisionPolicy.status == "active")
+        ).all()
+        for policy in active_policies:
+            policy.status = "archived"
+        before_total = self.db.scalar(select(func.count(CreditDecisionPolicy.id)))
+        self.db.flush()
+
+        ensure_active_credit_decision_policy_seed_if_enabled(self.db, enabled=False)
+        self.db.flush()
+
+        active_count = self.db.scalar(select(func.count(CreditDecisionPolicy.id)).where(CreditDecisionPolicy.status == "active"))
+        after_total = self.db.scalar(select(func.count(CreditDecisionPolicy.id)))
+        self.assertEqual(active_count, 0)
+        self.assertEqual(after_total, before_total)
+
+    def test_seed_flag_true_does_not_create_new_version_when_active_exists(self) -> None:
+        active_before = get_active_credit_decision_policy(self.db)
+        total_before = self.db.scalar(select(func.count(CreditDecisionPolicy.id)))
+
+        ensure_active_credit_decision_policy_seed_if_enabled(self.db, enabled=True)
+        self.db.flush()
+
+        active_after = get_active_credit_decision_policy(self.db)
+        total_after = self.db.scalar(select(func.count(CreditDecisionPolicy.id)))
+        self.assertEqual(active_after.id, active_before.id)
+        self.assertEqual(total_after, total_before)
+
+    def test_seed_flag_true_creates_single_active_when_missing(self) -> None:
+        active_policies = self.db.scalars(
+            select(CreditDecisionPolicy).where(CreditDecisionPolicy.status == "active")
+        ).all()
+        for policy in active_policies:
+            policy.status = "archived"
+        before_total = self.db.scalar(select(func.count(CreditDecisionPolicy.id)))
+        self.db.flush()
+
+        ensure_active_credit_decision_policy_seed_if_enabled(self.db, enabled=True)
+        self.db.flush()
+
+        active_policies_after = self.db.scalars(
+            select(CreditDecisionPolicy).where(CreditDecisionPolicy.status == "active")
+        ).all()
+        after_total = self.db.scalar(select(func.count(CreditDecisionPolicy.id)))
+        self.assertEqual(len(active_policies_after), 1)
+        self.assertEqual(after_total, before_total + 1)
 
     def test_motor_current_behavior_unchanged(self) -> None:
         classification = classify_recommendation(

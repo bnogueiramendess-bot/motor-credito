@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     credit_approval_matrix_enforcement_enabled: bool = True
     credit_approval_legacy_fallback_enabled: bool = True
     credit_decision_policy_engine_enabled: bool = False
+    configurable_score_policy_enabled: bool = False
+    credit_decision_policy_seed_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[3] / ".env",

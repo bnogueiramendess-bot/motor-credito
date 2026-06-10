@@ -45,6 +45,7 @@ const navGroups: NavGroup[] = [
     items: [
       { type: "link", href: "/motor-credito/dashboard", label: "Dashboard", permission: "credit.dashboard.view" },
       { type: "link", href: "/motor-credito/regras", label: "Regras", permission: "credit.policy.view" },
+      { type: "link", href: "/motor-credito/politica-decisao/score", label: "Política de Decisão", permission: "credit.policy.view" },
       { type: "divider" },
       {
         type: "link",
@@ -99,7 +100,12 @@ function isActivePath(pathname: string, href: string) {
 }
 
 function isMotorCreditoRoute(pathname: string) {
-  return pathname.startsWith("/motor-credito") || pathname.startsWith("/analises") || pathname.startsWith("/dados-externos");
+  return (
+    pathname.startsWith("/motor-credito") ||
+    pathname.startsWith("/admin/politicas-de-decisao") ||
+    pathname.startsWith("/analises") ||
+    pathname.startsWith("/dados-externos")
+  );
 }
 
 function isSubmenuItemActive(pathname: string, groupId: string, href: string) {
@@ -127,6 +133,9 @@ function resolveTopbarMeta(pathname: string): { title: string; subtitle: string 
   }
   if (pathname.startsWith("/motor-credito/regras") || pathname.startsWith("/regras")) {
     return { title: "Motor de Crédito · Regras", subtitle: "Políticas e critérios" };
+  }
+  if (pathname.startsWith("/motor-credito/politica-decisao/score") || pathname.startsWith("/admin/politicas-de-decisao/score")) {
+    return { title: "Motor de Crédito · Política de Decisão", subtitle: "Score institucional parametrizável" };
   }
   if (pathname.startsWith("/dados-externos")) {
     return { title: "Dados Externos", subtitle: "Evidências da análise" };

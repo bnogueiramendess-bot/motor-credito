@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.credit_decision_policy import CreditDecisionPolicy
 from app.models.user import User
+from app.services.credit_decision_policy_score_seed import ensure_default_score_structure
 
 REQUIRED_SCENARIO = "existing_customer_with_coface"
 REQUIRED_RULE_CODES = {
@@ -17,6 +18,53 @@ REQUIRED_RULE_CODES = {
     "requested_within_coface",
 }
 REQUIRED_RULE_FIELDS = {"code", "condition", "recommendation_code", "recommended_limit_source", "label"}
+
+
+DEFAULT_COFACE_FIRST_DECISION_POLICY_CONFIG: dict[str, Any] = {
+    "decision_scenarios": {
+        "existing_customer_with_coface": {
+            "enabled": True,
+            "requires_financial_calculation": False,
+            "rules": [
+                {
+                    "code": "coface_equals_current_limit",
+                    "condition": "coface_limit == current_limit",
+                    "recommendation_code": "maintain_current_limit",
+                    "recommended_limit_source": "current_limit",
+                    "label": "Manutencao do Limite Atual",
+                },
+                {
+                    "code": "coface_below_current_limit",
+                    "condition": "coface_limit < current_limit",
+                    "recommendation_code": "reduce_to_coface_limit",
+                    "recommended_limit_source": "coface_limit",
+                    "label": "Reducao de Limite devido Exposicao com a COFACE",
+                },
+                {
+                    "code": "requested_above_coface",
+                    "condition": "coface_limit > current_limit && requested_limit > coface_limit",
+                    "recommendation_code": "increase_to_coface_limit",
+                    "recommended_limit_source": "coface_limit",
+                    "label": "Aumento do Limite conforme Cobertura da COFACE",
+                },
+                {
+                    "code": "requested_within_coface",
+                    "condition": "coface_limit > current_limit && requested_limit <= coface_limit",
+                    "recommendation_code": "approve_requested_with_coface",
+                    "recommended_limit_source": "requested_limit",
+                    "label": "Aprovacao do Limite Solicitado conforme Cobertura da COFACE",
+                },
+            ],
+        }
+    },
+    "pillar_weights": {
+        "financial_stability_liquidity": 55,
+        "guarantees_credit_insurance": 20,
+        "market_conditions": 15,
+        "payment_history": 5,
+        "relationship_history": 5,
+    },
+}
 
 
 class CreditDecisionPolicyServiceError(Exception):
@@ -168,3 +216,29 @@ def archive_credit_decision_policy(db: Session, policy_id: int, current_user: Us
     target.effective_to = datetime.now(timezone.utc)
     target.updated_by_user_id = current_user.id
     return target
+
+
+def ensure_active_credit_decision_policy_seed(db: Session) -> CreditDecisionPolicy:
+    active = db.scalar(
+        select(CreditDecisionPolicy)
+        .where(CreditDecisionPolicy.status == "active")
+        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
+    )
+    if active is not None:
+        ensure_default_score_structure(db, active)
+        return active
+
+    policy = CreditDecisionPolicy(
+        code="coface_first",
+        name="Politica Padrao COFACE-first",
+        version=_next_version_for_code(db, "coface_first"),
+        status="active",
+        description="Politica default para fundacao configuravel COFACE-first.",
+        config_json=DEFAULT_COFACE_FIRST_DECISION_POLICY_CONFIG,
+        effective_from=datetime.now(timezone.utc),
+        activated_at=datetime.now(timezone.utc),
+    )
+    db.add(policy)
+    db.flush()
+    ensure_default_score_structure(db, policy)
+    return policy

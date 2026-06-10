@@ -1,4 +1,7 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -26,8 +29,23 @@ from app.services.credit_decision_policy_service import (
     get_credit_decision_policy,
     list_credit_decision_policies,
 )
+from app.services.credit_decision_policy_score_structure import (
+    CreditDecisionPolicyScoreStructureNotFoundError,
+    get_current_score_structure,
+    get_score_structure,
+    simulate_pillar_one_score,
+    validate_score_structure,
+)
 
 router = APIRouter(prefix="/credit-decision-policies", tags=["credit-decision-policies"])
+
+
+class PillarOneScoreSimulationRequest(BaseModel):
+    coface_valid: bool = False
+    indicator_values: dict[str, Any] | None = None
+    analysis_id: int | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
 
 @router.get("/active", response_model=CreditDecisionPolicyRead)
@@ -60,6 +78,60 @@ def get_policy_preview(
         preview = resolve_credit_decision_policy_preview(db, analysis_id)
         return CreditDecisionPolicyPreviewResult.model_validate(preview)
     except CreditDecisionPolicyPreviewNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/current-score-structure")
+def get_current_policy_score_structure(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> dict[str, Any]:
+    try:
+        return get_current_score_structure(db)
+    except CreditDecisionPolicyScoreStructureNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/{policy_id}/score-structure")
+def get_policy_score_structure(
+    policy_id: int,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> dict[str, Any]:
+    try:
+        return get_score_structure(db, policy_id)
+    except CreditDecisionPolicyScoreStructureNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/{policy_id}/score-validation")
+def get_policy_score_validation(
+    policy_id: int,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> dict[str, Any]:
+    try:
+        return validate_score_structure(db, policy_id)
+    except CreditDecisionPolicyScoreStructureNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/{policy_id}/score-simulation/pillar-one")
+def simulate_policy_pillar_one_score(
+    policy_id: int,
+    payload: PillarOneScoreSimulationRequest,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> dict[str, Any]:
+    try:
+        return simulate_pillar_one_score(
+            db,
+            policy_id=policy_id,
+            coface_valid=payload.coface_valid,
+            indicator_values=payload.indicator_values,
+            analysis_id=payload.analysis_id,
+        )
+    except CreditDecisionPolicyScoreStructureNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 

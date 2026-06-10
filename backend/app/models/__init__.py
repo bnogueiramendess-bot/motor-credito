@@ -10,6 +10,12 @@ from app.models.credit_report_read import CreditReportRead
 from app.models.credit_policy import CreditPolicy
 from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.credit_decision_policy import CreditDecisionPolicy
+from app.models.credit_decision_policy_score_structure import (
+    CreditDecisionPolicyIndicator,
+    CreditDecisionPolicyPillar,
+    CreditDecisionPolicyScoreRange,
+    CreditDecisionPolicySubgroup,
+)
 from app.models.customer import Customer
 from app.models.decision_event import DecisionEvent
 from app.models.enums import (
@@ -57,6 +63,10 @@ __all__ = [
     "CreditPolicy",
     "CreditPolicyRule",
     "CreditDecisionPolicy",
+    "CreditDecisionPolicyIndicator",
+    "CreditDecisionPolicyPillar",
+    "CreditDecisionPolicyScoreRange",
+    "CreditDecisionPolicySubgroup",
     "CreditPolicyStatus",
     "Customer",
     "DecisionEvent",

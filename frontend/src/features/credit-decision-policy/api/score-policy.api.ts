@@ -1,0 +1,179 @@
+import { apiClient } from "@/shared/lib/http/http-client";
+
+export type ScoreRangeDto = {
+  id: number;
+  policy_id: number;
+  indicator_id: number;
+  operator: string;
+  threshold_value: string | number | null;
+  threshold_value_to: string | number | null;
+  score: string | number;
+  label: string | null;
+  sort_order: number;
+  is_enabled: boolean;
+};
+
+export type ScoreIndicatorDto = {
+  id: number;
+  policy_id: number;
+  subgroup_id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  source_key: string;
+  value_type: string;
+  weight_percent: string | number;
+  aggregation_method: string;
+  missing_data_behavior: string;
+  sort_order: number;
+  is_enabled: boolean;
+  score_ranges: ScoreRangeDto[];
+  score_ranges_count: number;
+};
+
+export type ScoreSubgroupDto = {
+  id: number;
+  policy_id: number;
+  pillar_id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  weight_percent: string | number;
+  sort_order: number;
+  is_enabled: boolean;
+  indicators: ScoreIndicatorDto[];
+  indicators_count: number;
+};
+
+export type ScorePillarDto = {
+  id: number;
+  policy_id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  weight_percent: string | number;
+  sort_order: number;
+  is_enabled: boolean;
+  subgroups: ScoreSubgroupDto[];
+  subgroups_count: number;
+  indicators_count: number;
+};
+
+export type ScorePolicyDto = {
+  id: number;
+  code: string;
+  name: string;
+  version: number;
+  status: string;
+  description: string | null;
+  source: string;
+};
+
+export type ScoreValidationCheckDto = {
+  code: string;
+  label: string;
+  value: string | number;
+  expected?: string | number;
+  status: "valid" | "warning" | "invalid" | string;
+  pillar_code?: string;
+  subgroup_code?: string;
+};
+
+export type ScoreValidationIssueDto = {
+  scope: string;
+  code: string;
+  severity?: "warning" | "error" | string;
+  entity_type?: string;
+  entity_code?: string;
+  entity_name?: string;
+  affected_count?: number;
+  message: string;
+};
+
+export type ScoreValidationSummaryDto = {
+  status: "valid" | "warning" | "invalid" | string;
+  configuration_status: "incomplete" | "validated" | "invalid" | string;
+  checks: ScoreValidationCheckDto[];
+  errors: ScoreValidationIssueDto[];
+  warnings: ScoreValidationIssueDto[];
+};
+
+export type ScorePolicyProgressDto = {
+  pillars: { configured: number; expected: number };
+  subgroups: { configured: number; expected: number };
+  indicators: { configured: number; expected: number };
+  indicators_with_ranges: { configured: number; expected: number };
+  score_ranges_count: number;
+};
+
+export type ScorePillarRoadmapDto = {
+  id: number | null;
+  code: string;
+  name: string;
+  weight_percent: string | number;
+  sort_order: number;
+  status: "configured" | "partial" | "not_started";
+  subgroups_count: number;
+  indicators_count: number;
+  indicators_with_ranges_count: number;
+};
+
+export type ScoreStructureDto = {
+  policy: ScorePolicyDto;
+  status: string;
+  version: number;
+  compiled_config_json: Record<string, unknown>;
+  pillars: ScorePillarDto[];
+  policy_progress: ScorePolicyProgressDto;
+  pillar_roadmap: ScorePillarRoadmapDto[];
+  validation_summary: ScoreValidationSummaryDto;
+  governance: {
+    active_policy_editable: boolean;
+    simulation_persists_result: boolean;
+    connected_to_official_engine: boolean;
+    configurable_score_policy_enabled: boolean;
+  };
+};
+
+export type PillarOneSimulationPayload = {
+  coface_valid?: boolean;
+  indicator_values?: Record<string, string | number | null>;
+  analysis_id?: number | null;
+};
+
+export type PillarOneSimulationResultDto = {
+  policy_id: number;
+  pillar_code: string;
+  pillar_name: string;
+  score: string | number;
+  weighted_score: string | number;
+  weight_percent: string | number;
+  status: string;
+  source: string;
+  reason: string | null;
+  subgroups: Array<{
+    code: string;
+    name: string;
+    score: string | number;
+    weight_percent: string | number;
+    weighted_score: string | number;
+    indicators: Array<Record<string, unknown>>;
+  }>;
+  indicators: Array<Record<string, unknown>>;
+  calculation_trace: Array<Record<string, unknown>>;
+  mapper_trace?: Array<Record<string, unknown>>;
+  mapper_warnings?: Array<Record<string, unknown>>;
+  warnings?: Array<Record<string, unknown>>;
+  simulation?: Record<string, unknown>;
+};
+
+export function getCurrentScoreStructure() {
+  return apiClient.get<ScoreStructureDto>("/api/admin/credit-decision-policies/current-score-structure");
+}
+
+export function simulatePillarOneScore(policyId: number, payload: PillarOneSimulationPayload) {
+  return apiClient.post<PillarOneSimulationResultDto, PillarOneSimulationPayload>(
+    `/api/admin/credit-decision-policies/${policyId}/score-simulation/pillar-one`,
+    payload
+  );
+}

@@ -51,6 +51,12 @@ Saida esperada:
 Happy-path smoke test passed.
 ```
 
+## Flags de bootstrap
+- `CREDIT_DECISION_POLICY_SEED_ENABLED=true` por padrao.
+  - Quando habilitada, o startup garante uma politica de decisao ativa default apenas se nao existir nenhuma ativa.
+  - O seed e idempotente e tambem garante a estrutura normalizada inicial do Score Institucional.
+  - Em producao, a flag pode ser definida como `false` para impedir criacao automatica de politica ativa sem governanca formal.
+
 ## Observacoes de dominio
 - `motor_result` nao e igual a `final_decision`.
   - `motor_result`: recomendacao automatica do motor.
