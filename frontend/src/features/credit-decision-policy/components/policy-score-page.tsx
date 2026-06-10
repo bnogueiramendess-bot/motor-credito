@@ -10,13 +10,17 @@ import {
   ChevronDown,
   CircleDashed,
   CircleDot,
+  Database,
+  Factory,
   FileClock,
+  Globe2,
   Layers3,
   Lock,
   Percent,
   Scale,
   ShieldCheck,
-  SlidersHorizontal
+  SlidersHorizontal,
+  TrendingUp
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
@@ -337,13 +341,13 @@ function Toolbar() {
 function PillarSidebar({
   pillars,
   roadmap,
-  selectedPillarId,
+  selectedPillarCode,
   onSelect
 }: {
   pillars: ScorePillarDto[];
   roadmap: ScorePillarRoadmapDto[];
-  selectedPillarId: number | null;
-  onSelect: (pillar: ScorePillarDto) => void;
+  selectedPillarCode: string | null;
+  onSelect: (item: ScorePillarRoadmapDto, pillar: ScorePillarDto | null) => void;
 }) {
   return (
     <aside className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)]">
@@ -354,22 +358,24 @@ function PillarSidebar({
       <div className="max-h-[calc(100vh-9rem)] overflow-auto p-3">
         <div className="grid gap-2">
           {roadmap.map((item) => {
-            const pillar = pillars.find((candidate) => candidate.id === item.id);
-            const active = item.id === selectedPillarId;
-            const selectable = Boolean(pillar);
+            const pillar = pillars.find((candidate) => candidate.id === item.id) ?? null;
+            const active = item.code === selectedPillarCode;
+            const selectable = Boolean(pillar) || item.code === PILLAR_THREE_CODE;
             const StatusIcon = item.status === "configured" ? CheckCircle2 : item.status === "partial" ? CircleDot : CircleDashed;
             return (
               <button
                 key={item.code}
                 type="button"
                 disabled={!selectable}
-                onClick={() => pillar && onSelect(pillar)}
+                onClick={() => selectable && onSelect(item, pillar)}
                 className={`rounded-lg border p-3 text-left transition ${
                   active
                     ? "border-blue-200 bg-blue-50 text-blue-800"
-                    : selectable
+                    : pillar
                       ? "border-transparent text-slate-700 hover:border-slate-200 hover:bg-slate-50"
-                      : "cursor-default border-dashed border-slate-200 bg-slate-50/70 text-slate-500"
+                      : selectable
+                        ? "border-dashed border-slate-200 bg-slate-50/70 text-slate-500 hover:border-slate-300 hover:bg-slate-50"
+                        : "cursor-default border-dashed border-slate-200 bg-slate-50/70 text-slate-500"
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -381,7 +387,7 @@ function PillarSidebar({
                     />
                     <div>
                       <span className="block text-[11px] font-bold uppercase text-slate-400">Pilar {item.sort_order}</span>
-                      <strong className="mt-1 block text-sm leading-5">{item.name}</strong>
+                      <strong className="mt-1 block text-sm leading-5">{item.code === PILLAR_THREE_CODE ? "Condições de Mercado" : item.name}</strong>
                       <span className="mt-2 block text-xs text-slate-500">
                         {item.status === "configured" ? "Configurado" : item.status === "partial" ? "Em configuração" : "Não iniciado"}
                       </span>
@@ -1009,6 +1015,7 @@ function SimulationPanel({
 }
 
 const PILLAR_TWO_CODE = "guarantees_credit_insurance";
+const PILLAR_THREE_CODE = "market_conditions";
 
 const RANGE_BUSINESS_LABELS: Record<string, string> = {
   ">=:1": "Cobertura integral do limite solicitado",
@@ -1314,6 +1321,135 @@ function PillarTwoRightRail({
   );
 }
 
+const PILLAR_THREE_SUBGROUPS = [
+  {
+    name: "Risco Setorial",
+    description: "Classificação de risco por setor econômico, CNAE ou segmento de atuação do cliente.",
+    icon: Factory
+  },
+  {
+    name: "Perspectiva Macroeconômica",
+    description: "Leitura futura de juros, inflação, câmbio e cenário econômico relevante.",
+    icon: Globe2
+  },
+  {
+    name: "Exposição a Ciclo / Commodities",
+    description: "Avaliação de exposição a safras, commodities, preços internacionais e ciclos econômicos.",
+    icon: TrendingUp
+  }
+];
+
+const PILLAR_THREE_FUTURE_SOURCES = [
+  ["Análise de risco por setor/carteira", "Leitura de concentração, inadimplência e exposição por segmento."],
+  ["CNAE / segmento econômico", "Vínculo estruturado entre cliente e classificação setorial."],
+  ["Relatórios macroeconômicos importados", "Visões periódicas com fonte, vigência e conclusão de risco."],
+  ["Base interna de inteligência de mercado", "Curadoria administrativa para consulta futura da política."],
+  ["Indicadores de commodities", "Referências aplicáveis a clientes expostos a preços e ciclos específicos."]
+];
+
+const PILLAR_THREE_ROADMAP = [
+  "Criar base de inteligência de mercado",
+  "Definir classificação setorial",
+  "Importar relatórios macroeconômicos",
+  "Vincular cliente, setor e CNAE",
+  "Ativar cálculo parametrizado do Pilar 3"
+];
+
+function PillarThreeContent({ roadmapItem }: { roadmapItem: ScorePillarRoadmapDto }) {
+  return (
+    <section className="grid min-w-0 gap-4">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4">
+          <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Resumo do Pilar</span>
+          <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">Condições de Mercado</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Estrutura planejada para futura leitura de risco setorial e macroeconômico, sem cálculo operacional ativo nesta versão.</p>
+        </div>
+        <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            ["Peso previsto", displayPercent(roadmapItem.weight_percent), "Previsto na política completa"],
+            ["Status operacional", "Planejado", "Em construção"],
+            ["Fonte atual", "Não disponível", "Sem fonte operacional confiável"],
+            ["Impacto atual", "Nenhum", "Não participa do motor oficial"]
+          ].map(([label, value, detail]) => (
+            <div key={label} className="min-h-28 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">{label}</span>
+              <strong className={`mt-2 block leading-tight ${label === "Status operacional" ? "text-xl text-amber-700" : "text-2xl text-slate-950"}`}>{value}</strong>
+              <small className="mt-1 block text-xs leading-5 text-slate-500">{detail}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4">
+          <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Estrutura planejada</span>
+          <h2 className="mt-1 text-sm font-semibold text-slate-900">Subgrupos futuros do Pilar 3</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Preparação para inteligência de mercado quando fontes confiáveis forem definidas.</p>
+        </div>
+        <div className="grid gap-3 p-4 lg:grid-cols-3">
+          {PILLAR_THREE_SUBGROUPS.map((subgroup, index) => {
+            const Icon = subgroup.icon;
+            return (
+              <article key={subgroup.name} className={`rounded-xl border p-4 ${index === 0 ? "border-amber-200 bg-amber-50/70" : "border-dashed border-slate-300 bg-slate-50/70"}`}>
+                <span className={`inline-flex h-9 w-9 items-center justify-center rounded-xl ${index === 0 ? "bg-amber-100 text-amber-700" : "bg-indigo-50 text-indigo-600"}`}><Icon className="h-4 w-4" /></span>
+                <h3 className="mt-3 text-sm font-semibold text-slate-900">{subgroup.name}</h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">{subgroup.description}</p>
+                <span className={`mt-3 inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${index === 0 ? "bg-amber-100 text-amber-800" : "bg-white text-slate-500"}`}>Planejado · sem peso operacional</span>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4">
+          <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Fontes futuras possíveis</span>
+          <h2 className="mt-1 text-sm font-semibold text-slate-900">Inteligência de mercado para evolução da política</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Nenhuma destas fontes participa do cálculo atual.</p>
+        </div>
+        <div className="grid gap-2 p-4">
+          {PILLAR_THREE_FUTURE_SOURCES.map(([name, description]) => (
+            <div key={name} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
+              <div><strong className="block text-xs text-slate-800">{name}</strong><span className="mt-1 block text-xs leading-5 text-slate-500">{description}</span></div>
+              <span className="w-fit rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700">Planejado</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+          <div><h2 className="text-sm font-semibold text-amber-950">Decisão de governança</h2><p className="mt-1 text-xs leading-5 text-amber-900/80">Este pilar ainda não participa do cálculo oficial. A estrutura está preparada para futura integração com inteligência de mercado, sem criar nota artificial nesta versão.</p></div>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function PillarThreeRightRail() {
+  return (
+    <aside className="grid content-start gap-3 pr-1 xl:sticky xl:top-4">
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4"><h2 className="text-sm font-semibold text-slate-900">Não configurado para cálculo</h2><p className="mt-1 text-xs leading-5 text-slate-500">Estado informativo esperado nesta versão.</p></div>
+        <div className="p-4"><div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><CircleDashed className="h-5 w-5 text-amber-700" /><h3 className="mt-2 text-sm font-semibold text-amber-950">Pilar em construção</h3><p className="mt-1 text-xs leading-5 text-amber-900/80">Não há simulação disponível porque nenhuma fonte operacional foi homologada. O impacto atual no motor é nenhum.</p></div></div>
+      </section>
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4"><h2 className="text-sm font-semibold text-slate-900">Roadmap futuro</h2><p className="mt-1 text-xs leading-5 text-slate-500">Etapas necessárias antes da ativação.</p></div>
+        <div className="grid gap-3 p-4">
+          {PILLAR_THREE_ROADMAP.map((step, index) => (
+            <div key={step} className="flex items-start gap-3"><span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-[10px] font-black text-indigo-700">{index + 1}</span><span className="text-xs leading-5 text-slate-600">{step}</span></div>
+          ))}
+        </div>
+      </section>
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4"><h2 className="text-sm font-semibold text-slate-900">Próxima evolução</h2><p className="mt-1 text-xs leading-5 text-slate-500">Base futura fora do workflow.</p></div>
+        <div className="p-4"><div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4"><Database className="h-5 w-5 text-slate-500" /><strong className="mt-2 block text-xs text-slate-800">Administração · Inteligência de Mercado</strong><span className="mt-1 block text-xs leading-5 text-slate-500">Espaço futuro para importar relatórios, classificar setores e parametrizar vigência das leituras de mercado.</span></div></div>
+      </section>
+    </aside>
+  );
+}
+
 function GovernancePanel({ structure }: { structure: ScoreStructureDto | null }) {
   return (
     <div className="grid gap-3 text-xs leading-5 text-slate-600">
@@ -1386,6 +1522,7 @@ function RightRail({
 export function PolicyScorePage() {
   const [structure, setStructure] = useState<ScoreStructureDto | null>(null);
   const [selectedPillarId, setSelectedPillarId] = useState<number | null>(null);
+  const [selectedPillarCode, setSelectedPillarCode] = useState<string | null>(null);
   const [selectedSubgroupId, setSelectedSubgroupId] = useState<number | null>(null);
   const [selectedIndicatorId, setSelectedIndicatorId] = useState<number | null>(null);
   const [simulationResult, setSimulationResult] = useState<PillarOneSimulationResultDto | null>(null);
@@ -1415,6 +1552,7 @@ export function PolicyScorePage() {
         setStructure(response);
         const pillar = firstEnabled(response.pillars);
         setSelectedPillarId(pillar?.id ?? null);
+        setSelectedPillarCode(pillar?.code ?? response.pillar_roadmap[0]?.code ?? null);
         const subgroup = firstEnabled(pillar?.subgroups);
         setSelectedSubgroupId(subgroup?.id ?? null);
         setSelectedIndicatorId(firstEnabled(subgroup?.indicators)?.id ?? null);
@@ -1443,14 +1581,16 @@ export function PolicyScorePage() {
     [selectedIndicatorId, selectedSubgroup]
   );
   const selectedRoadmapItem = useMemo(
-    () => structure?.pillar_roadmap.find((item) => item.id === selectedPillarId) ?? null,
-    [selectedPillarId, structure]
+    () => structure?.pillar_roadmap.find((item) => item.code === selectedPillarCode) ?? null,
+    [selectedPillarCode, structure]
   );
   const isPillarTwo = selectedPillar?.code === PILLAR_TWO_CODE;
+  const isPillarThree = selectedPillarCode === PILLAR_THREE_CODE;
 
-  function selectPillar(pillar: ScorePillarDto) {
-    setSelectedPillarId(pillar.id);
-    const subgroup = firstEnabled(pillar.subgroups);
+  function selectPillar(item: ScorePillarRoadmapDto, pillar: ScorePillarDto | null) {
+    setSelectedPillarCode(item.code);
+    setSelectedPillarId(pillar?.id ?? null);
+    const subgroup = firstEnabled(pillar?.subgroups);
     setSelectedSubgroupId(subgroup?.id ?? null);
     setSelectedIndicatorId(firstEnabled(subgroup?.indicators)?.id ?? null);
   }
@@ -1496,10 +1636,15 @@ export function PolicyScorePage() {
         <PillarSidebar
           pillars={structure?.pillars ?? []}
           roadmap={structure?.pillar_roadmap ?? []}
-          selectedPillarId={selectedPillarId}
+          selectedPillarCode={selectedPillarCode}
           onSelect={selectPillar}
         />
-        {isPillarTwo && selectedPillar ? (
+        {isPillarThree && selectedRoadmapItem ? (
+          <>
+            <PillarThreeContent roadmapItem={selectedRoadmapItem} />
+            <PillarThreeRightRail />
+          </>
+        ) : isPillarTwo && selectedPillar ? (
           <>
             <section className="grid min-w-0 gap-4">
               <PillarTwoSummary pillar={selectedPillar} status={selectedRoadmapItem?.status ?? "partial"} />
