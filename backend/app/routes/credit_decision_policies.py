@@ -34,6 +34,7 @@ from app.services.credit_decision_policy_score_structure import (
     get_current_score_structure,
     get_score_structure,
     simulate_pillar_one_score,
+    simulate_pillar_two_score,
     validate_score_structure,
 )
 
@@ -43,6 +44,16 @@ router = APIRouter(prefix="/credit-decision-policies", tags=["credit-decision-po
 class PillarOneScoreSimulationRequest(BaseModel):
     coface_valid: bool = False
     indicator_values: dict[str, Any] | None = None
+    analysis_id: int | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PillarTwoScoreSimulationRequest(BaseModel):
+    requested_limit_amount: float | int | str | None
+    coface_coverage_amount: float | int | str | None = None
+    coface_valid: bool | None = None
+    coface_status: str | None = None
     analysis_id: int | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -129,6 +140,27 @@ def simulate_policy_pillar_one_score(
             policy_id=policy_id,
             coface_valid=payload.coface_valid,
             indicator_values=payload.indicator_values,
+            analysis_id=payload.analysis_id,
+        )
+    except CreditDecisionPolicyScoreStructureNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/{policy_id}/score-simulation/pillar-two")
+def simulate_policy_pillar_two_score(
+    policy_id: int,
+    payload: PillarTwoScoreSimulationRequest,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> dict[str, Any]:
+    try:
+        return simulate_pillar_two_score(
+            db,
+            policy_id=policy_id,
+            requested_limit_amount=payload.requested_limit_amount,
+            coface_coverage_amount=payload.coface_coverage_amount,
+            coface_valid=payload.coface_valid,
+            coface_status=payload.coface_status,
             analysis_id=payload.analysis_id,
         )
     except CreditDecisionPolicyScoreStructureNotFoundError as exc:

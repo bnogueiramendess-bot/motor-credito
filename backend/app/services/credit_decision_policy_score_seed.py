@@ -21,6 +21,9 @@ class IndicatorSeed:
     name: str
     weight_percent: Decimal
     source_key: str
+    description: str | None = None
+    value_type: str = "numeric"
+    is_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,8 @@ class SubgroupSeed:
     name: str
     weight_percent: Decimal
     indicators: tuple[IndicatorSeed, ...]
+    description: str | None = None
+    is_enabled: bool = True
 
 
 LIQUIDITY_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
@@ -41,6 +46,18 @@ LIQUIDITY_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
 )
 
 PILLAR_CODE = "financial_stability_liquidity"
+PILLAR_TWO_CODE = "guarantees_credit_insurance"
+PILLAR_TWO_SUBGROUP_CODE = "credit_insurance_coverage"
+PILLAR_TWO_INDICATOR_CODE = "coface_coverage_requested_ratio"
+
+COFACE_COVERAGE_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
+    (">=", Decimal("1.00"), Decimal("10")),
+    (">=", Decimal("0.80"), Decimal("8")),
+    (">=", Decimal("0.60"), Decimal("6")),
+    (">=", Decimal("0.40"), Decimal("4")),
+    (">", Decimal("0.00"), Decimal("2")),
+    ("=", Decimal("0.00"), Decimal("0")),
+)
 
 PILLAR_1_SUBGROUPS: tuple[SubgroupSeed, ...] = (
     SubgroupSeed(
@@ -94,12 +111,55 @@ PILLAR_1_SUBGROUPS: tuple[SubgroupSeed, ...] = (
     ),
 )
 
+PILLAR_2_SUBGROUPS: tuple[SubgroupSeed, ...] = (
+    SubgroupSeed(
+        code=PILLAR_TWO_SUBGROUP_CODE,
+        name="Cobertura por Seguro de Crédito",
+        weight_percent=Decimal("100"),
+        indicators=(
+            IndicatorSeed(
+                code=PILLAR_TWO_INDICATOR_CODE,
+                name="Cobertura COFACE sobre Limite Solicitado",
+                description="Percentual de cobertura COFACE em relação ao limite solicitado.",
+                weight_percent=Decimal("100"),
+                source_key="coface.coverage_requested_ratio",
+                value_type="ratio",
+            ),
+        ),
+    ),
+    SubgroupSeed(
+        code="real_and_fiduciary_guarantees",
+        name="Garantias Reais e Fiduciárias",
+        description="planned; future_source=GUARANTEE_MANAGEMENT",
+        weight_percent=Decimal("0"),
+        indicators=(),
+        is_enabled=False,
+    ),
+    SubgroupSeed(
+        code="guarantee_legal_quality",
+        name="Qualidade Jurídica da Garantia",
+        description="planned; future_source=LEGAL_GUARANTEE_REVIEW",
+        weight_percent=Decimal("0"),
+        indicators=(),
+        is_enabled=False,
+    ),
+)
 
-def _get_or_create_pillar(db: Session, policy: CreditDecisionPolicy) -> CreditDecisionPolicyPillar:
+
+def _get_or_create_pillar(
+    db: Session,
+    policy: CreditDecisionPolicy,
+    *,
+    code: str,
+    name: str,
+    description: str,
+    weight_percent: Decimal,
+    sort_order: int,
+) -> CreditDecisionPolicyPillar:
     pillar = db.scalar(
         select(CreditDecisionPolicyPillar).where(
             CreditDecisionPolicyPillar.policy_id == policy.id,
-            CreditDecisionPolicyPillar.code == PILLAR_CODE,
+            CreditDecisionPolicyPillar.code == code,
         )
     )
     if pillar is not None:
@@ -107,11 +167,11 @@ def _get_or_create_pillar(db: Session, policy: CreditDecisionPolicy) -> CreditDe
 
     pillar = CreditDecisionPolicyPillar(
         policy_id=policy.id,
-        code=PILLAR_CODE,
-        name="Estabilidade Financeira e Liquidez",
-        description="Pilar 1 do Score Institucional.",
-        weight_percent=Decimal("55"),
-        sort_order=1,
+        code=code,
+        name=name,
+        description=description,
+        weight_percent=weight_percent,
+        sort_order=sort_order,
         is_enabled=True,
     )
     db.add(pillar)
@@ -142,10 +202,10 @@ def _get_or_create_subgroup(
         pillar_id=pillar.id,
         code=seed.code,
         name=seed.name,
-        description=None,
+        description=seed.description,
         weight_percent=seed.weight_percent,
         sort_order=sort_order,
-        is_enabled=True,
+        is_enabled=seed.is_enabled,
     )
     db.add(subgroup)
     db.flush()
@@ -175,22 +235,28 @@ def _get_or_create_indicator(
         subgroup_id=subgroup.id,
         code=seed.code,
         name=seed.name,
-        description=None,
+        description=seed.description,
         source_key=seed.source_key,
-        value_type="numeric",
+        value_type=seed.value_type,
         weight_percent=seed.weight_percent,
         aggregation_method="weighted_average",
         missing_data_behavior="not_available",
         sort_order=sort_order,
-        is_enabled=True,
+        is_enabled=seed.is_enabled,
     )
     db.add(indicator)
     db.flush()
     return indicator
 
 
-def _ensure_liquidity_ranges(db: Session, *, policy: CreditDecisionPolicy, indicator: CreditDecisionPolicyIndicator) -> None:
-    for index, (operator, threshold, score) in enumerate(LIQUIDITY_RANGES, start=1):
+def _ensure_ranges(
+    db: Session,
+    *,
+    policy: CreditDecisionPolicy,
+    indicator: CreditDecisionPolicyIndicator,
+    ranges: tuple[tuple[str, Decimal, Decimal], ...],
+) -> None:
+    for index, (operator, threshold, score) in enumerate(ranges, start=1):
         existing_range = db.scalar(
             select(CreditDecisionPolicyScoreRange).where(
                 CreditDecisionPolicyScoreRange.policy_id == policy.id,
@@ -221,7 +287,15 @@ def _ensure_liquidity_ranges(db: Session, *, policy: CreditDecisionPolicy, indic
 def ensure_default_score_structure(db: Session, policy: CreditDecisionPolicy) -> None:
     # Future activation validation must enforce sibling weight sums at 100% in service,
     # keeping the database responsible only for row-level bounds and integrity.
-    pillar = _get_or_create_pillar(db, policy)
+    pillar = _get_or_create_pillar(
+        db,
+        policy,
+        code=PILLAR_CODE,
+        name="Estabilidade Financeira e Liquidez",
+        description="Pilar 1 do Score Institucional.",
+        weight_percent=Decimal("55"),
+        sort_order=1,
+    )
 
     for subgroup_index, subgroup_seed in enumerate(PILLAR_1_SUBGROUPS, start=1):
         subgroup = _get_or_create_subgroup(
@@ -240,4 +314,32 @@ def ensure_default_score_structure(db: Session, policy: CreditDecisionPolicy) ->
                 sort_order=indicator_index,
             )
             if subgroup_seed.code == "liquidity":
-                _ensure_liquidity_ranges(db, policy=policy, indicator=indicator)
+                _ensure_ranges(db, policy=policy, indicator=indicator, ranges=LIQUIDITY_RANGES)
+
+    pillar_two = _get_or_create_pillar(
+        db,
+        policy,
+        code=PILLAR_TWO_CODE,
+        name="Garantias / Seguro de Crédito",
+        description="Pilar 2 v1 calculado exclusivamente pela cobertura COFACE.",
+        weight_percent=Decimal("20"),
+        sort_order=2,
+    )
+    for subgroup_index, subgroup_seed in enumerate(PILLAR_2_SUBGROUPS, start=1):
+        subgroup = _get_or_create_subgroup(
+            db,
+            policy=policy,
+            pillar=pillar_two,
+            seed=subgroup_seed,
+            sort_order=subgroup_index,
+        )
+        for indicator_index, indicator_seed in enumerate(subgroup_seed.indicators, start=1):
+            indicator = _get_or_create_indicator(
+                db,
+                policy=policy,
+                subgroup=subgroup,
+                seed=indicator_seed,
+                sort_order=indicator_index,
+            )
+            if indicator_seed.code == PILLAR_TWO_INDICATOR_CODE:
+                _ensure_ranges(db, policy=policy, indicator=indicator, ranges=COFACE_COVERAGE_RANGES)

@@ -167,6 +167,53 @@ export type PillarOneSimulationResultDto = {
   simulation?: Record<string, unknown>;
 };
 
+export type PillarTwoSimulationPayload = {
+  requested_limit_amount: string | number | null;
+  coface_coverage_amount?: string | number | null;
+  coface_valid?: boolean | null;
+};
+
+export type PillarTwoSimulationIndicatorDto = {
+  code: string;
+  name: string;
+  raw_value: string | number | null;
+  raw_ratio: string | number | null;
+  capped_ratio: string | number;
+  score: string | number;
+  weight_percent: string | number;
+  weighted_score: string | number;
+  matched_range: {
+    operator: string;
+    threshold_value: string | number;
+    threshold_value_to: string | number | null;
+    score: string | number;
+    label: string | null;
+  } | null;
+};
+
+export type PillarTwoSimulationResultDto = {
+  policy_id: number;
+  pillar_code: string;
+  pillar_name: string;
+  score: string | number;
+  weighted_score: string | number;
+  weight_percent: string | number;
+  status: string;
+  source: string;
+  subgroups: Array<{
+    code: string;
+    name: string;
+    score: string | number;
+    weight_percent: string | number;
+    weighted_score: string | number;
+    indicators: PillarTwoSimulationIndicatorDto[];
+  }>;
+  indicators: PillarTwoSimulationIndicatorDto[];
+  calculation_trace: Array<Record<string, unknown>>;
+  future_guarantee_sources: string[];
+  simulation?: Record<string, unknown>;
+};
+
 export function getCurrentScoreStructure() {
   return apiClient.get<ScoreStructureDto>("/api/admin/credit-decision-policies/current-score-structure");
 }
@@ -174,6 +221,13 @@ export function getCurrentScoreStructure() {
 export function simulatePillarOneScore(policyId: number, payload: PillarOneSimulationPayload) {
   return apiClient.post<PillarOneSimulationResultDto, PillarOneSimulationPayload>(
     `/api/admin/credit-decision-policies/${policyId}/score-simulation/pillar-one`,
+    payload
+  );
+}
+
+export function simulatePillarTwoScore(policyId: number, payload: PillarTwoSimulationPayload) {
+  return apiClient.post<PillarTwoSimulationResultDto, PillarTwoSimulationPayload>(
+    `/api/admin/credit-decision-policies/${policyId}/score-simulation/pillar-two`,
     payload
   );
 }

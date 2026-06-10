@@ -17,6 +17,10 @@ from app.models.credit_decision_policy_score_structure import (
 from app.models.credit_report_read import CreditReportRead
 from app.services.agrisk_financial_analysis_mapper import calculate_pillar_one_from_agrisk_payload
 from app.services.credit_decision_pillar_one_score import calculate_pillar_one_score
+from app.services.credit_decision_pillar_two_score import (
+    PillarTwoPolicyStructureNotFoundError,
+    calculate_pillar_two_score,
+)
 from app.services.credit_report_readers.agrisk_types import AGRISK_FINANCIAL_ANALYSIS
 from app.services.report_links import get_agrisk_link
 
@@ -565,4 +569,31 @@ def simulate_pillar_one_score(
     result["mapper_warnings"] = []
     result["warnings"] = [{"reason": "agrisk_financial_analysis_not_available"}]
     result["simulation"] = {"mode": "not_available", "persisted": False}
+    return result
+
+
+def simulate_pillar_two_score(
+    db: Session,
+    *,
+    policy_id: int,
+    requested_limit_amount: Any,
+    coface_coverage_amount: Any = None,
+    coface_valid: bool | None = None,
+    coface_status: str | None = None,
+    analysis_id: int | None = None,
+) -> dict[str, Any]:
+    _load_policy(db, policy_id)
+    try:
+        result = calculate_pillar_two_score(
+            db=db,
+            policy_id=policy_id,
+            requested_limit_amount=requested_limit_amount,
+            coface_coverage_amount=coface_coverage_amount,
+            coface_valid=coface_valid,
+            coface_status=coface_status,
+            analysis_id=analysis_id,
+        )
+    except PillarTwoPolicyStructureNotFoundError as exc:
+        raise CreditDecisionPolicyScoreStructureNotFoundError(str(exc)) from exc
+    result["simulation"] = {"mode": "manual", "persisted": False}
     return result

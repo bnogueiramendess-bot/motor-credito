@@ -17,7 +17,14 @@ from app.models.credit_decision_policy_score_structure import (
 from app.models.enums import MotorResult
 from app.models.user import User
 from app.schemas.credit_decision_policy import CreditDecisionPolicyCreate
-from app.services.credit_decision_policy_score_seed import PILLAR_CODE, ensure_default_score_structure
+from app.services.credit_decision_policy_score_seed import (
+    COFACE_COVERAGE_RANGES,
+    PILLAR_CODE,
+    PILLAR_TWO_CODE,
+    PILLAR_TWO_INDICATOR_CODE,
+    PILLAR_TWO_SUBGROUP_CODE,
+    ensure_default_score_structure,
+)
 from app.services.credit_decision_policy_service import (
     activate_credit_decision_policy,
     create_credit_decision_policy,
@@ -241,7 +248,12 @@ class CreditDecisionPolicyScoreStructureTestCase(unittest.TestCase):
 
     def test_indicator_weights_sum_100_by_subgroup(self) -> None:
         # Activation-time validation of sibling sums belongs in service before publishing a policy.
-        subgroups = self.db.scalars(select(CreditDecisionPolicySubgroup).where(CreditDecisionPolicySubgroup.policy_id == self.policy.id)).all()
+        subgroups = self.db.scalars(
+            select(CreditDecisionPolicySubgroup).where(
+                CreditDecisionPolicySubgroup.policy_id == self.policy.id,
+                CreditDecisionPolicySubgroup.is_enabled.is_(True),
+            )
+        ).all()
         self.assertGreaterEqual(len(subgroups), 5)
         for subgroup in subgroups:
             total = self.db.scalar(
@@ -251,6 +263,56 @@ class CreditDecisionPolicyScoreStructureTestCase(unittest.TestCase):
                 )
             )
             self.assertEqual(total, Decimal("100.00"), subgroup.code)
+
+    def test_pillar_two_coface_structure_and_ranges_are_created(self) -> None:
+        pillar = self.db.scalar(
+            select(CreditDecisionPolicyPillar).where(
+                CreditDecisionPolicyPillar.policy_id == self.policy.id,
+                CreditDecisionPolicyPillar.code == PILLAR_TWO_CODE,
+            )
+        )
+        self.assertIsNotNone(pillar)
+        self.assertEqual(pillar.weight_percent, Decimal("20.00"))
+
+        subgroup = self.db.scalar(
+            select(CreditDecisionPolicySubgroup).where(
+                CreditDecisionPolicySubgroup.pillar_id == pillar.id,
+                CreditDecisionPolicySubgroup.code == PILLAR_TWO_SUBGROUP_CODE,
+            )
+        )
+        self.assertTrue(subgroup.is_enabled)
+        self.assertEqual(subgroup.weight_percent, Decimal("100.00"))
+
+        indicator = self.db.scalar(
+            select(CreditDecisionPolicyIndicator).where(
+                CreditDecisionPolicyIndicator.subgroup_id == subgroup.id,
+                CreditDecisionPolicyIndicator.code == PILLAR_TWO_INDICATOR_CODE,
+            )
+        )
+        self.assertEqual(indicator.weight_percent, Decimal("100.00"))
+        self.assertEqual(indicator.value_type, "ratio")
+        ranges = self.db.scalars(
+            select(CreditDecisionPolicyScoreRange)
+            .where(CreditDecisionPolicyScoreRange.indicator_id == indicator.id)
+            .order_by(CreditDecisionPolicyScoreRange.sort_order)
+        ).all()
+        self.assertEqual(
+            [(item.operator, item.threshold_value, item.score) for item in ranges],
+            [(operator, threshold.quantize(Decimal("0.0001")), score.quantize(Decimal("0.01"))) for operator, threshold, score in COFACE_COVERAGE_RANGES],
+        )
+
+    def test_future_guarantee_subgroups_are_planned_and_do_not_affect_active_weights(self) -> None:
+        subgroups = self.db.scalars(
+            select(CreditDecisionPolicySubgroup).where(
+                CreditDecisionPolicySubgroup.policy_id == self.policy.id,
+                CreditDecisionPolicySubgroup.code.in_(["real_and_fiduciary_guarantees", "guarantee_legal_quality"]),
+            )
+        ).all()
+        self.assertEqual(len(subgroups), 2)
+        for subgroup in subgroups:
+            self.assertFalse(subgroup.is_enabled)
+            self.assertEqual(subgroup.weight_percent, Decimal("0.00"))
+            self.assertIn("future_source=", subgroup.description)
 
     def test_liquidity_score_ranges_are_created(self) -> None:
         indicators = self.db.scalars(
