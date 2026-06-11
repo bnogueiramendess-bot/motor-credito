@@ -18,10 +18,12 @@ from app.models.user import User
 from app.routes.credit_decision_policies import (
     PillarOneScoreSimulationRequest,
     PillarTwoScoreSimulationRequest,
+    PillarFourScoreSimulationRequest,
     get_policy_score_structure,
     get_policy_score_validation,
     simulate_policy_pillar_one_score,
     simulate_policy_pillar_two_score,
+    simulate_policy_pillar_four_score,
 )
 from app.schemas.credit_decision_policy import CreditDecisionPolicyCreate
 from app.services.credit_decision_policy_score_seed import PILLAR_CODE, ensure_default_score_structure
@@ -150,9 +152,9 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
 
     def _make_pillar_sum_valid(self) -> None:
         pillar = self._pillar()
-        pillar.weight_percent = Decimal("80")
+        pillar.weight_percent = Decimal("75")
         config = dict(self.policy.config_json)
-        config["pillar_weights"] = {PILLAR_CODE: 80, "guarantees_credit_insurance": 20}
+        config["pillar_weights"] = {PILLAR_CODE: 75, "guarantees_credit_insurance": 20, "payment_history": 5}
         self.policy.config_json = config
         self._add_default_ranges_for_all_indicators()
         self.db.commit()
@@ -164,10 +166,11 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
         self.assertEqual(structure["pillars"][0]["code"], PILLAR_CODE)
         self.assertEqual(structure["pillars"][0]["subgroups_count"], 5)
         self.assertEqual(structure["pillars"][0]["indicators_count"], 14)
-        self.assertEqual(structure["policy_progress"]["pillars"], {"configured": 2, "expected": 5})
+        self.assertEqual(structure["policy_progress"]["pillars"], {"configured": 3, "expected": 5})
         self.assertEqual(len(structure["pillar_roadmap"]), 5)
         self.assertEqual(structure["pillar_roadmap"][0]["status"], "partial")
         self.assertEqual(structure["pillar_roadmap"][1]["status"], "configured")
+        self.assertEqual(structure["pillar_roadmap"][3]["status"], "configured")
         self.assertIn("validation_summary", structure)
 
     def test_score_validation_identifies_valid_weights(self) -> None:
@@ -188,7 +191,7 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
         warning = next(item for item in validation["warnings"] if item["code"] == "pillars_not_configured")
         self.assertEqual(warning["severity"], "warning")
         self.assertEqual(warning["entity_type"], "policy")
-        self.assertEqual(warning["affected_count"], 3)
+        self.assertEqual(warning["affected_count"], 2)
 
     def test_score_validation_identifies_real_structural_error(self) -> None:
         subgroup = self.db.scalar(
@@ -295,6 +298,20 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
         self.assertEqual(result["score"], Decimal("6.00"))
         self.assertEqual(result["source"], "coface")
         self.assertEqual(result["simulation"]["persisted"], False)
+
+    def test_pillar_four_simulation_returns_traceability_without_persisting(self) -> None:
+        result = simulate_policy_pillar_four_score(
+            self.policy.id,
+            PillarFourScoreSimulationRequest(cnpj="98765432000199"),
+            self.db,
+            None,
+        )
+
+        self.assertEqual(result["source"], "ar_aging")
+        self.assertEqual(result["status"], "not_available")
+        self.assertEqual(result["score"], Decimal("0.00"))
+        self.assertEqual(result["simulation"], {"mode": "ar_aging", "persisted": False})
+        self.assertEqual(len(result["calculation_trace"]), 3)
 
 
 if __name__ == "__main__":

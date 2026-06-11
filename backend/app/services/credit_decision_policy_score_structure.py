@@ -21,6 +21,10 @@ from app.services.credit_decision_pillar_two_score import (
     PillarTwoPolicyStructureNotFoundError,
     calculate_pillar_two_score,
 )
+from app.services.credit_decision_pillar_four_score import (
+    PillarFourPolicyStructureNotFoundError,
+    calculate_pillar_four_score,
+)
 from app.services.credit_report_readers.agrisk_types import AGRISK_FINANCIAL_ANALYSIS
 from app.services.report_links import get_agrisk_link
 
@@ -596,4 +600,25 @@ def simulate_pillar_two_score(
     except PillarTwoPolicyStructureNotFoundError as exc:
         raise CreditDecisionPolicyScoreStructureNotFoundError(str(exc)) from exc
     result["simulation"] = {"mode": "manual", "persisted": False}
+    return result
+
+
+def simulate_pillar_four_score(
+    db: Session,
+    *,
+    policy_id: int,
+    cnpj: str | None = None,
+    analysis_id: int | None = None,
+) -> dict[str, Any]:
+    _load_policy(db, policy_id)
+    try:
+        result = calculate_pillar_four_score(
+            db=db,
+            policy_id=policy_id,
+            cnpj=cnpj,
+            analysis_id=analysis_id,
+        )
+    except PillarFourPolicyStructureNotFoundError as exc:
+        raise CreditDecisionPolicyScoreStructureNotFoundError(str(exc)) from exc
+    result["simulation"] = {"mode": "ar_aging", "persisted": False}
     return result

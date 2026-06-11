@@ -23,6 +23,12 @@ from app.services.credit_decision_policy_score_seed import (
     PILLAR_TWO_CODE,
     PILLAR_TWO_INDICATOR_CODE,
     PILLAR_TWO_SUBGROUP_CODE,
+    PAYMENT_HISTORY_RANGES,
+    PILLAR_FOUR_CODE,
+    PILLAR_FOUR_CURRENT_INDICATOR_CODE,
+    PILLAR_FOUR_CURRENT_SUBGROUP_CODE,
+    PILLAR_FOUR_HISTORICAL_INDICATOR_CODE,
+    PILLAR_FOUR_HISTORICAL_SUBGROUP_CODE,
     ensure_default_score_structure,
 )
 from app.services.credit_decision_policy_service import (
@@ -313,6 +319,50 @@ class CreditDecisionPolicyScoreStructureTestCase(unittest.TestCase):
             self.assertFalse(subgroup.is_enabled)
             self.assertEqual(subgroup.weight_percent, Decimal("0.00"))
             self.assertIn("future_source=", subgroup.description)
+
+    def test_pillar_four_payment_history_structure_and_ranges_are_created(self) -> None:
+        pillar = self.db.scalar(
+            select(CreditDecisionPolicyPillar).where(
+                CreditDecisionPolicyPillar.policy_id == self.policy.id,
+                CreditDecisionPolicyPillar.code == PILLAR_FOUR_CODE,
+            )
+        )
+        self.assertEqual(pillar.weight_percent, Decimal("5.00"))
+        subgroups = self.db.scalars(
+            select(CreditDecisionPolicySubgroup)
+            .where(CreditDecisionPolicySubgroup.pillar_id == pillar.id)
+            .order_by(CreditDecisionPolicySubgroup.sort_order)
+        ).all()
+        self.assertEqual(
+            [(item.code, item.weight_percent) for item in subgroups],
+            [
+                (PILLAR_FOUR_CURRENT_SUBGROUP_CODE, Decimal("40.00")),
+                (PILLAR_FOUR_HISTORICAL_SUBGROUP_CODE, Decimal("60.00")),
+            ],
+        )
+        indicators = self.db.scalars(
+            select(CreditDecisionPolicyIndicator).where(
+                CreditDecisionPolicyIndicator.subgroup_id.in_([item.id for item in subgroups])
+            )
+        ).all()
+        self.assertEqual(
+            {item.code for item in indicators},
+            {PILLAR_FOUR_CURRENT_INDICATOR_CODE, PILLAR_FOUR_HISTORICAL_INDICATOR_CODE},
+        )
+        for indicator in indicators:
+            self.assertEqual(indicator.weight_percent, Decimal("100.00"))
+            ranges = self.db.scalars(
+                select(CreditDecisionPolicyScoreRange)
+                .where(CreditDecisionPolicyScoreRange.indicator_id == indicator.id)
+                .order_by(CreditDecisionPolicyScoreRange.sort_order)
+            ).all()
+            self.assertEqual(
+                [(item.operator, item.threshold_value, item.score) for item in ranges],
+                [
+                    (operator, threshold.quantize(Decimal("0.0001")), score.quantize(Decimal("0.01")))
+                    for operator, threshold, score in PAYMENT_HISTORY_RANGES
+                ],
+            )
 
     def test_liquidity_score_ranges_are_created(self) -> None:
         indicators = self.db.scalars(

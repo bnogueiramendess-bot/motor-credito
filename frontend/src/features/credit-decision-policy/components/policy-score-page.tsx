@@ -27,6 +27,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   getCurrentScoreStructure,
   PillarOneSimulationResultDto,
+  PillarFourSimulationResultDto,
   PillarTwoSimulationResultDto,
   ScoreIndicatorDto,
   ScorePillarDto,
@@ -38,6 +39,7 @@ import {
   ScoreValidationCheckDto,
   ScoreValidationIssueDto,
   simulatePillarOneScore,
+  simulatePillarFourScore,
   simulatePillarTwoScore
 } from "@/features/credit-decision-policy/api/score-policy.api";
 import { formatCurrencyInputBRL, toNullableNumberInput } from "@/features/analysis-journey/utils/formatters";
@@ -156,6 +158,22 @@ function displayRatioPercent(value: string | number | null | undefined) {
   const numberValue = toNumber(value);
   if (numberValue === null) return "-";
   return `${(numberValue * 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
+}
+
+function formatCnpjInput(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 14);
+  return digits
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d)/, "$1-$2");
+}
+
+function displaySnapshotDate(value: string) {
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  const month = date.toLocaleString("pt-BR", { month: "short" }).replace(".", "");
+  return `${month.charAt(0).toUpperCase()}${month.slice(1)}/${date.getFullYear()}`;
 }
 
 function displayRatioRange(range: ScoreRangeDto) {
@@ -1016,6 +1034,7 @@ function SimulationPanel({
 
 const PILLAR_TWO_CODE = "guarantees_credit_insurance";
 const PILLAR_THREE_CODE = "market_conditions";
+const PILLAR_FOUR_CODE = "payment_history";
 
 const RANGE_BUSINESS_LABELS: Record<string, string> = {
   ">=:1": "Cobertura integral do limite solicitado",
@@ -1321,6 +1340,343 @@ function PillarTwoRightRail({
   );
 }
 
+const PAYMENT_HISTORY_RANGE_LABELS: Record<string, string> = {
+  "=:0": "Sem vencidos",
+  "<=:0.05": "Baixo nível de vencidos",
+  "<=:0.1": "Atenção moderada",
+  "<=:0.2": "Atenção elevada",
+  ">:0.2": "Histórico crítico de vencidos"
+};
+
+function PillarFourContent({ pillar, status }: { pillar: ScorePillarDto; status: ScorePillarRoadmapDto["status"] }) {
+  const currentSubgroup = pillar.subgroups.find((item) => item.code === "current_payment_position") ?? null;
+  const historicalSubgroup = pillar.subgroups.find((item) => item.code === "historical_payment_behavior") ?? null;
+  const ranges = currentSubgroup?.indicators[0]?.score_ranges ?? [];
+  const subgroupCards = [
+    {
+      subgroup: currentSubgroup,
+      description: "Fotografia mais recente da carteira do cliente.",
+      indicatorDescription: "Mede quanto da exposição atual do cliente está vencida.",
+      formula: "overdue_amount / total_exposure_amount"
+    },
+    {
+      subgroup: historicalSubgroup,
+      description: "Comportamento médio nos fechamentos mensais históricos disponíveis.",
+      indicatorDescription: "Média dos percentuais vencidos nos fechamentos mensais históricos do AR Aging.",
+      formula: "average(overdue_amount / total_exposure_amount)"
+    }
+  ];
+
+  return (
+    <section className="grid min-w-0 gap-4">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+          <div>
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Resumo do Pilar 4</span>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">{pillar.name}</h2>
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">
+              Este pilar avalia o comportamento de pagamento do cliente utilizando a posição atual da carteira e o histórico de fechamentos mensais do AR Aging.
+            </p>
+          </div>
+          <span className={`rounded-full border px-3 py-1 text-xs font-bold ${status === "configured" ? statusClass("valid") : statusClass("warning")}`}>
+            {status === "configured" ? "Configurado" : "Em construção"}
+          </span>
+        </div>
+        <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            ["Peso institucional", displayPercent(pillar.weight_percent), "Contribuição máxima prevista de 0,50 ponto"],
+            ["Fonte de dados", "AR Aging interno", "Posição atual e fechamentos mensais históricos"],
+            ["Subgrupos ativos", String(pillar.subgroups_count), "Posição atual e histórico de fechamentos"],
+            ["Objetivo", "Evidência interna", "Diferencia histórico disponível de cliente novo"]
+          ].map(([label, value, detail]) => (
+            <div key={label} className="min-h-28 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">{label}</span>
+              <strong className="mt-2 block text-xl leading-tight text-slate-950">{value}</strong>
+              <small className="mt-1 block text-xs leading-5 text-slate-500">{detail}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="grid gap-3 lg:grid-cols-2">
+        {subgroupCards.map(({ subgroup, description, indicatorDescription, formula }) => {
+          const indicator = subgroup?.indicators[0] ?? null;
+          return (
+            <article key={subgroup?.code ?? description} className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-950">{subgroup?.name ?? "-"}</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
+                </div>
+                <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-black text-blue-700">{displayPercent(subgroup?.weight_percent)}</span>
+              </div>
+              <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                <strong className="block text-xs text-slate-900">{indicator?.name ?? "-"}</strong>
+                <p className="mt-2 text-xs leading-5 text-slate-500">{indicator?.description ?? indicatorDescription}</p>
+                <div className="mt-3 overflow-auto rounded-lg bg-slate-950 px-3 py-2.5 font-mono text-[10px] text-blue-100">{formula}</div>
+              </div>
+            </article>
+          );
+        })}
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Faixas de Pontuação</h2>
+            <p className="mt-1 text-xs leading-5 text-slate-500">As mesmas faixas parametrizadas são aplicadas à posição atual e à média histórica.</p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600">Parametrizado no backend</span>
+        </div>
+        <div className="overflow-auto p-4">
+          <table className="w-full min-w-[560px] overflow-hidden rounded-xl border border-slate-200 text-sm">
+            <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+              <tr><th className="px-4 py-3">Condição de overdue</th><th className="px-4 py-3">Leitura de negócio</th><th className="px-4 py-3">Nota</th></tr>
+            </thead>
+            <tbody>
+              {ranges.map((range) => {
+                const key = `${range.operator}:${toNumber(range.threshold_value)}`;
+                return (
+                  <tr key={range.id} className="border-t border-slate-100 bg-white">
+                    <td className="px-4 py-3 font-semibold text-slate-800">{displayRatioRange(range)}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{PAYMENT_HISTORY_RANGE_LABELS[key] ?? range.label ?? "-"}</td>
+                    <td className="px-4 py-3"><span className="inline-flex min-w-10 justify-center rounded-lg bg-indigo-50 px-3 py-2 font-black text-indigo-700">{displayScore(range.score)}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function PillarFourSimulation({
+  policyId,
+  result,
+  onResult
+}: {
+  policyId: number | null;
+  result: PillarFourSimulationResultDto | null;
+  onResult: (result: PillarFourSimulationResultDto | null) => void;
+}) {
+  const [cnpj, setCnpj] = useState("");
+  const [analysisId, setAnalysisId] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const currentSubgroup = result?.subgroups.find((item) => item.code === "current_payment_position") ?? null;
+  const historicalSubgroup = result?.subgroups.find((item) => item.code === "historical_payment_behavior") ?? null;
+  const currentIndicator = currentSubgroup?.indicators[0] ?? null;
+  const historicalIndicator = historicalSubgroup?.indicators[0] ?? null;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!policyId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      onResult(await simulatePillarFourScore(policyId, {
+        cnpj: cnpj.replace(/\D/g, "") || null,
+        analysis_id: analysisId ? Number(analysisId) : null
+      }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível simular o Pilar 4.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function clearSimulation() {
+    setCnpj("");
+    setAnalysisId("");
+    setError(null);
+    onResult(null);
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="grid gap-3">
+      <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3">
+        <div className="grid gap-3">
+          <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+            CNPJ
+            <input inputMode="numeric" value={cnpj} onChange={(event) => setCnpj(formatCnpjInput(event.target.value))} className="h-10 rounded-lg border border-blue-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-500" placeholder="12.345.678/0001-90" />
+            <span className="text-[10px] font-normal leading-4 text-slate-500">Usado para localizar a posição atual e os fechamentos mensais históricos.</span>
+          </label>
+          <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+            Analysis ID <span className="font-normal text-slate-400">(opcional)</span>
+            <input inputMode="numeric" value={analysisId} onChange={(event) => setAnalysisId(event.target.value.replace(/\D/g, ""))} className="h-10 rounded-lg border border-blue-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-500" placeholder="Ex.: 1234" />
+            <span className="text-[10px] font-normal leading-4 text-slate-500">Se informado, o sistema tentará localizar automaticamente a análise relacionada.</span>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="submit" disabled={isSubmitting || !policyId || (!cnpj && !analysisId)} className="h-10 whitespace-nowrap rounded-lg bg-indigo-600 px-3 text-xs font-black text-white shadow-sm transition hover:bg-indigo-700 disabled:bg-indigo-300">
+              {isSubmitting ? "Simulando..." : "Simular"}
+            </button>
+            <button type="button" onClick={clearSimulation} disabled={isSubmitting || (!cnpj && !analysisId && !result && !error)} className="h-10 whitespace-nowrap rounded-lg border border-blue-200 bg-white px-3 text-xs font-black text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:text-slate-300">
+              Limpar simulação
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {error ? <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</div> : null}
+      {result?.status === "not_available" ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex gap-3">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <h3 className="text-sm font-semibold text-amber-950">Histórico de fechamentos indisponível</h3>
+              <p className="mt-1 text-xs leading-5 text-amber-900">Não foram encontrados fechamentos mensais suficientes para avaliar o comportamento histórico deste cliente.</p>
+              <p className="mt-2 text-xs leading-5 text-amber-800">O score foi calculado apenas com os dados disponíveis.</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="grid gap-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="relative overflow-hidden rounded-xl bg-[#111936] p-4 text-white shadow-[0_10px_24px_rgba(15,23,42,0.16)] sm:col-span-2">
+              <div className="absolute -right-5 -top-7 h-24 w-24 rounded-full border-[18px] border-white/[0.06]" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-blue-200/75">Nota do Pilar</span>
+              <strong className="mt-1 block text-4xl font-black tracking-tight">{displayScore(result.score)} <small className="text-sm text-white/60">/ 10</small></strong>
+              <span className="mt-1 block text-[11px] text-white/55">
+                {result.weight_rebalanced ? "Calculado com base apenas na posição atual disponível." : "Combina posição atual e histórico de fechamentos."}
+              </span>
+            </div>
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3">
+              <span className="block text-[10px] font-bold uppercase tracking-wide text-emerald-700">Contribuição institucional</span>
+              <strong className="mt-1 block text-xl font-black text-emerald-800">{displayPoints(result.weighted_score)}</strong>
+              <span className="mt-1 block text-[10px] text-emerald-700/75">Peso institucional: {displayPercent(result.weight_percent)}</span>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Status</span>
+              <strong className={`mt-1 block text-lg ${result.status === "calculated" ? "text-emerald-700" : "text-amber-700"}`}>{result.status === "calculated" ? "Calculado" : "Histórico de fechamentos indisponível"}</strong>
+              <span className="mt-1 block text-[10px] text-slate-500">Fonte: AR Aging interno</span>
+            </div>
+          </div>
+
+          {result.weight_rebalanced ? (
+            <div className="flex gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs leading-5 text-blue-900">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+              <p><b>A avaliação histórica não pôde ser realizada.</b> O resultado foi calculado utilizando apenas a posição atual disponível.</p>
+            </div>
+          ) : null}
+
+          <section className="rounded-xl border border-slate-200 bg-white p-3">
+            <h3 className="text-xs font-bold text-slate-900">Resultado por subgrupo</h3>
+            <div className="mt-3 grid gap-2">
+              {[currentSubgroup, historicalSubgroup].filter(Boolean).map((subgroup) => {
+                const indicator = subgroup?.indicators[0] ?? null;
+                return (
+                  <div key={subgroup?.code} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <b className="text-xs text-slate-800">{subgroup?.name}</b>
+                        {subgroup?.status === "not_available" ? (
+                          <>
+                            <span className="mt-1 block text-[10px] font-bold text-amber-700">Histórico indisponível</span>
+                            <span className="mt-0.5 block text-[10px] leading-4 text-slate-500">Não foram encontrados fechamentos históricos suficientes para avaliação.</span>
+                          </>
+                        ) : null}
+                      </div>
+                      <b className={`text-sm ${subgroup?.status === "not_available" ? "text-amber-700" : "text-indigo-700"}`}>
+                        {subgroup?.status === "not_available" ? "Não disponível" : `${displayScore(subgroup?.score)} / 10`}
+                      </b>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-slate-500">
+                      <span>
+                        {subgroup?.code === "current_payment_position" ? "Overdue atual" : "Média histórica de overdue"}:{" "}
+                        <b className="text-slate-700">{subgroup?.status === "not_available" ? "Não disponível" : displayRatioPercent(indicator?.raw_value)}</b>
+                      </span>
+                      <span>Peso: <b className="text-slate-700">{displayPercent(subgroup?.weight_percent)}</b></span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <details className="rounded-xl border border-slate-200 bg-white">
+            <summary className="cursor-pointer list-none px-3 py-3 text-xs font-bold text-slate-700">Como o resultado foi calculado</summary>
+            <div className="grid gap-2 border-t border-slate-100 p-3">
+              {[
+                ["Percentual vencido atual", displayRatioPercent(currentIndicator?.raw_value)],
+                ["Nota da posição atual", `${displayScore(currentIndicator?.score)} / 10`],
+                ["Média histórica vencida", historicalSubgroup?.status === "not_available" ? "Não disponível" : displayRatioPercent(historicalIndicator?.raw_value)],
+                [
+                  "Comportamento histórico",
+                  historicalSubgroup?.status === "not_available" ? "Não considerado no cálculo" : `${displayScore(historicalIndicator?.score)} / 10`
+                ],
+                ["Resultado final", `${displayScore(result.score)} / 10`]
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-start justify-between gap-3 text-xs">
+                  <span className="text-slate-500">{label}</span><b className="text-right text-slate-800">{value}</b>
+                </div>
+              ))}
+            </div>
+          </details>
+
+          <details className="rounded-xl border border-slate-200 bg-slate-50">
+            <summary className="cursor-pointer list-none px-3 py-3 text-xs font-bold text-slate-600">Ver detalhes técnicos</summary>
+            <pre className="max-h-64 overflow-auto border-t border-slate-200 p-3 text-[10px] leading-5 text-slate-600">{JSON.stringify(result, null, 2)}</pre>
+          </details>
+        </div>
+      ) : null}
+    </form>
+  );
+}
+
+function PillarFourRightRail({
+  policyId,
+  result,
+  onResult
+}: {
+  policyId: number | null;
+  result: PillarFourSimulationResultDto | null;
+  onResult: (result: PillarFourSimulationResultDto | null) => void;
+}) {
+  return (
+    <aside className="grid content-start gap-3 pr-1 xl:sticky xl:top-4">
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4">
+          <h2 className="text-sm font-semibold text-slate-900">Simulação Isolada</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Consulta o AR Aging interno sem persistir resultado ou afetar o motor oficial.</p>
+        </div>
+        <div className="p-4"><PillarFourSimulation policyId={policyId} result={result} onResult={onResult} /></div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4">
+          <h2 className="text-sm font-semibold text-slate-900">Histórico de fechamentos utilizado</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Fechamentos mensais históricos considerados pelo backend.</p>
+        </div>
+        <div className="p-4">
+          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+            <span className="text-slate-500">Fechamentos utilizados</span><b className="text-slate-900">{result?.snapshots_used_count ?? "-"}</b>
+          </div>
+          <div className="mt-3 grid gap-2">
+            {result?.snapshot_dates_used.map((date) => (
+              <div key={date} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                <FileClock className="h-3.5 w-3.5 text-indigo-600" /><b>{displaySnapshotDate(date)}</b>
+              </div>
+            ))}
+            {result && result.snapshot_dates_used.length === 0 ? <p className="text-xs leading-5 text-slate-500">Nenhum fechamento mensal histórico foi localizado para o cliente consultado.</p> : null}
+            {!result ? <p className="text-xs leading-5 text-slate-500">As datas utilizadas serão exibidas após a simulação.</p> : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
+        <div className="flex gap-3">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+          <div><h2 className="text-sm font-semibold text-amber-950">Histórico de fechamentos indisponível</h2><p className="mt-1 text-xs leading-5 text-amber-900">Não foram encontrados fechamentos mensais suficientes para avaliar o comportamento histórico deste cliente.</p><p className="mt-1 text-xs leading-5 text-amber-800">O score foi calculado apenas com os dados disponíveis.</p></div>
+        </div>
+      </section>
+    </aside>
+  );
+}
+
 const PILLAR_THREE_SUBGROUPS = [
   {
     name: "Risco Setorial",
@@ -1527,6 +1883,7 @@ export function PolicyScorePage() {
   const [selectedIndicatorId, setSelectedIndicatorId] = useState<number | null>(null);
   const [simulationResult, setSimulationResult] = useState<PillarOneSimulationResultDto | null>(null);
   const [pillarTwoSimulationResult, setPillarTwoSimulationResult] = useState<PillarTwoSimulationResultDto | null>(null);
+  const [pillarFourSimulationResult, setPillarFourSimulationResult] = useState<PillarFourSimulationResultDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canViewPolicy, setCanViewPolicy] = useState<boolean | null>(null);
@@ -1586,6 +1943,7 @@ export function PolicyScorePage() {
   );
   const isPillarTwo = selectedPillar?.code === PILLAR_TWO_CODE;
   const isPillarThree = selectedPillarCode === PILLAR_THREE_CODE;
+  const isPillarFour = selectedPillar?.code === PILLAR_FOUR_CODE;
 
   function selectPillar(item: ScorePillarRoadmapDto, pillar: ScorePillarDto | null) {
     setSelectedPillarCode(item.code);
@@ -1656,6 +2014,15 @@ export function PolicyScorePage() {
               policyId={structure?.policy.id ?? null}
               result={pillarTwoSimulationResult}
               onResult={setPillarTwoSimulationResult}
+            />
+          </>
+        ) : isPillarFour && selectedPillar ? (
+          <>
+            <PillarFourContent pillar={selectedPillar} status={selectedRoadmapItem?.status ?? "partial"} />
+            <PillarFourRightRail
+              policyId={structure?.policy.id ?? null}
+              result={pillarFourSimulationResult}
+              onResult={setPillarFourSimulationResult}
             />
           </>
         ) : (

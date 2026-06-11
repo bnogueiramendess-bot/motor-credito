@@ -214,6 +214,75 @@ export type PillarTwoSimulationResultDto = {
   simulation?: Record<string, unknown>;
 };
 
+export type PillarFourSimulationPayload = {
+  cnpj?: string | null;
+  analysis_id?: number | null;
+};
+
+export type PillarFourSimulationIndicatorDto = {
+  code: string;
+  name: string;
+  raw_value: string | number | null;
+  status: string;
+  reason: string | null;
+  score: string | number;
+  weight_percent: string | number;
+  weighted_score: string | number;
+  matched_range: {
+    operator: string;
+    threshold_value: string | number;
+    threshold_value_to: string | number | null;
+    score: string | number;
+    label: string | null;
+  } | null;
+};
+
+export type PillarFourSimulationResultDto = {
+  policy_id: number;
+  analysis_id: number | null;
+  cnpj_normalized: string | null;
+  pillar_code: string;
+  pillar_name: string;
+  score: string | number;
+  weighted_score: string | number;
+  weight_percent: string | number;
+  status: string;
+  source: string;
+  reason: string | null;
+  subgroups: Array<{
+    code: string;
+    name: string;
+    status: string;
+    reason: string | null;
+    score: string | number;
+    weight_percent: string | number;
+    weighted_score: string | number;
+    rebalanced_weight_percent: string | number;
+    rebalanced_weighted_score: string | number;
+    indicators: PillarFourSimulationIndicatorDto[];
+  }>;
+  indicators: PillarFourSimulationIndicatorDto[];
+  current_position: {
+    import_run_id: number;
+    base_date: string;
+    total_exposure_amount: string | number;
+    overdue_amount: string | number;
+    raw_overdue_amount: string | number;
+    effective_overdue_amount: string | number;
+    overdue_ratio: string | number | null;
+    rows_count: number;
+  } | null;
+  snapshots_used_count: number;
+  snapshot_dates_used: string[];
+  weight_rebalanced: boolean;
+  available_weight: string | number;
+  ignored_weight: string | number;
+  ignored_subgroups: string[];
+  warnings: Array<Record<string, unknown>>;
+  calculation_trace: Array<Record<string, unknown>>;
+  simulation?: Record<string, unknown>;
+};
+
 export function getCurrentScoreStructure() {
   return apiClient.get<ScoreStructureDto>("/api/admin/credit-decision-policies/current-score-structure");
 }
@@ -228,6 +297,13 @@ export function simulatePillarOneScore(policyId: number, payload: PillarOneSimul
 export function simulatePillarTwoScore(policyId: number, payload: PillarTwoSimulationPayload) {
   return apiClient.post<PillarTwoSimulationResultDto, PillarTwoSimulationPayload>(
     `/api/admin/credit-decision-policies/${policyId}/score-simulation/pillar-two`,
+    payload
+  );
+}
+
+export function simulatePillarFourScore(policyId: number, payload: PillarFourSimulationPayload) {
+  return apiClient.post<PillarFourSimulationResultDto, PillarFourSimulationPayload>(
+    `/api/admin/credit-decision-policies/${policyId}/score-simulation/pillar-four`,
     payload
   );
 }

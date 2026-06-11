@@ -35,6 +35,7 @@ from app.services.credit_decision_policy_score_structure import (
     get_score_structure,
     simulate_pillar_one_score,
     simulate_pillar_two_score,
+    simulate_pillar_four_score,
     validate_score_structure,
 )
 
@@ -54,6 +55,13 @@ class PillarTwoScoreSimulationRequest(BaseModel):
     coface_coverage_amount: float | int | str | None = None
     coface_valid: bool | None = None
     coface_status: str | None = None
+    analysis_id: int | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PillarFourScoreSimulationRequest(BaseModel):
+    cnpj: str | None = None
     analysis_id: int | None = None
 
     model_config = ConfigDict(extra="forbid")
@@ -161,6 +169,24 @@ def simulate_policy_pillar_two_score(
             coface_coverage_amount=payload.coface_coverage_amount,
             coface_valid=payload.coface_valid,
             coface_status=payload.coface_status,
+            analysis_id=payload.analysis_id,
+        )
+    except CreditDecisionPolicyScoreStructureNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/{policy_id}/score-simulation/pillar-four")
+def simulate_policy_pillar_four_score(
+    policy_id: int,
+    payload: PillarFourScoreSimulationRequest,
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> dict[str, Any]:
+    try:
+        return simulate_pillar_four_score(
+            db,
+            policy_id=policy_id,
+            cnpj=payload.cnpj,
             analysis_id=payload.analysis_id,
         )
     except CreditDecisionPolicyScoreStructureNotFoundError as exc:

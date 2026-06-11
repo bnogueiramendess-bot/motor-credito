@@ -49,6 +49,11 @@ PILLAR_CODE = "financial_stability_liquidity"
 PILLAR_TWO_CODE = "guarantees_credit_insurance"
 PILLAR_TWO_SUBGROUP_CODE = "credit_insurance_coverage"
 PILLAR_TWO_INDICATOR_CODE = "coface_coverage_requested_ratio"
+PILLAR_FOUR_CODE = "payment_history"
+PILLAR_FOUR_CURRENT_SUBGROUP_CODE = "current_payment_position"
+PILLAR_FOUR_HISTORICAL_SUBGROUP_CODE = "historical_payment_behavior"
+PILLAR_FOUR_CURRENT_INDICATOR_CODE = "current_overdue_ratio"
+PILLAR_FOUR_HISTORICAL_INDICATOR_CODE = "historical_average_overdue_ratio"
 
 COFACE_COVERAGE_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
     (">=", Decimal("1.00"), Decimal("10")),
@@ -57,6 +62,14 @@ COFACE_COVERAGE_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
     (">=", Decimal("0.40"), Decimal("4")),
     (">", Decimal("0.00"), Decimal("2")),
     ("=", Decimal("0.00"), Decimal("0")),
+)
+
+PAYMENT_HISTORY_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
+    ("=", Decimal("0.00"), Decimal("10")),
+    ("<=", Decimal("0.05"), Decimal("8")),
+    ("<=", Decimal("0.10"), Decimal("6")),
+    ("<=", Decimal("0.20"), Decimal("4")),
+    (">", Decimal("0.20"), Decimal("0")),
 )
 
 PILLAR_1_SUBGROUPS: tuple[SubgroupSeed, ...] = (
@@ -142,6 +155,39 @@ PILLAR_2_SUBGROUPS: tuple[SubgroupSeed, ...] = (
         weight_percent=Decimal("0"),
         indicators=(),
         is_enabled=False,
+    ),
+)
+
+PILLAR_4_SUBGROUPS: tuple[SubgroupSeed, ...] = (
+    SubgroupSeed(
+        code=PILLAR_FOUR_CURRENT_SUBGROUP_CODE,
+        name="Posição Atual",
+        weight_percent=Decimal("40"),
+        indicators=(
+            IndicatorSeed(
+                code=PILLAR_FOUR_CURRENT_INDICATOR_CODE,
+                name="Percentual Vencido Atual",
+                description="Percentual vencido atual sobre a exposição total do cliente.",
+                weight_percent=Decimal("100"),
+                source_key="ar_aging_current.overdue_ratio",
+                value_type="ratio",
+            ),
+        ),
+    ),
+    SubgroupSeed(
+        code=PILLAR_FOUR_HISTORICAL_SUBGROUP_CODE,
+        name="Comportamento Histórico",
+        weight_percent=Decimal("60"),
+        indicators=(
+            IndicatorSeed(
+                code=PILLAR_FOUR_HISTORICAL_INDICATOR_CODE,
+                name="Média Histórica de Vencido",
+                description="Média histórica do percentual vencido do cliente nos snapshots de AR Aging disponíveis.",
+                weight_percent=Decimal("100"),
+                source_key="ar_aging_snapshots.average_overdue_ratio",
+                value_type="ratio",
+            ),
+        ),
     ),
 )
 
@@ -343,3 +389,30 @@ def ensure_default_score_structure(db: Session, policy: CreditDecisionPolicy) ->
             )
             if indicator_seed.code == PILLAR_TWO_INDICATOR_CODE:
                 _ensure_ranges(db, policy=policy, indicator=indicator, ranges=COFACE_COVERAGE_RANGES)
+
+    pillar_four = _get_or_create_pillar(
+        db,
+        policy,
+        code=PILLAR_FOUR_CODE,
+        name="Histórico de Pagamento",
+        description="Pilar 4 calculado pela posição atual e pelos snapshots internos de AR Aging.",
+        weight_percent=Decimal("5"),
+        sort_order=4,
+    )
+    for subgroup_index, subgroup_seed in enumerate(PILLAR_4_SUBGROUPS, start=1):
+        subgroup = _get_or_create_subgroup(
+            db,
+            policy=policy,
+            pillar=pillar_four,
+            seed=subgroup_seed,
+            sort_order=subgroup_index,
+        )
+        for indicator_index, indicator_seed in enumerate(subgroup_seed.indicators, start=1):
+            indicator = _get_or_create_indicator(
+                db,
+                policy=policy,
+                subgroup=subgroup,
+                seed=indicator_seed,
+                sort_order=indicator_index,
+            )
+            _ensure_ranges(db, policy=policy, indicator=indicator, ranges=PAYMENT_HISTORY_RANGES)
