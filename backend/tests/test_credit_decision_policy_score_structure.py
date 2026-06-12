@@ -29,6 +29,10 @@ from app.services.credit_decision_policy_score_seed import (
     PILLAR_FOUR_CURRENT_SUBGROUP_CODE,
     PILLAR_FOUR_HISTORICAL_INDICATOR_CODE,
     PILLAR_FOUR_HISTORICAL_SUBGROUP_CODE,
+    PILLAR_FIVE_CODE,
+    PILLAR_FIVE_INDICATOR_CODE,
+    PILLAR_FIVE_SUBGROUP_CODE,
+    RELATIONSHIP_HISTORY_RANGES,
     ensure_default_score_structure,
 )
 from app.services.credit_decision_policy_service import (
@@ -363,6 +367,43 @@ class CreditDecisionPolicyScoreStructureTestCase(unittest.TestCase):
                     for operator, threshold, score in PAYMENT_HISTORY_RANGES
                 ],
             )
+
+    def test_pillar_five_relationship_history_structure_and_ranges_are_created(self) -> None:
+        pillar = self.db.scalar(
+            select(CreditDecisionPolicyPillar).where(
+                CreditDecisionPolicyPillar.policy_id == self.policy.id,
+                CreditDecisionPolicyPillar.code == PILLAR_FIVE_CODE,
+            )
+        )
+        self.assertEqual(pillar.weight_percent, Decimal("5.00"))
+        subgroup = self.db.scalar(
+            select(CreditDecisionPolicySubgroup).where(
+                CreditDecisionPolicySubgroup.pillar_id == pillar.id,
+                CreditDecisionPolicySubgroup.code == PILLAR_FIVE_SUBGROUP_CODE,
+            )
+        )
+        self.assertTrue(subgroup.is_enabled)
+        self.assertEqual(subgroup.weight_percent, Decimal("100.00"))
+        indicator = self.db.scalar(
+            select(CreditDecisionPolicyIndicator).where(
+                CreditDecisionPolicyIndicator.subgroup_id == subgroup.id,
+                CreditDecisionPolicyIndicator.code == PILLAR_FIVE_INDICATOR_CODE,
+            )
+        )
+        self.assertEqual(indicator.weight_percent, Decimal("100.00"))
+        self.assertEqual(indicator.value_type, "ordinal")
+        ranges = self.db.scalars(
+            select(CreditDecisionPolicyScoreRange)
+            .where(CreditDecisionPolicyScoreRange.indicator_id == indicator.id)
+            .order_by(CreditDecisionPolicyScoreRange.sort_order)
+        ).all()
+        self.assertEqual(
+            [(item.operator, item.threshold_value, item.score) for item in ranges],
+            [
+                (operator, threshold.quantize(Decimal("0.0001")), score.quantize(Decimal("0.01")))
+                for operator, threshold, score in RELATIONSHIP_HISTORY_RANGES
+            ],
+        )
 
     def test_liquidity_score_ranges_are_created(self) -> None:
         indicators = self.db.scalars(

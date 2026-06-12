@@ -27,6 +27,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   getCurrentScoreStructure,
   PillarOneSimulationResultDto,
+  PillarFiveSimulationResultDto,
   PillarFourSimulationResultDto,
   PillarTwoSimulationResultDto,
   ScoreIndicatorDto,
@@ -39,6 +40,7 @@ import {
   ScoreValidationCheckDto,
   ScoreValidationIssueDto,
   simulatePillarOneScore,
+  simulatePillarFiveScore,
   simulatePillarFourScore,
   simulatePillarTwoScore
 } from "@/features/credit-decision-policy/api/score-policy.api";
@@ -1035,6 +1037,7 @@ function SimulationPanel({
 const PILLAR_TWO_CODE = "guarantees_credit_insurance";
 const PILLAR_THREE_CODE = "market_conditions";
 const PILLAR_FOUR_CODE = "payment_history";
+const PILLAR_FIVE_CODE = "relationship_history";
 
 const RANGE_BUSINESS_LABELS: Record<string, string> = {
   ">=:1": "Cobertura integral do limite solicitado",
@@ -1677,6 +1680,318 @@ function PillarFourRightRail({
   );
 }
 
+const RELATIONSHIP_LEVEL_CONTENT: Record<number, { label: string; description: string; tone: string }> = {
+  3: {
+    label: "Relacionamento forte",
+    description: "Cliente com limite aprovado e posição ativa na carteira.",
+    tone: "border-emerald-200 bg-emerald-50 text-emerald-800"
+  },
+  2: {
+    label: "Relacionamento relevante",
+    description: "Cliente com limite aprovado, sem posição ativa na carteira.",
+    tone: "border-blue-200 bg-blue-50 text-blue-800"
+  },
+  1: {
+    label: "Relacionamento moderado",
+    description: "Cliente presente na carteira, sem limite aprovado disponível.",
+    tone: "border-amber-200 bg-amber-50 text-amber-800"
+  },
+  0: {
+    label: "Sem relacionamento",
+    description: "Cliente novo ou sem histórico interno disponível.",
+    tone: "border-slate-200 bg-slate-50 text-slate-700"
+  }
+};
+
+function relationshipExecutiveReason(level: number) {
+  return RELATIONSHIP_LEVEL_CONTENT[level]?.description ?? "Classificação atribuída com base nas informações disponíveis.";
+}
+
+function PillarFiveContent({ pillar, status }: { pillar: ScorePillarDto; status: ScorePillarRoadmapDto["status"] }) {
+  const subgroup = pillar.subgroups.find((item) => item.code === "internal_relationship") ?? pillar.subgroups[0] ?? null;
+  const indicator = subgroup?.indicators.find((item) => item.code === "internal_relationship_level") ?? subgroup?.indicators[0] ?? null;
+  const rangesByLevel = new Map(indicator?.score_ranges.map((range) => [toNumber(range.threshold_value), range]) ?? []);
+
+  return (
+    <section className="grid min-w-0 gap-4">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+          <div>
+            <span className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Resumo Executivo do Pilar</span>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">{pillar.name}</h2>
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">
+              Este pilar avalia a profundidade do relacionamento interno com o cliente, considerando limite aprovado, posição atual e presença na carteira.
+            </p>
+          </div>
+          <span className={`rounded-full border px-3 py-1 text-xs font-bold ${status === "configured" ? statusClass("valid") : statusClass("warning")}`}>
+            {status === "configured" ? "Configurado" : "Em construção"}
+          </span>
+        </div>
+        <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            ["Peso institucional", displayPercent(pillar.weight_percent), "Participação definida na política"],
+            ["Status", status === "configured" ? "Configurado" : "Em construção", "Pronto para simulação isolada"],
+            ["Fonte de dados", "Carteira Interna", "Informações comerciais e análises disponíveis"],
+            ["Objetivo do Pilar", "Profundidade do vínculo", "Relacionamento interno, sem medir inadimplência"]
+          ].map(([label, value, detail]) => (
+            <div key={label} className="min-h-28 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <span className="text-[10px] font-black uppercase tracking-wide text-slate-500">{label}</span>
+              <strong className="mt-2 block text-xl leading-tight text-slate-950">{value}</strong>
+              <small className="mt-1 block text-xs leading-5 text-slate-500">{detail}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4">
+          <h2 className="text-sm font-semibold text-slate-900">Estrutura de Cálculo</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Um único subgrupo traduz as evidências internas disponíveis em nível de relacionamento.</p>
+        </div>
+        <div className="p-4">
+          <article className="rounded-xl border border-blue-200 bg-blue-50/70 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-950">{subgroup?.name ?? "Relacionamento Interno"}</h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">Classificação executiva do vínculo existente com o cliente.</p>
+              </div>
+              <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-black text-blue-700">{displayPercent(subgroup?.weight_percent)}</span>
+            </div>
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <strong className="block text-xs text-slate-900">{indicator?.name ?? "Nível de Relacionamento Interno"}</strong>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">Nível de relacionamento interno com base nas evidências disponíveis.</p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600">Peso {displayPercent(indicator?.weight_percent)}</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Classificação do Relacionamento</h2>
+            <p className="mt-1 text-xs leading-5 text-slate-500">As notas exibidas abaixo seguem as faixas definidas na política.</p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600">Definido pela política</span>
+        </div>
+        <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+          {[3, 2, 1, 0].map((level) => {
+            const content = RELATIONSHIP_LEVEL_CONTENT[level];
+            const range = rangesByLevel.get(level);
+            return (
+              <article key={level} className={`min-h-36 rounded-xl border p-4 ${content.tone}`}>
+                <span className="inline-flex min-w-10 justify-center rounded-lg bg-white/80 px-3 py-2 text-sm font-black shadow-sm">
+                  {range ? displayScore(range.score) : "Não disponível"}
+                </span>
+                <h3 className="mt-3 text-sm font-semibold">{content.label}</h3>
+                <p className="mt-1 text-xs leading-5 opacity-80">{content.description}</p>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function PillarFiveSimulation({
+  policyId,
+  result,
+  onResult
+}: {
+  policyId: number | null;
+  result: PillarFiveSimulationResultDto | null;
+  onResult: (result: PillarFiveSimulationResultDto | null) => void;
+}) {
+  const [cnpj, setCnpj] = useState("");
+  const [analysisId, setAnalysisId] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const evidence = result?.relationship_evidence ?? null;
+  const analysisFound = Boolean(
+    evidence?.current_approved_limit_source?.startsWith("credit_analysis")
+    || evidence?.current_exposure_source?.startsWith("credit_analysis")
+  );
+  const executiveReason = result ? relationshipExecutiveReason(result.relationship_level) : "";
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!policyId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      onResult(await simulatePillarFiveScore(policyId, {
+        cnpj: cnpj.replace(/\D/g, "") || null,
+        analysis_id: analysisId ? Number(analysisId) : null
+      }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível simular o Pilar 5.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function clearSimulation() {
+    setCnpj("");
+    setAnalysisId("");
+    setError(null);
+    onResult(null);
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="grid gap-3">
+      <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3">
+        <div className="grid gap-3">
+          <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+            CNPJ
+            <input inputMode="numeric" value={cnpj} onChange={(event) => setCnpj(formatCnpjInput(event.target.value))} className="h-10 rounded-lg border border-blue-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-500" placeholder="12.345.678/0001-90" />
+          </label>
+          <label className="grid gap-1.5 text-xs font-bold text-slate-700">
+            Analysis ID <span className="font-normal text-slate-400">(opcional)</span>
+            <input inputMode="numeric" value={analysisId} onChange={(event) => setAnalysisId(event.target.value.replace(/\D/g, ""))} className="h-10 rounded-lg border border-blue-200 bg-white px-3 text-sm font-semibold outline-none focus:border-indigo-500" placeholder="Ex.: 1234" />
+            <span className="text-[10px] font-normal leading-4 text-slate-500">Se informado, o sistema tentará localizar automaticamente a análise relacionada.</span>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="submit" disabled={isSubmitting || !policyId || (!cnpj && !analysisId)} className="h-10 whitespace-nowrap rounded-lg bg-indigo-600 px-3 text-xs font-black text-white shadow-sm transition hover:bg-indigo-700 disabled:bg-indigo-300">
+              {isSubmitting ? "Simulando..." : "Simular"}
+            </button>
+            <button type="button" onClick={clearSimulation} disabled={isSubmitting || (!cnpj && !analysisId && !result && !error)} className="h-10 whitespace-nowrap rounded-lg border border-blue-200 bg-white px-3 text-xs font-black text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:text-slate-300">
+              Limpar simulação
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {error ? <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</div> : null}
+
+      {result?.relationship_level === 0 ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex gap-3">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <h3 className="text-sm font-semibold text-amber-950">Não foram encontradas evidências internas de relacionamento com este cliente.</h3>
+              <p className="mt-1 text-xs leading-5 text-amber-900">Isso não significa inadimplência; significa ausência de relacionamento interno registrado.</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="grid gap-3">
+          <section className="overflow-hidden rounded-xl border border-blue-200 bg-blue-50/60">
+            <div className="relative overflow-hidden bg-[#111936] p-4 text-white">
+              <div className="absolute -right-5 -top-7 h-24 w-24 rounded-full border-[18px] border-white/[0.06]" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-blue-200/75">Nível de Relacionamento</span>
+              <strong className="mt-1 block text-2xl font-black tracking-tight">{result.relationship_label}</strong>
+              <p className="mt-2 max-w-xs text-xs leading-5 text-white/65">{executiveReason}</p>
+            </div>
+            <div className="grid gap-2 p-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-indigo-100 bg-white p-3">
+                <span className="block text-[10px] font-bold uppercase tracking-wide text-indigo-600">Nota do Pilar</span>
+                <strong className="mt-1 block text-xl font-black text-indigo-800">{displayScore(result.score)} <small className="text-xs font-bold text-indigo-500">/ 10</small></strong>
+              </div>
+              <div className="rounded-lg border border-emerald-100 bg-white p-3">
+                <span className="block text-[10px] font-bold uppercase tracking-wide text-emerald-700">Contribuição ao Score Institucional</span>
+                <strong className="mt-1 block text-xl font-black text-emerald-800">{displayPoints(result.weighted_score)}</strong>
+                <span className="mt-1 block text-[10px] text-emerald-700/75">Peso institucional: {displayPercent(result.weight_percent)}</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Status</span>
+                <strong className="mt-1 block text-sm text-emerald-700">{result.status === "calculated" ? "Calculado" : "Dados insuficientes"}</strong>
+                <span className="mt-1 block text-[10px] leading-4 text-slate-500">{executiveReason}</span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Fonte</span>
+                <strong className="mt-1 block text-sm text-slate-800">Carteira Interna</strong>
+                <span className="mt-1 block text-[10px] leading-4 text-slate-500">Informações internas disponíveis para o cliente</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-3">
+            <h3 className="text-xs font-bold text-slate-900">Evidências Utilizadas</h3>
+            <div className="mt-3 grid gap-2">
+              {[
+                ["Limite aprovado atual", evidence?.has_current_approved_limit ? displayCurrency(evidence.current_approved_limit) : "Não disponível"],
+                ["Posição atual na carteira", evidence?.has_current_exposure ? displayCurrency(evidence.current_exposure_amount) : "Não disponível"],
+                ["Presença na carteira", evidence?.has_portfolio_presence ? "Sim" : "Não"],
+                ["Análise de crédito encontrada", analysisFound ? "Sim" : "Não localizada"],
+                ["Fonte das evidências", "Carteira Interna"]
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs">
+                  <span className="text-slate-500">{label}</span><b className="text-right text-slate-800">{value}</b>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <details className="rounded-xl border border-slate-200 bg-white">
+            <summary className="cursor-pointer list-none px-3 py-3 text-xs font-bold text-slate-700">Como o Resultado Foi Calculado</summary>
+            <div className="grid gap-2 border-t border-slate-100 p-3">
+              {[
+                ["Limite aprovado", evidence?.has_current_approved_limit ? "Sim" : "Não"],
+                ["Posição atual na carteira", evidence?.has_current_exposure ? "Sim" : "Não"],
+                ["Presença na carteira", evidence?.has_portfolio_presence ? "Sim" : "Não"]
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-start justify-between gap-3 text-xs">
+                  <span className="text-slate-500">{label}</span><b className="text-right text-slate-800">{value}</b>
+                </div>
+              ))}
+              <div className="my-1 flex justify-center text-slate-300"><ArrowRight className="h-4 w-4 rotate-90" /></div>
+              <div className="flex items-start justify-between gap-3 rounded-lg bg-blue-50 px-3 py-2.5 text-xs">
+                <span className="font-semibold text-blue-700">Classificação atribuída</span><b className="text-right text-blue-900">{result.relationship_label}</b>
+              </div>
+              <div className="flex justify-center text-slate-300"><ArrowRight className="h-4 w-4 rotate-90" /></div>
+              <div className="flex items-start justify-between gap-3 rounded-lg bg-indigo-50 px-3 py-2.5 text-xs">
+                <span className="font-semibold text-indigo-700">Nota atribuída</span><b className="text-right text-indigo-900">{displayScore(result.score)} / 10</b>
+              </div>
+            </div>
+          </details>
+
+          <details className="rounded-xl border border-slate-200 bg-slate-50">
+            <summary className="cursor-pointer list-none px-3 py-3 text-xs font-bold text-slate-600">Ver detalhes técnicos</summary>
+            <pre className="max-h-64 overflow-auto border-t border-slate-200 p-3 text-[10px] leading-5 text-slate-600">{JSON.stringify(result, null, 2)}</pre>
+          </details>
+        </div>
+      ) : null}
+    </form>
+  );
+}
+
+function PillarFiveRightRail({
+  policyId,
+  result,
+  onResult
+}: {
+  policyId: number | null;
+  result: PillarFiveSimulationResultDto | null;
+  onResult: (result: PillarFiveSimulationResultDto | null) => void;
+}) {
+  return (
+    <aside className="grid content-start gap-3 pr-1 xl:sticky xl:top-4">
+      <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4">
+          <h2 className="text-sm font-semibold text-slate-900">Simulação Isolada</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Consulta evidências internas sem persistir resultado ou afetar o motor oficial.</p>
+        </div>
+        <div className="p-4"><PillarFiveSimulation policyId={policyId} result={result} onResult={onResult} /></div>
+      </section>
+      {!result ? (
+        <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm">
+          <div className="flex gap-3">
+            <Database className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+            <div><h2 className="text-sm font-semibold text-blue-950">Evidências internas</h2><p className="mt-1 text-xs leading-5 text-blue-900/80">Após a simulação, serão exibidos limite aprovado, posição atual na carteira, presença na carteira e fonte das informações.</p></div>
+          </div>
+        </section>
+      ) : null}
+    </aside>
+  );
+}
+
 const PILLAR_THREE_SUBGROUPS = [
   {
     name: "Risco Setorial",
@@ -1884,6 +2199,7 @@ export function PolicyScorePage() {
   const [simulationResult, setSimulationResult] = useState<PillarOneSimulationResultDto | null>(null);
   const [pillarTwoSimulationResult, setPillarTwoSimulationResult] = useState<PillarTwoSimulationResultDto | null>(null);
   const [pillarFourSimulationResult, setPillarFourSimulationResult] = useState<PillarFourSimulationResultDto | null>(null);
+  const [pillarFiveSimulationResult, setPillarFiveSimulationResult] = useState<PillarFiveSimulationResultDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canViewPolicy, setCanViewPolicy] = useState<boolean | null>(null);
@@ -1944,6 +2260,7 @@ export function PolicyScorePage() {
   const isPillarTwo = selectedPillar?.code === PILLAR_TWO_CODE;
   const isPillarThree = selectedPillarCode === PILLAR_THREE_CODE;
   const isPillarFour = selectedPillar?.code === PILLAR_FOUR_CODE;
+  const isPillarFive = selectedPillar?.code === PILLAR_FIVE_CODE;
 
   function selectPillar(item: ScorePillarRoadmapDto, pillar: ScorePillarDto | null) {
     setSelectedPillarCode(item.code);
@@ -2023,6 +2340,15 @@ export function PolicyScorePage() {
               policyId={structure?.policy.id ?? null}
               result={pillarFourSimulationResult}
               onResult={setPillarFourSimulationResult}
+            />
+          </>
+        ) : isPillarFive && selectedPillar ? (
+          <>
+            <PillarFiveContent pillar={selectedPillar} status={selectedRoadmapItem?.status ?? "partial"} />
+            <PillarFiveRightRail
+              policyId={structure?.policy.id ?? null}
+              result={pillarFiveSimulationResult}
+              onResult={setPillarFiveSimulationResult}
             />
           </>
         ) : (

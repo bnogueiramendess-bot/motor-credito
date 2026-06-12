@@ -283,6 +283,64 @@ export type PillarFourSimulationResultDto = {
   simulation?: Record<string, unknown>;
 };
 
+export type PillarFiveSimulationPayload = {
+  cnpj?: string | null;
+  analysis_id?: number | null;
+};
+
+export type PillarFiveSimulationResultDto = {
+  policy_id: number;
+  analysis_id: number | null;
+  cnpj_normalized: string | null;
+  pillar_code: string;
+  pillar_name: string;
+  score: string | number;
+  weighted_score: string | number;
+  weight_percent: string | number;
+  status: string;
+  source: string;
+  reason: string;
+  relationship_level: number;
+  relationship_label: string;
+  subgroups: Array<{
+    code: string;
+    name: string;
+    score: string | number;
+    weight_percent: string | number;
+    weighted_score: string | number;
+    indicators: Array<{
+      code: string;
+      name: string;
+      raw_value: string | number;
+      score: string | number;
+      weight_percent: string | number;
+      weighted_score: string | number;
+      matched_range: {
+        operator: string;
+        threshold_value: string | number;
+        threshold_value_to: string | number | null;
+        score: string | number;
+        label: string | null;
+      } | null;
+    }>;
+  }>;
+  indicators: Array<Record<string, unknown>>;
+  relationship_evidence: {
+    has_current_approved_limit: boolean;
+    current_approved_limit: string | number;
+    current_approved_limit_source: string | null;
+    has_current_exposure: boolean;
+    current_exposure_amount: string | number;
+    current_exposure_source: string | null;
+    has_portfolio_presence: boolean;
+    portfolio_sources_found: string[];
+    current_import_run_id: number | null;
+  };
+  warnings: Array<Record<string, unknown>>;
+  calculation_trace: string[];
+  simulation?: Record<string, unknown>;
+};
+
 export function getCurrentScoreStructure() {
   return apiClient.get<ScoreStructureDto>("/api/admin/credit-decision-policies/current-score-structure");
 }
@@ -304,6 +362,13 @@ export function simulatePillarTwoScore(policyId: number, payload: PillarTwoSimul
 export function simulatePillarFourScore(policyId: number, payload: PillarFourSimulationPayload) {
   return apiClient.post<PillarFourSimulationResultDto, PillarFourSimulationPayload>(
     `/api/admin/credit-decision-policies/${policyId}/score-simulation/pillar-four`,
+    payload
+  );
+}
+
+export function simulatePillarFiveScore(policyId: number, payload: PillarFiveSimulationPayload) {
+  return apiClient.post<PillarFiveSimulationResultDto, PillarFiveSimulationPayload>(
+    `/api/admin/credit-decision-policies/${policyId}/score-simulation/pillar-five`,
     payload
   );
 }

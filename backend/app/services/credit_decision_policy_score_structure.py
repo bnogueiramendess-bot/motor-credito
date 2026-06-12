@@ -25,6 +25,10 @@ from app.services.credit_decision_pillar_four_score import (
     PillarFourPolicyStructureNotFoundError,
     calculate_pillar_four_score,
 )
+from app.services.credit_decision_pillar_five_score import (
+    PillarFivePolicyStructureNotFoundError,
+    calculate_pillar_five_score,
+)
 from app.services.credit_report_readers.agrisk_types import AGRISK_FINANCIAL_ANALYSIS
 from app.services.report_links import get_agrisk_link
 
@@ -224,9 +228,18 @@ def get_current_score_policy(db: Session) -> tuple[CreditDecisionPolicy, str]:
         .where(CreditDecisionPolicy.status == "active")
         .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
     )
-    if active is None:
-        raise CreditDecisionPolicyScoreStructureNotFoundError("No active or draft credit decision policy found.")
-    return active, "active"
+    if active is not None:
+        return active, "active"
+
+    archived = db.scalar(
+        select(CreditDecisionPolicy)
+        .where(CreditDecisionPolicy.status == "archived")
+        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
+    )
+    if archived is not None:
+        return archived, "latest_archived"
+
+    raise CreditDecisionPolicyScoreStructureNotFoundError("No credit decision policy found.")
 
 
 def validate_score_structure(db: Session, policy_id: int) -> dict[str, Any]:
@@ -621,4 +634,25 @@ def simulate_pillar_four_score(
     except PillarFourPolicyStructureNotFoundError as exc:
         raise CreditDecisionPolicyScoreStructureNotFoundError(str(exc)) from exc
     result["simulation"] = {"mode": "ar_aging", "persisted": False}
+    return result
+
+
+def simulate_pillar_five_score(
+    db: Session,
+    *,
+    policy_id: int,
+    cnpj: str | None = None,
+    analysis_id: int | None = None,
+) -> dict[str, Any]:
+    _load_policy(db, policy_id)
+    try:
+        result = calculate_pillar_five_score(
+            db=db,
+            policy_id=policy_id,
+            cnpj=cnpj,
+            analysis_id=analysis_id,
+        )
+    except PillarFivePolicyStructureNotFoundError as exc:
+        raise CreditDecisionPolicyScoreStructureNotFoundError(str(exc)) from exc
+    result["simulation"] = {"mode": "internal_portfolio", "persisted": False}
     return result

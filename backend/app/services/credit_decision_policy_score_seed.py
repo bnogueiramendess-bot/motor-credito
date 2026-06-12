@@ -54,6 +54,9 @@ PILLAR_FOUR_CURRENT_SUBGROUP_CODE = "current_payment_position"
 PILLAR_FOUR_HISTORICAL_SUBGROUP_CODE = "historical_payment_behavior"
 PILLAR_FOUR_CURRENT_INDICATOR_CODE = "current_overdue_ratio"
 PILLAR_FOUR_HISTORICAL_INDICATOR_CODE = "historical_average_overdue_ratio"
+PILLAR_FIVE_CODE = "relationship_history"
+PILLAR_FIVE_SUBGROUP_CODE = "internal_relationship"
+PILLAR_FIVE_INDICATOR_CODE = "internal_relationship_level"
 
 COFACE_COVERAGE_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
     (">=", Decimal("1.00"), Decimal("10")),
@@ -70,6 +73,13 @@ PAYMENT_HISTORY_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
     ("<=", Decimal("0.10"), Decimal("6")),
     ("<=", Decimal("0.20"), Decimal("4")),
     (">", Decimal("0.20"), Decimal("0")),
+)
+
+RELATIONSHIP_HISTORY_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
+    ("=", Decimal("3"), Decimal("10")),
+    ("=", Decimal("2"), Decimal("8")),
+    ("=", Decimal("1"), Decimal("6")),
+    ("=", Decimal("0"), Decimal("0")),
 )
 
 PILLAR_1_SUBGROUPS: tuple[SubgroupSeed, ...] = (
@@ -186,6 +196,25 @@ PILLAR_4_SUBGROUPS: tuple[SubgroupSeed, ...] = (
                 weight_percent=Decimal("100"),
                 source_key="ar_aging_snapshots.average_overdue_ratio",
                 value_type="ratio",
+            ),
+        ),
+    ),
+)
+
+PILLAR_5_SUBGROUPS: tuple[SubgroupSeed, ...] = (
+    SubgroupSeed(
+        code=PILLAR_FIVE_SUBGROUP_CODE,
+        name="Relacionamento Interno",
+        description="Classificacao do relacionamento interno com base nos dados existentes da carteira.",
+        weight_percent=Decimal("100"),
+        indicators=(
+            IndicatorSeed(
+                code=PILLAR_FIVE_INDICATOR_CODE,
+                name="Nivel de Relacionamento Interno",
+                description="Classificacao do relacionamento interno com base em limite aprovado, exposicao atual e presenca na carteira.",
+                weight_percent=Decimal("100"),
+                source_key="internal_portfolio.relationship_level",
+                value_type="ordinal",
             ),
         ),
     ),
@@ -416,3 +445,30 @@ def ensure_default_score_structure(db: Session, policy: CreditDecisionPolicy) ->
                 sort_order=indicator_index,
             )
             _ensure_ranges(db, policy=policy, indicator=indicator, ranges=PAYMENT_HISTORY_RANGES)
+
+    pillar_five = _get_or_create_pillar(
+        db,
+        policy,
+        code=PILLAR_FIVE_CODE,
+        name="Historico de Relacionamento",
+        description="Pilar 5 calculado pelo relacionamento interno existente com o cliente.",
+        weight_percent=Decimal("5"),
+        sort_order=5,
+    )
+    for subgroup_index, subgroup_seed in enumerate(PILLAR_5_SUBGROUPS, start=1):
+        subgroup = _get_or_create_subgroup(
+            db,
+            policy=policy,
+            pillar=pillar_five,
+            seed=subgroup_seed,
+            sort_order=subgroup_index,
+        )
+        for indicator_index, indicator_seed in enumerate(subgroup_seed.indicators, start=1):
+            indicator = _get_or_create_indicator(
+                db,
+                policy=policy,
+                subgroup=subgroup,
+                seed=indicator_seed,
+                sort_order=indicator_index,
+            )
+            _ensure_ranges(db, policy=policy, indicator=indicator, ranges=RELATIONSHIP_HISTORY_RANGES)
