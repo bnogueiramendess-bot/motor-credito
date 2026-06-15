@@ -14,13 +14,15 @@ import {
   Factory,
   FileClock,
   Globe2,
+  History,
   Layers3,
   Lock,
   Percent,
   Scale,
   ShieldCheck,
   SlidersHorizontal,
-  TrendingUp
+  TrendingUp,
+  Users
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
@@ -237,6 +239,13 @@ function lifecycleClass(status: string | undefined) {
   return "border-white/15 bg-white/10 text-white/75";
 }
 
+function policyManagementState(policyStatus: string | undefined, configurationStatus: string) {
+  if (policyStatus === "archived") return "archived";
+  if (policyStatus === "draft" || configurationStatus === "incomplete") return "in_construction";
+  if (policyStatus === "active") return "published";
+  return "in_construction";
+}
+
 function sourceInfo(indicator: ScoreIndicatorDto) {
   const sourceKey = indicator.source_key ?? "";
   if (sourceKey.startsWith("agrisk_financial.")) {
@@ -291,69 +300,192 @@ function Disclosure({
   );
 }
 
-function Hero({ structure, selectedPillar }: { structure: ScoreStructureDto | null; selectedPillar: ScorePillarDto | null }) {
+type PolicyWorkspaceView = "monitor" | "score" | "governance";
+
+function Hero({
+  structure,
+  selectedPillar,
+  activeView
+}: {
+  structure: ScoreStructureDto | null;
+  selectedPillar: ScorePillarDto | null;
+  activeView: PolicyWorkspaceView;
+}) {
   const policy = structure?.policy;
   const configurationStatus = structure?.validation_summary.configuration_status ?? "incomplete";
+  const managementState = policyManagementState(policy?.status, configurationStatus);
+  const monitorMetrics = [
+    ["Políticas cadastradas", structure ? 1 : 0],
+    ["Políticas publicadas", managementState === "published" ? 1 : 0],
+    ["Em construção", managementState === "in_construction" ? 1 : 0],
+    ["Arquivadas", managementState === "archived" ? 1 : 0]
+  ];
+  const heroContent = activeView === "monitor"
+    ? {
+        eyebrow: "Motor de Crédito · Gestão de Políticas",
+        title: "Gestão de Políticas de Decisão",
+        subtitle: "Administração e governança das políticas do motor de crédito",
+        description: "Administre políticas, acompanhe versões e monitore a evolução da configuração do motor de crédito."
+      }
+    : activeView === "governance"
+      ? {
+          eyebrow: "Motor de Crédito · Administração da Política",
+          title: "Governança da Política",
+          subtitle: "Comitê, versionamento e publicação",
+          description: "Controle de aprovação, histórico e ciclo de vida da política."
+        }
+      : {
+          eyebrow: "Motor de Crédito · Administração da Política",
+          title: "Política de Decisão Configurável",
+          subtitle: selectedPillar ? `Pilar ${selectedPillar.sort_order} · ${selectedPillar.name}` : "Estrutura da Política",
+          description: "Governança, validação e simulação isolada da política parametrizável, ainda não conectada ao motor oficial."
+        };
+
   return (
     <section className="overflow-hidden rounded-lg bg-[#0B132B] text-white shadow-[0_12px_30px_rgba(15,23,42,0.12)]">
       <div className="relative border border-white/10 bg-[#0B132B] px-5 py-4 sm:px-6">
         <div className="relative grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
           <div className="min-w-0">
-            <div className="text-[11px] font-bold uppercase text-white/55">Motor de Crédito · Administração da Política</div>
+            <div className="text-[11px] font-bold uppercase text-white/55">{heroContent.eyebrow}</div>
             <h1 className="mt-1.5 max-w-4xl text-xl font-semibold leading-tight text-white sm:text-2xl">
-              Política de Decisão Configurável
+              {heroContent.title}
             </h1>
             <p className="mt-1 text-sm font-semibold text-blue-100">
-              {selectedPillar ? `Pilar ${selectedPillar.sort_order} · ${selectedPillar.name}` : "Estrutura da Política"}
+              {heroContent.subtitle}
             </p>
             <p className="mt-1.5 max-w-3xl text-xs leading-5 text-white/60">
-              Governança, validação e simulação isolada da política parametrizável, ainda não conectada ao motor oficial.
+              {heroContent.description}
             </p>
           </div>
-          <div className="rounded-lg border border-white/12 bg-white/[0.07] px-3 py-2.5 backdrop-blur sm:min-w-[390px]">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${lifecycleClass(policy?.status)}`}>
-                {lifecycleLabel(policy?.status)}
-              </span>
-              <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${statusClass(configurationStatus)}`}>
-                {statusLabel(configurationStatus)}
-              </span>
+          {activeView === "monitor" ? (
+            <div className="grid overflow-hidden rounded-lg border border-white/12 bg-white/[0.07] backdrop-blur sm:min-w-[430px] sm:grid-cols-4">
+              {monitorMetrics.map(([label, value]) => (
+                <div key={String(label)} className="border-b border-white/10 px-3 py-2.5 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0">
+                  <span className="block text-[9px] font-bold uppercase tracking-wide text-white/45">{label}</span>
+                  <strong className="mt-1 block text-lg text-white">{value}</strong>
+                </div>
+              ))}
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-              <span className="text-white/48">
-                Código <strong className="ml-1 text-white/90">{policy?.code ?? "-"}</strong>
-              </span>
-              <span className="text-white/48">
-                Versão <strong className="ml-1 text-white/90">{policy?.version ?? "-"}</strong>
-              </span>
-              <span className="min-w-0 text-white/48">
-                Política <strong className="ml-1 text-white/90">{policy?.name ?? "Política de Decisão"}</strong>
-              </span>
+          ) : activeView === "governance" ? (
+            <div className="rounded-lg border border-white/12 bg-white/[0.07] px-3 py-2.5 backdrop-blur sm:min-w-[390px]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${lifecycleClass(policy?.status)}`}>{lifecycleLabel(policy?.status)}</span>
+                <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${statusClass(configurationStatus)}`}>{statusLabel(configurationStatus)}</span>
+              </div>
+              <div className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
+                <span className="text-white/48">Política <strong className="ml-1 text-white/90">{policy?.name ?? "Política de Decisão"}</strong></span>
+                <span className="text-white/48">Versão <strong className="ml-1 text-white/90">{policy?.version ?? "-"}</strong></span>
+                <span className="text-white/48">Status <strong className="ml-1 text-white/90">{lifecycleLabel(policy?.status)}</strong></span>
+                <span className="text-white/48">Publicação <strong className="ml-1 text-white/90">{policy?.status === "active" ? "Publicada" : "Não publicada"}</strong></span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-lg border border-white/12 bg-white/[0.07] px-3 py-2.5 backdrop-blur sm:min-w-[390px]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${lifecycleClass(policy?.status)}`}>
+                  {lifecycleLabel(policy?.status)}
+                </span>
+                <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${statusClass(configurationStatus)}`}>
+                  {statusLabel(configurationStatus)}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+                <span className="text-white/48">Código <strong className="ml-1 text-white/90">{policy?.code ?? "-"}</strong></span>
+                <span className="text-white/48">Versão <strong className="ml-1 text-white/90">{policy?.version ?? "-"}</strong></span>
+                <span className="min-w-0 text-white/48">Política <strong className="ml-1 text-white/90">{policy?.name ?? "Política de Decisão"}</strong></span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </section>
   );
 }
 
-function Toolbar() {
+function Toolbar({
+  activeView,
+  hasSelectedPolicy,
+  onViewChange,
+  onRestrictedView,
+  onSaveDraft,
+  onPublishPolicy,
+  isSaving,
+  isPublishing
+}: {
+  activeView: PolicyWorkspaceView;
+  hasSelectedPolicy: boolean;
+  onViewChange: (view: PolicyWorkspaceView) => void;
+  onRestrictedView: () => void;
+  onSaveDraft: () => void;
+  onPublishPolicy: () => void;
+  isSaving: boolean;
+  isPublishing: boolean;
+}) {
+  const tabs: Array<{ id: PolicyWorkspaceView; label: string; description: string }> = [
+    { id: "monitor", label: "Monitor de Políticas", description: "Visão inicial e gestão" },
+    { id: "score", label: "Score Institucional", description: "Configuração técnica" },
+    { id: "governance", label: "Governança", description: "Comitê, versões e publicação" }
+  ];
   return (
     <div className="flex flex-col gap-3 py-5 lg:flex-row lg:items-center lg:justify-between">
-      <div className="inline-flex w-fit rounded-full bg-slate-200 p-1 text-xs font-semibold text-slate-600">
-        <span className="rounded-full px-4 py-2">Cenários</span>
-        <span className="rounded-full bg-white px-4 py-2 text-blue-700 shadow-sm">Score Institucional</span>
-        <span className="rounded-full px-4 py-2">Comitê</span>
-        <span className="rounded-full px-4 py-2">Versões</span>
+      <div className="grid w-full gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1 sm:grid-cols-3 lg:w-auto">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            aria-disabled={tab.id !== "monitor" && !hasSelectedPolicy}
+            onClick={() => {
+              if (tab.id !== "monitor" && !hasSelectedPolicy) {
+                onRestrictedView();
+                return;
+              }
+              onViewChange(tab.id);
+            }}
+            className={`rounded-lg px-4 py-2.5 text-left transition ${
+              activeView === tab.id
+                ? "bg-white text-blue-700 shadow-sm ring-1 ring-slate-200"
+                : tab.id !== "monitor" && !hasSelectedPolicy
+                  ? "cursor-not-allowed text-slate-400 opacity-60"
+                : "text-slate-500 hover:bg-white/60 hover:text-slate-800"
+            }`}
+          >
+            <strong className="block text-xs">{tab.label}</strong>
+            <span className="mt-0.5 block text-[10px] font-medium opacity-70">{tab.description}</span>
+          </button>
+        ))}
       </div>
-      <div className="flex flex-wrap gap-2">
-        <button disabled className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-400">
-          Salvar rascunho
-        </button>
-        <button disabled className="rounded-lg border border-slate-200 bg-slate-100 px-4 py-2 text-xs font-bold text-slate-400">
-          Ativar nova versao
-        </button>
-      </div>
+      {activeView !== "monitor" ? (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            aria-disabled={!hasSelectedPolicy || isSaving}
+            onClick={onSaveDraft}
+            title={hasSelectedPolicy ? "Verificar alterações pendentes." : "Selecione uma política para continuar."}
+            className={`rounded-lg border px-4 py-2 text-xs font-bold transition ${
+              hasSelectedPolicy
+                ? "border-slate-300 bg-white text-slate-700 shadow-sm"
+                : "cursor-not-allowed border-slate-200 bg-white text-slate-400"
+            }`}
+          >
+            {isSaving ? "Salvando..." : "Salvar rascunho"}
+          </button>
+          {activeView === "governance" ? (
+            <button
+              type="button"
+              aria-disabled={!hasSelectedPolicy || isPublishing}
+              onClick={onPublishPolicy}
+              title={hasSelectedPolicy ? "Verificar requisitos de publicação." : "Selecione uma política para continuar."}
+              className={`rounded-lg border px-4 py-2 text-xs font-bold transition ${
+                hasSelectedPolicy
+                  ? "border-blue-700 bg-blue-700 text-white shadow-sm"
+                  : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+              }`}
+            >
+              {isPublishing ? "Publicando..." : "Publicar política"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2121,6 +2253,264 @@ function PillarThreeRightRail() {
   );
 }
 
+function PolicyMonitorView({
+  structure,
+  selectedPolicyId,
+  onOpenPolicy,
+  onDuplicatePolicy,
+  onArchivePolicy
+}: {
+  structure: ScoreStructureDto;
+  selectedPolicyId: number | null;
+  onOpenPolicy: () => void;
+  onDuplicatePolicy: () => void;
+  onArchivePolicy: () => void;
+}) {
+  const policy = structure.policy;
+  const configurationStatus = structure.validation_summary.configuration_status;
+  const configuredPillars = structure.policy_progress.pillars.configured;
+  const expectedPillars = structure.policy_progress.pillars.expected;
+  const completenessPercent = expectedPillars > 0 ? Math.round((configuredPillars / expectedPillars) * 100) : 0;
+  const managementState = policyManagementState(policy.status, configurationStatus);
+  const policyStatusLabel = managementState === "in_construction" ? "Rascunho" : lifecycleLabel(policy.status);
+  const usageLabel = managementState === "published" ? "Ativa no motor" : managementState === "archived" ? "Arquivada" : "Não publicada";
+  const isSelected = selectedPolicyId === policy.id;
+
+  return (
+    <section>
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Políticas cadastradas</h2>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Acompanhe status, versão e completude. Abra uma política para consultar o Score Institucional.</p>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-[1040px] w-full border-collapse text-left">
+            <thead className="bg-slate-50">
+              <tr className="border-b border-slate-200">
+                {["Política", "Versão", "Status", "Uso", "Configuração", "Completude", "Última atualização", "Ações"].map((heading) => (
+                  <th key={heading} className={`px-4 py-3 text-[9px] font-black uppercase tracking-[0.1em] text-slate-500 ${heading === "Ações" ? "text-right" : ""}`}>{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className={`transition ${isSelected ? "bg-blue-50/80" : "bg-blue-50/30 hover:bg-blue-50/60"}`}>
+                <td className="border-b border-slate-100 px-4 py-4">
+                  <div className="flex items-center gap-2">
+                    <strong className="block text-xs text-slate-950">{policy.name}</strong>
+                    {isSelected ? <span className="rounded-full bg-blue-700 px-2 py-0.5 text-[8px] font-black uppercase tracking-wide text-white">Selecionada</span> : null}
+                  </div>
+                  <span className="mt-1 block text-[10px] text-slate-500">{policy.code}</span>
+                </td>
+                <td className="border-b border-slate-100 px-4 py-4 text-xs font-bold text-slate-800">v{policy.version}</td>
+                <td className="border-b border-slate-100 px-4 py-4">
+                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${
+                    managementState === "published"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : managementState === "in_construction"
+                        ? "border-blue-200 bg-blue-50 text-blue-700"
+                        : "border-slate-200 bg-slate-100 text-slate-600"
+                  }`}>{policyStatusLabel}</span>
+                </td>
+                <td className="border-b border-slate-100 px-4 py-4">
+                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${
+                    managementState === "published"
+                      ? "border-blue-200 bg-blue-50 text-blue-700"
+                      : "border-slate-200 bg-slate-100 text-slate-600"
+                  }`}>{usageLabel}</span>
+                </td>
+                <td className="border-b border-slate-100 px-4 py-4">
+                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${statusClass(configurationStatus)}`}>{statusLabel(configurationStatus)}</span>
+                </td>
+                <td className="border-b border-slate-100 px-4 py-4">
+                  <div className="w-36">
+                    <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold text-slate-600">
+                      <span>{configuredPillars} de {expectedPillars} pilares</span>
+                      <span>{completenessPercent}%</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                      <div className="h-full rounded-full bg-blue-700" style={{ width: `${completenessPercent}%` }} />
+                    </div>
+                  </div>
+                </td>
+                <td className="border-b border-slate-100 px-4 py-4 text-xs text-slate-500">Não disponível</td>
+                <td className="border-b border-slate-100 px-4 py-4 text-right">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button type="button" onClick={onOpenPolicy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-700 px-3 text-xs font-black text-white transition hover:bg-blue-800">
+                      Abrir <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                    <button type="button" onClick={onDuplicatePolicy} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">
+                      Duplicar
+                    </button>
+                    <button type="button" onClick={onArchivePolicy} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">
+                      Arquivar
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
+  const policy = structure.policy;
+  const configurationStatus = structure.validation_summary.configuration_status;
+  const configuredPillars = structure.policy_progress.pillars.configured;
+  const expectedPillars = structure.policy_progress.pillars.expected;
+  const completenessPercent = expectedPillars > 0 ? Math.round((configuredPillars / expectedPillars) * 100) : 0;
+  const managementState = policyManagementState(policy.status, configurationStatus);
+  const policyStatusLabel = managementState === "in_construction" ? "Rascunho" : lifecycleLabel(policy.status);
+  const committeeRoles = ["CEO", "CFO", "Head Comercial", "Head de Operações", "Head Financeiro", "Jurídico"];
+  const publicationChecklist = [
+    {
+      label: "Política criada",
+      detail: `Versão ${policy.version} disponível para governança.`,
+      status: "complete"
+    },
+    {
+      label: "Versão definida",
+      detail: `Versão ${policy.version} identificada no payload atual.`,
+      status: "complete"
+    },
+    {
+      label: "Score configurado",
+      detail: `${configuredPillars} de ${expectedPillars} pilares configurados.`,
+      status: configurationStatus === "validated" || configuredPillars === expectedPillars ? "complete" : "warning"
+    },
+    {
+      label: "Comitê configurado",
+      detail: "Nenhum papel exigido foi configurado para esta política.",
+      status: "blocked"
+    },
+    {
+      label: "Aprovação concluída",
+      detail: "Fluxo de aprovação ainda não disponível.",
+      status: "blocked"
+    }
+  ];
+
+  return (
+    <section className="grid gap-4">
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="grid gap-px bg-slate-200 sm:grid-cols-2 xl:grid-cols-5">
+          <article className="bg-white p-4 sm:col-span-2 xl:col-span-1">
+            <span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Política selecionada</span>
+            <strong className="mt-2 block text-sm leading-5 text-slate-950">{policy.name}</strong>
+            <small className="mt-1 block text-[10px] text-slate-500">Código {policy.code} · Versão {policy.version}</small>
+          </article>
+          {[
+            ["Status", policyStatusLabel, "Ciclo de vida da versão", "border-blue-200 bg-blue-50 text-blue-700"],
+            ["Publicação", managementState === "published" ? "Publicada" : "Não publicada", "Situação no motor oficial", "border-slate-200 bg-slate-100 text-slate-600"],
+            ["Comitê", "Não configurado", "Papéis exigidos ainda pendentes", "border-amber-200 bg-amber-50 text-amber-700"]
+          ].map(([label, value, detail, badgeClass]) => (
+            <article key={label} className="bg-white p-4">
+              <span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</span>
+              <span className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${badgeClass}`}>{value}</span>
+              <small className="mt-2 block text-[10px] leading-4 text-slate-500">{detail}</small>
+            </article>
+          ))}
+          <article className="bg-white p-4">
+            <span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Completude</span>
+            <strong className="mt-2 block text-lg text-slate-950">{completenessPercent}%</strong>
+            <small className="mt-1 block text-[10px] text-slate-500">{configuredPillars} de {expectedPillars} pilares configurados</small>
+          </article>
+        </div>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-4">
+            <div className="flex items-center gap-2"><Users className="h-4 w-4 text-blue-700" /><h2 className="text-sm font-semibold text-slate-900">Composição do Comitê</h2></div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Defina os papéis exigidos para aprovação e governança desta política.</p>
+          </div>
+          <div className="grid gap-3 p-4">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <strong className="block text-xs text-amber-900">Comitê ainda não configurado</strong>
+              <p className="mt-1 text-xs leading-5 text-amber-800">A publicação permanece bloqueada até que os papéis exigidos sejam definidos.</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {committeeRoles.map((role) => (
+                <button key={role} type="button" disabled title="Preparado para configuração futura" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left">
+                  <strong className="block text-xs text-slate-700">{role}</strong>
+                  <span className="mt-1 block text-[9px] font-bold uppercase tracking-wide text-slate-400">Em breve</span>
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3">
+              <Users className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+              <p className="text-xs leading-5 text-blue-800">Os papéis do comitê serão vinculados futuramente ao cadastro de usuários por cargo/função.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-4">
+            <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-700" /><h2 className="text-sm font-semibold text-slate-900">Publicação</h2></div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Checklist para promover uma versão aprovada para uso no motor oficial.</p>
+          </div>
+          <div className="grid gap-2 p-4">
+            {publicationChecklist.map((item) => (
+              <div key={item.label} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div><strong className="block text-xs text-slate-800">{item.label}</strong><span className="mt-1 block text-[10px] leading-4 text-slate-500">{item.detail}</span></div>
+                <span className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
+                  item.status === "complete" ? "bg-emerald-100 text-emerald-700" : item.status === "warning" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"
+                }`}>{item.status === "complete" ? "✓" : item.status === "warning" ? "!" : "×"}</span>
+              </div>
+            ))}
+            <div className="mt-1 rounded-xl border border-orange-200 bg-orange-50 p-4 text-orange-900">
+              <strong className="block text-xs">Publicação bloqueada</strong>
+              <p className="mt-1 text-xs leading-5">Comitê ainda não configurado e aprovação ainda não concluída.</p>
+            </div>
+            <button type="button" disabled title="Publicação bloqueada" className="mt-1 h-10 rounded-lg bg-slate-200 px-4 text-xs font-black text-slate-400">Publicar política</button>
+            <p className="text-[10px] leading-4 text-slate-500">A publicação será habilitada quando a política estiver configurada, aprovada e com comitê definido.</p>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-4">
+            <div className="flex items-center gap-2"><History className="h-4 w-4 text-indigo-700" /><h2 className="text-sm font-semibold text-slate-900">Histórico de Versões</h2></div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Linha do tempo das versões registradas para a política selecionada.</p>
+          </div>
+          <div className="p-4">
+            <div className="relative grid gap-4 border-l-2 border-slate-200 pl-5">
+              <div className="relative">
+                <span className="absolute -left-[27px] top-0.5 h-3 w-3 rounded-full border-2 border-white bg-blue-700 ring-1 ring-blue-200" />
+                <div className="flex flex-wrap items-center gap-2"><strong className="text-xs text-slate-900">Versão {policy.version}</strong><span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">{policyStatusLabel}</span></div>
+                <span className="mt-1 block text-xs text-slate-600">{policy.name}</span>
+                <span className="mt-1 block text-[10px] leading-4 text-slate-500">Versão atual {managementState === "published" ? "publicada." : "em construção. Ainda não publicada."}</span>
+              </div>
+              <div className="relative">
+                <span className="absolute -left-[25px] top-1 h-2 w-2 rounded-full bg-slate-300" />
+                <strong className="text-xs text-slate-700">Versões anteriores</strong>
+                <span className="mt-1 block text-[10px] leading-4 text-slate-500">O histórico completo será exibido quando múltiplas versões forem disponibilizadas pela fonte administrativa.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-4">
+            <div className="flex items-center gap-2"><FileClock className="h-4 w-4 text-slate-600" /><h2 className="text-sm font-semibold text-slate-900">Auditoria / Governança</h2></div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Metadados administrativos e rastreabilidade da política.</p>
+          </div>
+          <div className="p-4">
+            <div className="flex gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4">
+              <FileClock className="mt-0.5 h-5 w-5 shrink-0 text-slate-400" />
+              <div><strong className="block text-xs text-slate-800">Metadados administrativos ainda não disponíveis.</strong><p className="mt-1 text-xs leading-5 text-slate-500">A auditoria será apresentada de forma objetiva quando a fonte administrativa disponibilizar os registros.</p></div>
+            </div>
+          </div>
+        </section>
+
+      </section>
+    </section>
+  );
+}
+
 function GovernancePanel({ structure }: { structure: ScoreStructureDto | null }) {
   return (
     <div className="grid gap-3 text-xs leading-5 text-slate-600">
@@ -2191,6 +2581,10 @@ function RightRail({
 }
 
 export function PolicyScorePage() {
+  const [activeView, setActiveView] = useState<PolicyWorkspaceView>("monitor");
+  const [selectedPolicyId, setSelectedPolicyId] = useState<number | null>(null);
+  const [navigationNotice, setNavigationNotice] = useState<string | null>(null);
+  const [actionToast, setActionToast] = useState<{ message: string; tone: "success" | "error" | "blocked" | "info" } | null>(null);
   const [structure, setStructure] = useState<ScoreStructureDto | null>(null);
   const [selectedPillarId, setSelectedPillarId] = useState<number | null>(null);
   const [selectedPillarCode, setSelectedPillarCode] = useState<string | null>(null);
@@ -2241,6 +2635,12 @@ export function PolicyScorePage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!actionToast) return;
+    const timeout = window.setTimeout(() => setActionToast(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [actionToast]);
+
   const selectedPillar = useMemo(
     () => structure?.pillars.find((pillar) => pillar.id === selectedPillarId) ?? null,
     [selectedPillarId, structure]
@@ -2275,6 +2675,52 @@ export function PolicyScorePage() {
     setSelectedIndicatorId(firstEnabled(subgroup.indicators)?.id ?? null);
   }
 
+  function openSelectedPolicy() {
+    if (!structure) return;
+    setSelectedPolicyId(structure.policy.id);
+    setNavigationNotice(null);
+    setActiveView("score");
+  }
+
+  function archiveSelectedPolicy() {
+    if (!structure) return;
+    const confirmed = window.confirm(`Arquivar a política "${structure.policy.name}"?`);
+    if (!confirmed) return;
+    setNavigationNotice("O arquivamento será habilitado quando a operação estiver disponível no backend.");
+  }
+
+  function duplicateSelectedPolicy() {
+    setNavigationNotice("A duplicação será habilitada com o versionamento.");
+  }
+
+  function savePolicyDraft() {
+    if (!selectedPolicyId) {
+      setActionToast({ message: "Selecione uma política para salvar o rascunho.", tone: "info" });
+      return;
+    }
+    setActionToast({ message: "Nenhuma alteração pendente para salvar.", tone: "info" });
+  }
+
+  function publishSelectedPolicy() {
+    if (!selectedPolicyId || !structure) {
+      setActionToast({ message: "Selecione uma política para publicar.", tone: "info" });
+      return;
+    }
+
+    const blockers = [
+      policyManagementState(structure.policy.status, structure.validation_summary.configuration_status) === "in_construction"
+        ? "Política em construção"
+        : null,
+      "Comitê não configurado",
+      "Aprovação não concluída"
+    ].filter(Boolean);
+
+    setActionToast({
+      message: `Publicação bloqueada. ${blockers.join(" · ")}.`,
+      tone: "blocked"
+    });
+  }
+
   if (canViewPolicy === null) {
     return <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500">Carregando Política de Decisão...</div>;
   }
@@ -2305,9 +2751,57 @@ export function PolicyScorePage() {
 
   return (
     <main className="min-h-screen bg-[#f5f7fb] px-4 pb-4 pt-2 text-slate-950 sm:px-6 sm:pb-6 sm:pt-3">
-      <Hero structure={structure} selectedPillar={selectedPillar} />
-      <Toolbar />
-      <section className="grid gap-4 xl:grid-cols-[310px_minmax(0,1fr)_350px]">
+      <Hero structure={structure} selectedPillar={activeView === "score" ? selectedPillar : null} activeView={activeView} />
+      <Toolbar
+        activeView={activeView}
+        hasSelectedPolicy={selectedPolicyId !== null}
+        onViewChange={(view) => {
+          setNavigationNotice(null);
+          setActiveView(view);
+        }}
+        onRestrictedView={() => setNavigationNotice("Selecione uma política no Monitor para continuar.")}
+        onSaveDraft={savePolicyDraft}
+        onPublishPolicy={publishSelectedPolicy}
+        isSaving={false}
+        isPublishing={false}
+      />
+      {actionToast ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed right-4 top-4 z-50 flex max-w-md items-start gap-3 rounded-xl border px-4 py-3 text-xs shadow-lg ${
+            actionToast.tone === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : actionToast.tone === "error"
+                ? "border-rose-200 bg-rose-50 text-rose-800"
+                : actionToast.tone === "blocked"
+                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                  : "border-blue-200 bg-blue-50 text-blue-800"
+          }`}
+        >
+          {actionToast.tone === "success" ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
+          <span className="leading-5">{actionToast.message}</span>
+          <button type="button" onClick={() => setActionToast(null)} className="ml-1 text-sm font-bold opacity-60 transition hover:opacity-100" aria-label="Fechar notificação">×</button>
+        </div>
+      ) : null}
+      {navigationNotice ? (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {navigationNotice}
+        </div>
+      ) : null}
+      {activeView === "monitor" && structure ? (
+        <PolicyMonitorView
+          structure={structure}
+          selectedPolicyId={selectedPolicyId}
+          onOpenPolicy={openSelectedPolicy}
+          onDuplicatePolicy={duplicateSelectedPolicy}
+          onArchivePolicy={archiveSelectedPolicy}
+        />
+      ) : activeView === "governance" && structure ? (
+        <PolicyGovernanceView structure={structure} />
+      ) : (
+        <section className="grid gap-4 xl:grid-cols-[310px_minmax(0,1fr)_350px]">
         <PillarSidebar
           pillars={structure?.pillars ?? []}
           roadmap={structure?.pillar_roadmap ?? []}
@@ -2369,7 +2863,8 @@ export function PolicyScorePage() {
             />
           </>
         )}
-      </section>
+        </section>
+      )}
     </main>
   );
 }
