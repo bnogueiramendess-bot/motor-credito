@@ -45,6 +45,93 @@ LIQUIDITY_RANGES: tuple[tuple[str, Decimal, Decimal], ...] = (
     ("=", Decimal("0.00"), Decimal("0")),
 )
 
+PILLAR_1_SCORE_RANGES: dict[str, tuple[tuple[str, Decimal, Decimal], ...]] = {
+    "current_liquidity": LIQUIDITY_RANGES,
+    "quick_liquidity": LIQUIDITY_RANGES,
+    "general_liquidity": LIQUIDITY_RANGES,
+    "immediate_liquidity": LIQUIDITY_RANGES,
+    "ebitda": (
+        (">=", Decimal("20"), Decimal("10")),
+        (">=", Decimal("15"), Decimal("8")),
+        (">=", Decimal("10"), Decimal("6")),
+        (">=", Decimal("5"), Decimal("4")),
+        (">", Decimal("0"), Decimal("2")),
+        ("<=", Decimal("0"), Decimal("0")),
+    ),
+    "cash_flow": (
+        (">=", Decimal("15"), Decimal("10")),
+        (">=", Decimal("10"), Decimal("8")),
+        (">=", Decimal("5"), Decimal("6")),
+        (">=", Decimal("2"), Decimal("4")),
+        (">", Decimal("0"), Decimal("2")),
+        ("<=", Decimal("0"), Decimal("0")),
+    ),
+    "dre_result": (
+        (">=", Decimal("10"), Decimal("10")),
+        (">=", Decimal("7"), Decimal("8")),
+        (">=", Decimal("4"), Decimal("6")),
+        (">=", Decimal("1"), Decimal("4")),
+        (">", Decimal("0"), Decimal("2")),
+        ("<=", Decimal("0"), Decimal("0")),
+    ),
+    "indebtedness": (
+        ("<=", Decimal("30"), Decimal("10")),
+        ("<=", Decimal("45"), Decimal("8")),
+        ("<=", Decimal("60"), Decimal("6")),
+        ("<=", Decimal("75"), Decimal("4")),
+        ("<=", Decimal("90"), Decimal("2")),
+        (">", Decimal("90"), Decimal("0")),
+    ),
+    "financial_leverage": (
+        ("<=", Decimal("1.0"), Decimal("10")),
+        ("<=", Decimal("2.0"), Decimal("8")),
+        ("<=", Decimal("3.0"), Decimal("6")),
+        ("<=", Decimal("4.0"), Decimal("4")),
+        ("<=", Decimal("5.0"), Decimal("2")),
+        (">", Decimal("5.0"), Decimal("0")),
+    ),
+    "gross_margin": (
+        (">=", Decimal("40"), Decimal("10")),
+        (">=", Decimal("30"), Decimal("8")),
+        (">=", Decimal("20"), Decimal("6")),
+        (">=", Decimal("10"), Decimal("4")),
+        (">", Decimal("0"), Decimal("2")),
+        ("<=", Decimal("0"), Decimal("0")),
+    ),
+    "operational_index": (
+        ("<=", Decimal("60"), Decimal("10")),
+        ("<=", Decimal("70"), Decimal("8")),
+        ("<=", Decimal("80"), Decimal("6")),
+        ("<=", Decimal("90"), Decimal("4")),
+        ("<=", Decimal("100"), Decimal("2")),
+        (">", Decimal("100"), Decimal("0")),
+    ),
+    "financial_inconsistencies": (
+        ("=", Decimal("0"), Decimal("10")),
+        ("<=", Decimal("1"), Decimal("8")),
+        ("<=", Decimal("2"), Decimal("6")),
+        ("<=", Decimal("3"), Decimal("4")),
+        ("<=", Decimal("5"), Decimal("2")),
+        (">", Decimal("5"), Decimal("0")),
+    ),
+    "critical_alerts": (
+        ("=", Decimal("0"), Decimal("10")),
+        ("<=", Decimal("1"), Decimal("8")),
+        ("<=", Decimal("2"), Decimal("6")),
+        ("<=", Decimal("3"), Decimal("4")),
+        ("<=", Decimal("5"), Decimal("2")),
+        (">", Decimal("5"), Decimal("0")),
+    ),
+    "detected_anomalies": (
+        ("=", Decimal("0"), Decimal("10")),
+        ("<=", Decimal("1"), Decimal("8")),
+        ("<=", Decimal("2"), Decimal("6")),
+        ("<=", Decimal("3"), Decimal("4")),
+        ("<=", Decimal("5"), Decimal("2")),
+        (">", Decimal("5"), Decimal("0")),
+    ),
+}
+
 PILLAR_CODE = "financial_stability_liquidity"
 PILLAR_TWO_CODE = "guarantees_credit_insurance"
 PILLAR_TWO_SUBGROUP_CODE = "credit_insurance_coverage"
@@ -99,9 +186,9 @@ PILLAR_1_SUBGROUPS: tuple[SubgroupSeed, ...] = (
         name="Geração de Caixa",
         weight_percent=Decimal("25"),
         indicators=(
-            IndicatorSeed("ebitda", "EBITDA", Decimal("40"), "agrisk_financial.financial_indicators.ebitda"),
-            IndicatorSeed("cash_flow", "Fluxo de Caixa", Decimal("35"), "agrisk_financial.financial_indicators.cash_flow"),
-            IndicatorSeed("dre_result", "Resultado DRE", Decimal("25"), "agrisk_financial.financial_indicators.dre_result"),
+            IndicatorSeed("ebitda", "EBITDA", Decimal("40"), "agrisk_financial.financial_indicators.ebitda", value_type="percent"),
+            IndicatorSeed("cash_flow", "Fluxo de Caixa", Decimal("35"), "agrisk_financial.financial_indicators.cash_flow", value_type="percent"),
+            IndicatorSeed("dre_result", "Resultado DRE", Decimal("25"), "agrisk_financial.financial_indicators.dre_result", value_type="percent"),
         ),
     ),
     SubgroupSeed(
@@ -388,8 +475,9 @@ def ensure_default_score_structure(db: Session, policy: CreditDecisionPolicy) ->
                 seed=indicator_seed,
                 sort_order=indicator_index,
             )
-            if subgroup_seed.code == "liquidity":
-                _ensure_ranges(db, policy=policy, indicator=indicator, ranges=LIQUIDITY_RANGES)
+            ranges = PILLAR_1_SCORE_RANGES.get(indicator_seed.code)
+            if ranges is not None:
+                _ensure_ranges(db, policy=policy, indicator=indicator, ranges=ranges)
 
     pillar_two = _get_or_create_pillar(
         db,

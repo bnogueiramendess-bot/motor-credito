@@ -38,6 +38,7 @@ class CreditAnalysisCreate(BaseModel):
     exposure_amount: Decimal
     annual_revenue_estimated: Decimal
     assigned_analyst_name: str | None = None
+    decision_memory_json: dict | None = None
 
 
 class CreditAnalysisRead(BaseModel):

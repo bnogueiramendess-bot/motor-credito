@@ -51,6 +51,13 @@ function toCurrencyNumber(value: number | null | undefined) {
   return Math.max(0, value);
 }
 
+function toOptionalCurrencyNumber(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
 function isCofaceStatusValid(status: CofaceReportReadResponse["status"]) {
   return status === "valid" || status === "valid_with_warnings";
 }
@@ -145,6 +152,7 @@ export async function POST(request: Request) {
     }
 
     const exposureAmount = Math.max(0, requestedLimit + currentLimit + usedLimit - guaranteeLimit);
+    const netRevenue = toOptionalCurrencyNumber(payload.inputs.ocr.net_revenue);
 
     const analysis = await fetchBackend<CreditAnalysisDto>("/credit-analyses", {
       method: "POST",
@@ -154,7 +162,17 @@ export async function POST(request: Request) {
         current_limit: currentLimit,
         exposure_amount: exposureAmount,
         annual_revenue_estimated: toCurrencyNumber(payload.analysis.annual_revenue_estimated),
-        assigned_analyst_name: payload.analysis.assigned_analyst_name || null
+        assigned_analyst_name: payload.analysis.assigned_analyst_name || null,
+        decision_memory_json: {
+          workspace_state: {
+            complementary_data: {
+              net_revenue: netRevenue
+            },
+            manual_panel: {
+              netRevenue: netRevenue
+            }
+          }
+        }
       })
     });
 

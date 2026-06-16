@@ -29,7 +29,7 @@ from app.routes.credit_decision_policies import (
     simulate_policy_pillar_five_score,
 )
 from app.schemas.credit_decision_policy import CreditDecisionPolicyCreate
-from app.services.credit_decision_policy_score_seed import PILLAR_CODE, ensure_default_score_structure
+from app.services.credit_decision_policy_score_seed import PILLAR_CODE, PILLAR_TWO_CODE, ensure_default_score_structure
 from app.services.credit_decision_policy_service import create_credit_decision_policy
 
 
@@ -174,10 +174,16 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
         self.assertEqual(structure["pillars"][0]["code"], PILLAR_CODE)
         self.assertEqual(structure["pillars"][0]["subgroups_count"], 5)
         self.assertEqual(structure["pillars"][0]["indicators_count"], 14)
-        self.assertEqual(structure["policy_progress"]["pillars"], {"configured": 4, "expected": 5})
+        self.assertEqual(structure["policy_progress"]["pillars"], {"configured": 4, "expected": 4, "planned": 1, "total": 5})
+        self.assertEqual(structure["policy_progress"]["effective_pillars_weight"], Decimal("85"))
+        self.assertEqual(structure["policy_progress"]["planned_pillars_weight"], Decimal("15"))
         self.assertEqual(len(structure["pillar_roadmap"]), 5)
-        self.assertEqual(structure["pillar_roadmap"][0]["status"], "partial")
+        self.assertEqual(structure["pillar_roadmap"][0]["status"], "configured")
+        self.assertEqual(structure["pillar_roadmap"][0]["indicators_with_ranges_count"], 14)
         self.assertEqual(structure["pillar_roadmap"][1]["status"], "configured")
+        self.assertEqual(structure["pillar_roadmap"][2]["status"], "planned")
+        self.assertFalse(structure["pillar_roadmap"][2]["affects_score"])
+        self.assertFalse(structure["pillar_roadmap"][2]["affects_validation"])
         self.assertEqual(structure["pillar_roadmap"][3]["status"], "configured")
         self.assertEqual(structure["pillar_roadmap"][4]["status"], "configured")
         self.assertIn("validation_summary", structure)
@@ -208,12 +214,35 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
         self.assertEqual(validation["configuration_status"], "validated")
         self.assertTrue(all(check["status"] == "valid" for check in validation["checks"]))
 
-    def test_score_validation_identifies_incomplete_policy_without_invalidating_it(self) -> None:
+    def test_score_validation_treats_planned_pillar_three_as_no_effect(self) -> None:
+        validation = get_policy_score_validation(self.policy.id, self.db, None)
+
+        self.assertEqual(validation["status"], "valid")
+        self.assertEqual(validation["configuration_status"], "validated")
+        self.assertEqual(validation["operational_status"], "configured")
+        self.assertEqual(validation["effective_pillars_weight"], Decimal("85"))
+        self.assertEqual(validation["planned_pillars_weight"], Decimal("15"))
+        self.assertEqual(validation["configured_effective_pillars"], 4)
+        self.assertEqual(validation["total_effective_pillars"], 4)
+        self.assertFalse(validation["errors"])
+        self.assertNotIn("pillars_not_configured", {item["code"] for item in validation["warnings"]})
+
+    def test_score_validation_still_warns_when_effective_pillar_is_missing(self) -> None:
+        pillar_two = self.db.scalar(
+            select(CreditDecisionPolicyPillar).where(
+                CreditDecisionPolicyPillar.policy_id == self.policy.id,
+                CreditDecisionPolicyPillar.code == PILLAR_TWO_CODE,
+            )
+        )
+        self.assertIsNotNone(pillar_two)
+        pillar_two.is_enabled = False
+        self.db.commit()
+
         validation = get_policy_score_validation(self.policy.id, self.db, None)
 
         self.assertEqual(validation["status"], "warning")
         self.assertEqual(validation["configuration_status"], "incomplete")
-        self.assertFalse(validation["errors"])
+        self.assertEqual(validation["operational_status"], "incomplete")
         warning = next(item for item in validation["warnings"] if item["code"] == "pillars_not_configured")
         self.assertEqual(warning["severity"], "warning")
         self.assertEqual(warning["entity_type"], "policy")
@@ -289,6 +318,7 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
             "financial_inconsistencies": "0",
             "critical_alerts": "0",
             "detected_anomalies": "0",
+            "net_revenue": "100",
         }
 
         result = simulate_policy_pillar_one_score(
@@ -301,6 +331,35 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "calculated")
         self.assertEqual(result["source"], "agrisk_financial_analysis")
         self.assertEqual(result["simulation"]["mode"], "manual")
+        self.assertEqual(result["warnings"], [])
+
+    def test_pillar_one_simulation_without_net_revenue_returns_margin_warning(self) -> None:
+        values = {
+            "current_liquidity": "2.10",
+            "quick_liquidity": "2.10",
+            "general_liquidity": "2.10",
+            "immediate_liquidity": "2.10",
+            "ebitda": "1",
+            "cash_flow": "1",
+            "dre_result": "1",
+            "indebtedness": "1",
+            "financial_leverage": "1",
+            "gross_margin": "1",
+            "operational_index": "1",
+            "financial_inconsistencies": "0",
+            "critical_alerts": "0",
+            "detected_anomalies": "0",
+        }
+
+        result = simulate_policy_pillar_one_score(
+            self.policy.id,
+            PillarOneScoreSimulationRequest(indicator_values=values),
+            self.db,
+            None,
+        )
+
+        self.assertEqual(result["status"], "calculated")
+        self.assertIn("Receita Líquida não informada", result["warnings"][0]["message"])
 
     def test_pillar_one_simulation_without_coface_or_agrisk_returns_not_available(self) -> None:
         result = simulate_policy_pillar_one_score(

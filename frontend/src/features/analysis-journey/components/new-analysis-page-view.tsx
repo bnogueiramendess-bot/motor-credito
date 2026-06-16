@@ -810,6 +810,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     scoreValue: 610,
     cofaceDra: 6.5,
     internalRevenue12m: "",
+    netRevenue: "",
     outstandingValue: "",
     pmrContractual: "",
     pmrEffective: "",
@@ -1984,12 +1985,15 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const nextManual = {
       ...manual,
       comments: manualPanel.analystNotes,
-      observations: `Fonte do score: ${scoreIsFromImportedAgrisk ?"Agrisk (importado)" : manualPanel.scoreSource}; Score: ${scoreIsFromImportedAgrisk ?"informado por relatório importado" : manualPanel.scoreValue}; DRA COFACE: ${cofaceIsFromImportedReport ?"informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}`
+      observations: `Fonte do score: ${scoreIsFromImportedAgrisk ?"Agrisk (importado)" : manualPanel.scoreSource}; Score: ${scoreIsFromImportedAgrisk ?"informado por relatório importado" : manualPanel.scoreValue}; DRA COFACE: ${cofaceIsFromImportedReport ?"informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}; Receita Líquida do Exercício: ${manualPanel.netRevenue || "não informada"}`
     };
     setManual(nextManual);
     persistWorkspaceStatePatch({
       manual_configured: true,
       manual_panel: manualPanel,
+      complementary_data: {
+        net_revenue: toNullableNumberInput(manualPanel.netRevenue)
+      },
       manual: nextManual
     }, analysis.comment);
     setIsManualDrawerOpen(false);
@@ -2069,7 +2073,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           liabilities: null,
           equity: null,
           gross_revenue: null,
-          net_revenue: null,
+          net_revenue: toNullableNumberInput(manualPanel.netRevenue),
           costs: null,
           expenses: null,
           profit: null,
@@ -3997,6 +4001,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         <p className="text-[11px] font-semibold text-[#102033]">{manualPanel.internalRevenue12m || "Não informado"}</p>
                       </div>
                       <div>
+                        <p className="text-[10px] text-[#8FA3B4]">Receita Líquida do Exercício</p>
+                        <p className="text-[11px] font-semibold text-[#102033]">{manualPanel.netRevenue || "Não informado"}</p>
+                      </div>
+                      <div>
                         <p className="text-[10px] text-[#8FA3B4]">PMR (contratual/efetivo)</p>
                         <p className="text-[11px] font-semibold text-[#102033]">
                           {(manualPanel.pmrContractual || "-") + " / " + (manualPanel.pmrEffective || "-")}
@@ -4458,6 +4466,19 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                       <label className="text-[11px] font-medium text-[#4F647A]">
                         <span className="mb-1 block min-h-[2.5rem]">Faturamento interno últimos 12 meses (R$)</span>
                         <input value={manualPanel.internalRevenue12m} onChange={(event) => setManualPanel((prev) => ({ ...prev, internalRevenue12m: formatCurrencyInputBRL(event.target.value) }))} className="h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" />
+                      </label>
+                      <label className="text-[11px] font-medium text-[#4F647A]">
+                        <span className="mb-1 block min-h-[2.5rem]">Receita Líquida do Exercício</span>
+                        <input
+                          value={manualPanel.netRevenue}
+                          onChange={(event) => setManualPanel((prev) => ({ ...prev, netRevenue: formatCurrencyInputBRL(event.target.value) }))}
+                          placeholder="R$ 45.000.000,00"
+                          disabled={isJourneyReadOnly}
+                          className="h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px] disabled:bg-[#F3F4F6] disabled:text-[#6B7280]"
+                        />
+                        <span className="mt-1 block text-[10px] leading-4 text-[#8FA3B4]">
+                          Usada para calcular as margens de EBITDA, Fluxo de Caixa e Resultado DRE no Pilar Estabilidade Financeira e Liquidez.
+                        </span>
                       </label>
                       <label className="text-[11px] font-medium text-[#4F647A]">
                         <span className="mb-1 block min-h-[2.5rem]">Valor em aberto (R$)</span>

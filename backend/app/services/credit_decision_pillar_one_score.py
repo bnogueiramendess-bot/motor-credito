@@ -18,6 +18,15 @@ PILLAR_ONE_COFACE_REASON = "Cobertura COFACE válida: Pilar 1 atribuído como 10
 PILLAR_ONE_NOT_AVAILABLE_REASON = (
     "Relatório Agrisk de Análise Financeira não disponibilizado e ausência de cobertura COFACE válida."
 )
+NET_REVENUE_MISSING_WARNING = (
+    "Receita Líquida não informada. Não foi possível calcular margem percentual de EBITDA, Fluxo de Caixa e Resultado DRE."
+)
+NET_REVENUE_INVALID_WARNING = "Receita Líquida inválida. Informe valor maior que zero para calcular as margens financeiras."
+PERCENT_MARGIN_INDICATORS = {
+    "ebitda": "EBITDA / Receita Líquida * 100",
+    "cash_flow": "Fluxo de Caixa / Receita Líquida * 100",
+    "dre_result": "Resultado DRE / Receita Líquida * 100",
+}
 
 
 class PillarOneScoreError(Exception):
@@ -33,6 +42,17 @@ def _to_decimal(value: Any) -> Decimal | None:
         return None
     if isinstance(value, bool):
         return Decimal("1") if value else Decimal("0")
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        normalized = normalized.replace("R$", "").replace("%", "").replace(" ", "")
+        if "," in normalized:
+            normalized = normalized.replace(".", "").replace(",", ".")
+        try:
+            return Decimal(normalized)
+        except (InvalidOperation, ValueError):
+            return None
     try:
         return Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
@@ -103,6 +123,52 @@ def _find_matching_range(value: Decimal, ranges: list[CreditDecisionPolicyScoreR
     return None
 
 
+def _resolve_net_revenue(payload: Any) -> tuple[Any, Decimal | None]:
+    candidates = [
+        _get_path_value(payload, "net_revenue"),
+        _get_path_value(payload, "receita_liquida"),
+        _get_path_value(payload, "complementary_data.net_revenue"),
+        _get_path_value(payload, "complementary_data.receita_liquida"),
+        _get_path_value(payload, "financial_indicators.net_revenue"),
+        _get_path_value(payload, "financial_indicators.receita_liquida"),
+        _get_path_value(payload, "manual_panel.netRevenue"),
+        _get_path_value(payload, "manual_panel.net_revenue"),
+    ]
+    for raw_value in candidates:
+        if raw_value is None:
+            continue
+        return raw_value, _to_decimal(raw_value)
+    return None, None
+
+
+def _normalize_indicator_value(
+    *,
+    indicator: CreditDecisionPolicyIndicator,
+    numeric_value: Decimal | None,
+    net_revenue_raw: Any,
+    net_revenue: Decimal | None,
+) -> tuple[Decimal | None, str | None, dict[str, Any], str | None]:
+    if indicator.code not in PERCENT_MARGIN_INDICATORS:
+        return numeric_value, None, {}, None
+
+    trace = {
+        "net_revenue": net_revenue,
+        "normalized_value": None,
+        "value_type": "percent",
+        "calculation": PERCENT_MARGIN_INDICATORS[indicator.code],
+    }
+    if net_revenue_raw is None:
+        return None, NET_REVENUE_MISSING_WARNING, trace, NET_REVENUE_MISSING_WARNING
+    if net_revenue is None or net_revenue <= Decimal("0"):
+        return None, NET_REVENUE_INVALID_WARNING, trace, NET_REVENUE_INVALID_WARNING
+    if numeric_value is None:
+        return None, None, trace, None
+
+    normalized_value = (numeric_value / net_revenue * Decimal("100")).quantize(Decimal("0.01"))
+    trace["normalized_value"] = normalized_value
+    return normalized_value, None, trace, None
+
+
 def _load_pillar_one(db: Session, policy_id: int) -> CreditDecisionPolicyPillar:
     pillar = db.scalar(
         select(CreditDecisionPolicyPillar)
@@ -132,6 +198,7 @@ def _base_result(
     analysis_id: int | None,
     subgroups: list[dict[str, Any]] | None = None,
     calculation_trace: list[dict[str, Any]] | None = None,
+    warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "analysis_id": analysis_id,
@@ -147,6 +214,7 @@ def _base_result(
         "subgroups": subgroups or [],
         "indicators": [indicator for subgroup in (subgroups or []) for indicator in subgroup.get("indicators", [])],
         "calculation_trace": calculation_trace or [],
+        "warnings": warnings or [],
     }
 
 
@@ -196,7 +264,10 @@ def calculate_pillar_one_score(
 
     subgroup_results: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    warning_messages: set[str] = set()
     pillar_score = Decimal("0")
+    net_revenue_raw, net_revenue = _resolve_net_revenue(agrisk_financial_data)
 
     enabled_subgroups = [subgroup for subgroup in pillar.subgroups if subgroup.is_enabled]
     enabled_subgroups.sort(key=lambda item: (item.sort_order, item.id))
@@ -210,10 +281,23 @@ def calculate_pillar_one_score(
         for indicator in enabled_indicators:
             raw_value = _get_path_value(agrisk_financial_data, indicator.source_key)
             numeric_value = _to_decimal(raw_value)
+            numeric_value, margin_warning, margin_trace, margin_reason = _normalize_indicator_value(
+                indicator=indicator,
+                numeric_value=numeric_value,
+                net_revenue_raw=net_revenue_raw,
+                net_revenue=net_revenue,
+            )
+            if margin_warning is not None and margin_warning not in warning_messages:
+                warnings.append({"code": "net_revenue_not_available", "message": margin_warning})
+                warning_messages.add(margin_warning)
             sorted_ranges = sorted(indicator.score_ranges, key=lambda item: (item.sort_order, item.id))
             matched_range = _find_matching_range(numeric_value, sorted_ranges) if numeric_value is not None else None
 
-            if numeric_value is None:
+            if margin_reason is not None:
+                indicator_score = Decimal("0")
+                status = "not_available"
+                reason = margin_reason
+            elif numeric_value is None:
                 indicator_score = Decimal("0")
                 status = "missing_value"
                 reason = "Indicador sem valor disponível no Agrisk Financeiro."
@@ -234,6 +318,7 @@ def calculate_pillar_one_score(
                 "name": indicator.name,
                 "source_key": indicator.source_key,
                 "raw_value": raw_value,
+                **margin_trace,
                 "score": _round_score(indicator_score),
                 "weight_percent": indicator.weight_percent,
                 "weighted_score": indicator_weighted_score,
@@ -248,6 +333,7 @@ def calculate_pillar_one_score(
                     "subgroup_code": subgroup.code,
                     "indicator_code": indicator.code,
                     "raw_value": raw_value,
+                    **margin_trace,
                     "score": indicator_result["score"],
                     "weight_percent": indicator.weight_percent,
                     "weighted_score": indicator_weighted_score,
@@ -301,4 +387,5 @@ def calculate_pillar_one_score(
         analysis_id=analysis_id,
         subgroups=subgroup_results,
         calculation_trace=trace,
+        warnings=warnings,
     )

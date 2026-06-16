@@ -490,7 +490,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
                     analyst_notes="Teste",
                     workspace_state={
                         "manual_configured": True,
-                        "manual_panel": {"scoreSource": "Serasa", "scoreValue": 700},
+                        "manual_panel": {"scoreSource": "Serasa", "scoreValue": 700, "netRevenue": 45000000},
+                        "complementary_data": {"net_revenue": 45000000},
                         "imports": {"agrisk": {"read_id": 10, "status": "valid"}},
                     },
                 ),
@@ -504,6 +505,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.assertIsInstance(ws, dict)
             assert isinstance(ws, dict)
             self.assertTrue(bool(ws.get("manual_configured")))
+            self.assertEqual(ws.get("complementary_data"), {"net_revenue": 45000000})
+            self.assertEqual(ws.get("manual_panel", {}).get("netRevenue"), 45000000)
 
     def test_requester_can_list_step1_documents_in_created_stage(self) -> None:
         bu_id, run_id = self._setup_base()

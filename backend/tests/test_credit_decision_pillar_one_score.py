@@ -17,6 +17,8 @@ from app.models.credit_decision_policy_score_structure import (
 from app.models.user import User
 from app.schemas.credit_decision_policy import CreditDecisionPolicyCreate
 from app.services.credit_decision_pillar_one_score import (
+    NET_REVENUE_INVALID_WARNING,
+    NET_REVENUE_MISSING_WARNING,
     PILLAR_ONE_COFACE_REASON,
     PILLAR_ONE_NOT_AVAILABLE_REASON,
     calculate_pillar_one_score,
@@ -149,13 +151,7 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
             select(CreditDecisionPolicyIndicator).where(CreditDecisionPolicyIndicator.policy_id == self.policy.id)
         ).all()
         for indicator in indicators:
-            exists = self.db.scalar(
-                select(CreditDecisionPolicyScoreRange.id).where(
-                    CreditDecisionPolicyScoreRange.indicator_id == indicator.id
-                ).limit(1)
-            )
-            if exists is not None:
-                continue
+            self.db.execute(delete(CreditDecisionPolicyScoreRange).where(CreditDecisionPolicyScoreRange.indicator_id == indicator.id))
             self.db.add(
                 CreditDecisionPolicyScoreRange(
                     policy_id=self.policy.id,
@@ -171,8 +167,9 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
             )
         self.db.commit()
 
-    def _agrisk_payload(self, value: str = "2.10") -> dict:
+    def _agrisk_payload(self, value: str = "2.10", net_revenue: str | None = "100") -> dict:
         return {
+            "net_revenue": net_revenue,
             "financial_indicators": {
                 "liquidity_current": value,
                 "liquidity_quick": value,
@@ -192,6 +189,9 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
                 "anomalies_count": 0,
             },
         }
+
+    def _indicator_result(self, result: dict, code: str) -> dict:
+        return next(indicator for indicator in result["indicators"] if indicator["code"] == code)
 
     def test_valid_coface_returns_10_without_evaluating_agrisk(self) -> None:
         result = calculate_pillar_one_score(
@@ -239,17 +239,114 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
         self.assertEqual(result["weighted_score"], Decimal("5.5000"))
         self.assertEqual(len(result["subgroups"]), 5)
 
+    def test_percent_margin_indicators_normalize_absolute_values_with_net_revenue(self) -> None:
+        payload = self._agrisk_payload("1")
+        payload["net_revenue"] = "R$ 45.000.000,00"
+        payload["financial_indicators"]["ebitda"] = "1736779.28"
+        payload["financial_indicators"]["cash_flow"] = "230569.31"
+        payload["financial_indicators"]["dre_result"] = "4500000"
+
+        result = calculate_pillar_one_score(
+            db=self.db,
+            policy_id=self.policy.id,
+            has_valid_coface=False,
+            agrisk_financial_data=payload,
+        )
+
+        ebitda = self._indicator_result(result, "ebitda")
+        cash_flow = self._indicator_result(result, "cash_flow")
+        dre_result = self._indicator_result(result, "dre_result")
+
+        self.assertEqual(ebitda["raw_value"], "1736779.28")
+        self.assertEqual(ebitda["net_revenue"], Decimal("45000000.00"))
+        self.assertEqual(ebitda["normalized_value"], Decimal("3.86"))
+        self.assertEqual(ebitda["value_type"], "percent")
+        self.assertEqual(ebitda["calculation"], "EBITDA / Receita Líquida * 100")
+        self.assertEqual(ebitda["score"], Decimal("2.00"))
+
+        self.assertEqual(cash_flow["normalized_value"], Decimal("0.51"))
+        self.assertEqual(cash_flow["calculation"], "Fluxo de Caixa / Receita Líquida * 100")
+        self.assertEqual(cash_flow["score"], Decimal("2.00"))
+
+        self.assertEqual(dre_result["normalized_value"], Decimal("10.00"))
+        self.assertEqual(dre_result["calculation"], "Resultado DRE / Receita Líquida * 100")
+        self.assertEqual(dre_result["score"], Decimal("10.00"))
+
+    def test_percent_margin_score_uses_normalized_percent_not_raw_value(self) -> None:
+        payload = self._agrisk_payload("1")
+        payload["net_revenue"] = "1"
+        payload["financial_indicators"]["ebitda"] = "0.2"
+
+        result = calculate_pillar_one_score(
+            db=self.db,
+            policy_id=self.policy.id,
+            has_valid_coface=False,
+            agrisk_financial_data=payload,
+        )
+
+        ebitda = self._indicator_result(result, "ebitda")
+        self.assertEqual(ebitda["raw_value"], "0.2")
+        self.assertEqual(ebitda["normalized_value"], Decimal("20.00"))
+        self.assertEqual(ebitda["score"], Decimal("10.00"))
+        self.assertEqual(ebitda["matched_range"]["threshold_value"], Decimal("20.0000"))
+
+    def test_missing_net_revenue_marks_percent_indicators_not_available(self) -> None:
+        payload = self._agrisk_payload("1", net_revenue=None)
+
+        result = calculate_pillar_one_score(
+            db=self.db,
+            policy_id=self.policy.id,
+            has_valid_coface=False,
+            agrisk_financial_data=payload,
+        )
+
+        self.assertIn({"code": "net_revenue_not_available", "message": NET_REVENUE_MISSING_WARNING}, result["warnings"])
+        for code in ("ebitda", "cash_flow", "dre_result"):
+            indicator = self._indicator_result(result, code)
+            self.assertEqual(indicator["status"], "not_available")
+            self.assertEqual(indicator["reason"], NET_REVENUE_MISSING_WARNING)
+            self.assertIsNone(indicator["normalized_value"])
+            self.assertEqual(indicator["value_type"], "percent")
+
+    def test_zero_or_negative_net_revenue_marks_percent_indicators_not_available(self) -> None:
+        for net_revenue in ("0", "-100"):
+            with self.subTest(net_revenue=net_revenue):
+                payload = self._agrisk_payload("1", net_revenue=net_revenue)
+
+                result = calculate_pillar_one_score(
+                    db=self.db,
+                    policy_id=self.policy.id,
+                    has_valid_coface=False,
+                    agrisk_financial_data=payload,
+                )
+
+                self.assertIn({"code": "net_revenue_not_available", "message": NET_REVENUE_INVALID_WARNING}, result["warnings"])
+                for code in ("ebitda", "cash_flow", "dre_result"):
+                    indicator = self._indicator_result(result, code)
+                    self.assertEqual(indicator["status"], "not_available")
+                    self.assertEqual(indicator["reason"], NET_REVENUE_INVALID_WARNING)
+
     def test_indicator_weights_affect_subgroup_score(self) -> None:
         self._set_ranges("current_liquidity", [(">=", "0", None, "10")])
         self._set_ranges("quick_liquidity", [(">=", "0", None, "0")])
         self._set_ranges("general_liquidity", [(">=", "0", None, "0")])
         self._set_ranges("immediate_liquidity", [(">=", "0", None, "0")])
 
+        payload = {
+            "financial_indicators": {
+                "liquidity_current": "1",
+                "liquidity_quick": "1",
+                "liquidity_general": "1",
+                "liquidity_immediate": "1",
+            },
+            "quality_flags": {},
+        }
+
         result = calculate_pillar_one_score(
             db=self.db,
             policy_id=self.policy.id,
             has_valid_coface=False,
-            agrisk_financial_data=self._agrisk_payload("1"),
+            agrisk_financial_data=payload,
         )
 
         liquidity = next(item for item in result["subgroups"] if item["code"] == "liquidity")
@@ -261,11 +358,21 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
         self._set_ranges("general_liquidity", [(">=", "0", None, "10")])
         self._set_ranges("immediate_liquidity", [(">=", "0", None, "10")])
 
+        payload = {
+            "financial_indicators": {
+                "liquidity_current": "1",
+                "liquidity_quick": "1",
+                "liquidity_general": "1",
+                "liquidity_immediate": "1",
+            },
+            "quality_flags": {},
+        }
+
         result = calculate_pillar_one_score(
             db=self.db,
             policy_id=self.policy.id,
             has_valid_coface=False,
-            agrisk_financial_data=self._agrisk_payload("1"),
+            agrisk_financial_data=payload,
         )
 
         self.assertEqual(result["score"], Decimal("3.50"))

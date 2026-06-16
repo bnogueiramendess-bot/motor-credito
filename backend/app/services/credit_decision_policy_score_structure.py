@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -41,6 +42,15 @@ PILLAR_DISPLAY_NAMES = {
     "relationship_history": "Historico de Relacionamento",
 }
 PILLAR_SORT_ORDER = {code: index for index, code in enumerate(PILLAR_DISPLAY_NAMES, start=1)}
+PLANNED_NO_EFFECT_PILLARS = {
+    "market_conditions": {
+        "status": "planned",
+        "is_effective": False,
+        "affects_score": False,
+        "affects_validation": False,
+        "reason": "Pilar planejado para fase futura.",
+    }
+}
 
 
 class CreditDecisionPolicyScoreStructureError(Exception):
@@ -103,6 +113,15 @@ def _expected_pillars(policy: CreditDecisionPolicy) -> list[dict[str, Any]]:
         for index, (code, weight) in enumerate(weights.items(), start=1)
     ]
     return sorted(expected, key=lambda item: (item["sort_order"], item["code"]))
+
+
+def _is_effective_pillar_code(code: str) -> bool:
+    planned = PLANNED_NO_EFFECT_PILLARS.get(code)
+    return not planned or bool(planned.get("is_effective", True))
+
+
+def _planned_metadata(code: str) -> dict[str, Any]:
+    return dict(PLANNED_NO_EFFECT_PILLARS.get(code, {}))
 
 
 def _policy_to_dict(policy: CreditDecisionPolicy, *, source: str) -> dict[str, Any]:
@@ -245,24 +264,38 @@ def get_current_score_policy(db: Session) -> tuple[CreditDecisionPolicy, str]:
 def validate_score_structure(db: Session, policy_id: int) -> dict[str, Any]:
     policy = _load_policy(db, policy_id)
     pillars = [item for item in _load_pillars(db, policy_id) if item.is_enabled]
+    effective_pillars = [item for item in pillars if _is_effective_pillar_code(item.code)]
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     checks: list[dict[str, Any]] = []
 
     expected_pillars = _expected_pillars(policy)
-    expected_codes = {item["code"] for item in expected_pillars}
-    configured_codes = {item.code for item in pillars}
+    effective_expected_pillars = [item for item in expected_pillars if _is_effective_pillar_code(item["code"])]
+    planned_expected_pillars = [item for item in expected_pillars if not _is_effective_pillar_code(item["code"])]
+    expected_codes = {item["code"] for item in effective_expected_pillars}
+    configured_codes = {item.code for item in effective_pillars}
     missing_pillar_codes = sorted(expected_codes - configured_codes)
-    pillar_total = sum((_as_percent(item.weight_percent) for item in pillars), Decimal("0"))
-    if pillar_total == Decimal("100") and not missing_pillar_codes:
+    expected_effective_weight = sum((_as_percent(item["weight_percent"]) for item in effective_expected_pillars), Decimal("0"))
+    planned_weight = sum((_as_percent(item["weight_percent"]) for item in planned_expected_pillars), Decimal("0"))
+    pillar_total = sum((_as_percent(item.weight_percent) for item in effective_pillars), Decimal("0"))
+    if pillar_total == expected_effective_weight and not missing_pillar_codes:
         pillar_check_status = "valid"
-    elif pillar_total <= Decimal("100") and missing_pillar_codes:
+    elif pillar_total <= expected_effective_weight and missing_pillar_codes:
         pillar_check_status = "warning"
     else:
         pillar_check_status = "invalid"
-    checks.append({"code": "pillar_weights_sum", "label": "Soma dos pesos dos pilares", "value": pillar_total, "expected": Decimal("100"), "status": pillar_check_status})
+    checks.append(
+        {
+            "code": "pillar_weights_sum",
+            "label": "Soma dos pesos dos pilares efetivos",
+            "value": pillar_total,
+            "expected": expected_effective_weight,
+            "planned_weight": planned_weight,
+            "status": pillar_check_status,
+        }
+    )
     if pillar_check_status == "invalid":
-        errors.append({"scope": "policy", "code": "pillar_weights_sum", "message": "A soma dos pesos dos pilares deve ser 100%."})
+        errors.append({"scope": "policy", "code": "pillar_weights_sum", "message": "A soma dos pesos dos pilares efetivos deve respeitar a configuracao esperada."})
     elif pillar_check_status == "warning":
         warnings.append(
             {
@@ -277,7 +310,7 @@ def validate_score_structure(db: Session, policy_id: int) -> dict[str, Any]:
             }
         )
 
-    for pillar in pillars:
+    for pillar in effective_pillars:
         if not Decimal("0") <= _as_percent(pillar.weight_percent) <= Decimal("100"):
             errors.append({"scope": "pillar", "code": pillar.code, "message": "Peso do pilar deve estar entre 0 e 100."})
 
@@ -346,9 +379,15 @@ def validate_score_structure(db: Session, policy_id: int) -> dict[str, Any]:
                         errors.append({"scope": "score_range", "code": indicator.code, "message": "Nota da faixa deve estar entre 0 e 10."})
 
     status = _status_from_issues(errors, warnings)
+    configuration_status = "invalid" if errors else ("incomplete" if warnings else "validated")
     return {
         "status": status,
-        "configuration_status": "invalid" if errors else ("incomplete" if warnings else "validated"),
+        "configuration_status": configuration_status,
+        "operational_status": "invalid" if errors else ("incomplete" if warnings else "configured"),
+        "effective_pillars_weight": pillar_total,
+        "planned_pillars_weight": planned_weight,
+        "configured_effective_pillars": len(configured_codes),
+        "total_effective_pillars": len(effective_expected_pillars),
         "checks": checks,
         "errors": errors,
         "warnings": warnings,
@@ -358,6 +397,9 @@ def validate_score_structure(db: Session, policy_id: int) -> dict[str, Any]:
 def _build_policy_progress(policy: CreditDecisionPolicy, pillars: list[CreditDecisionPolicyPillar]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     expected_pillars = _expected_pillars(policy)
     configured_by_code = {pillar.code: pillar for pillar in pillars}
+    effective_expected_pillars = [item for item in expected_pillars if _is_effective_pillar_code(item["code"])]
+    planned_expected_pillars = [item for item in expected_pillars if not _is_effective_pillar_code(item["code"])]
+    effective_pillars = [pillar for pillar in pillars if _is_effective_pillar_code(pillar.code)]
     configured_subgroups = sum(len([item for item in pillar.subgroups if item.is_enabled]) for pillar in pillars)
     configured_indicators = sum(
         len([indicator for indicator in subgroup.indicators if indicator.is_enabled])
@@ -387,6 +429,7 @@ def _build_policy_progress(policy: CreditDecisionPolicy, pillars: list[CreditDec
     roadmap: list[dict[str, Any]] = []
     for expected in expected_pillars:
         pillar = configured_by_code.get(expected["code"])
+        planned_metadata = _planned_metadata(expected["code"])
         subgroup_count = len([item for item in pillar.subgroups if item.is_enabled]) if pillar else 0
         indicator_count = (
             sum(len([indicator for indicator in subgroup.indicators if indicator.is_enabled]) for subgroup in pillar.subgroups if subgroup.is_enabled)
@@ -404,7 +447,9 @@ def _build_policy_progress(policy: CreditDecisionPolicy, pillars: list[CreditDec
             if pillar
             else 0
         )
-        if pillar is None:
+        if planned_metadata:
+            roadmap_status = str(planned_metadata["status"])
+        elif pillar is None:
             roadmap_status = "not_started"
         elif indicator_count == 0 or range_ready_count < indicator_count:
             roadmap_status = "partial"
@@ -413,20 +458,41 @@ def _build_policy_progress(policy: CreditDecisionPolicy, pillars: list[CreditDec
         roadmap.append(
             {
                 **expected,
+                "weight": expected["weight_percent"],
                 "id": pillar.id if pillar else None,
                 "status": roadmap_status,
                 "subgroups_count": subgroup_count,
                 "indicators_count": indicator_count,
                 "indicators_with_ranges_count": range_ready_count,
+                "is_effective": True,
+                "affects_score": True,
+                "affects_validation": True,
+                **planned_metadata,
             }
         )
 
+    configured_effective_pillars = sum(
+        1
+        for item in roadmap
+        if _is_effective_pillar_code(str(item["code"])) and item["status"] == "configured"
+    )
+    effective_weight = sum((_as_percent(item["weight_percent"]) for item in effective_expected_pillars), Decimal("0"))
+    planned_weight = sum((_as_percent(item["weight_percent"]) for item in planned_expected_pillars), Decimal("0"))
     progress = {
-        "pillars": {"configured": len(pillars), "expected": len(expected_pillars) or len(pillars)},
+        "pillars": {
+            "configured": configured_effective_pillars,
+            "expected": len(effective_expected_pillars) or len(effective_pillars),
+            "planned": len(planned_expected_pillars),
+            "total": len(expected_pillars) or len(pillars),
+        },
         "subgroups": {"configured": configured_subgroups, "expected": configured_subgroups},
         "indicators": {"configured": configured_indicators, "expected": configured_indicators},
         "indicators_with_ranges": {"configured": indicators_with_ranges, "expected": configured_indicators},
         "score_ranges_count": score_ranges_count,
+        "effective_pillars_weight": effective_weight,
+        "planned_pillars_weight": planned_weight,
+        "configured_effective_pillars": configured_effective_pillars,
+        "total_effective_pillars": len(effective_expected_pillars),
     }
     return progress, roadmap
 
@@ -477,6 +543,10 @@ def _set_nested_value(payload: dict[str, Any], source_key: str, value: Decimal |
 def _manual_indicator_payload(db: Session, policy_id: int, indicator_values: dict[str, Any]) -> dict[str, Any]:
     normalized_by_code = {str(code).lower(): value for code, value in indicator_values.items()}
     payload: dict[str, Any] = {}
+    for key in ("net_revenue", "receita_liquida"):
+        if key in normalized_by_code:
+            payload["net_revenue"] = _to_decimal(normalized_by_code[key])
+            break
     indicators = db.scalars(
         select(CreditDecisionPolicyIndicator).where(
             CreditDecisionPolicyIndicator.policy_id == policy_id,
@@ -491,6 +561,34 @@ def _manual_indicator_payload(db: Session, policy_id: int, indicator_values: dic
     return payload
 
 
+def _extract_net_revenue_from_analysis(analysis: CreditAnalysis) -> Decimal | None:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    workspace_state = memory.get("workspace_state") if isinstance(memory.get("workspace_state"), dict) else {}
+    manual_panel = workspace_state.get("manual_panel") if isinstance(workspace_state.get("manual_panel"), dict) else {}
+    complementary_data = workspace_state.get("complementary_data") if isinstance(workspace_state.get("complementary_data"), dict) else {}
+    for source in (manual_panel, complementary_data):
+        for key in ("netRevenue", "net_revenue", "receita_liquida"):
+            if key in source:
+                parsed = _to_decimal(source.get(key))
+                if parsed is not None:
+                    return parsed
+    return None
+
+
+def _with_analysis_net_revenue(payload: dict[str, Any], analysis: CreditAnalysis) -> dict[str, Any]:
+    net_revenue = _extract_net_revenue_from_analysis(analysis)
+    if net_revenue is None:
+        return payload
+    enriched = deepcopy(payload)
+    complementary_data = enriched.get("complementary_data")
+    if not isinstance(complementary_data, dict):
+        complementary_data = {}
+        enriched["complementary_data"] = complementary_data
+    enriched["net_revenue"] = net_revenue
+    complementary_data["net_revenue"] = net_revenue
+    return enriched
+
+
 def _find_agrisk_financial_payload_for_analysis(db: Session, analysis_id: int) -> dict[str, Any] | None:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
@@ -501,7 +599,7 @@ def _find_agrisk_financial_payload_for_analysis(db: Session, analysis_id: int) -
         linked_read = db.get(CreditReportRead, linked_read_id)
         if linked_read is not None and isinstance(linked_read.read_payload_json, dict):
             if linked_read.read_payload_json.get("report_type") == AGRISK_FINANCIAL_ANALYSIS:
-                return linked_read.read_payload_json
+                return _with_analysis_net_revenue(linked_read.read_payload_json, analysis)
 
     customer_document = getattr(analysis.customer, "document_number", None)
     if not customer_document:
@@ -520,7 +618,7 @@ def _find_agrisk_financial_payload_for_analysis(db: Session, analysis_id: int) -
     for read in reads:
         payload = read.read_payload_json if isinstance(read.read_payload_json, dict) else {}
         if payload.get("report_type") == AGRISK_FINANCIAL_ANALYSIS:
-            return payload
+            return _with_analysis_net_revenue(payload, analysis)
     return None
 
 
@@ -571,7 +669,6 @@ def simulate_pillar_one_score(
         )
         result["mapper_trace"] = []
         result["mapper_warnings"] = []
-        result["warnings"] = []
         result["simulation"] = {"mode": "manual", "persisted": False}
         return result
 

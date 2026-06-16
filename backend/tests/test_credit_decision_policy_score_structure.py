@@ -19,6 +19,7 @@ from app.models.user import User
 from app.schemas.credit_decision_policy import CreditDecisionPolicyCreate
 from app.services.credit_decision_policy_score_seed import (
     COFACE_COVERAGE_RANGES,
+    PILLAR_1_SCORE_RANGES,
     PILLAR_CODE,
     PILLAR_TWO_CODE,
     PILLAR_TWO_INDICATOR_CODE,
@@ -35,6 +36,7 @@ from app.services.credit_decision_policy_score_seed import (
     RELATIONSHIP_HISTORY_RANGES,
     ensure_default_score_structure,
 )
+from app.services.credit_decision_policy_score_structure import get_score_structure, validate_score_structure
 from app.services.credit_decision_policy_service import (
     activate_credit_decision_policy,
     create_credit_decision_policy,
@@ -430,9 +432,118 @@ class CreditDecisionPolicyScoreStructureTestCase(unittest.TestCase):
             self.assertEqual(ranges[0].threshold_value, Decimal("2.0000"))
             self.assertEqual(ranges[0].score, Decimal("10.00"))
 
+    def test_pillar_one_all_indicators_have_score_ranges(self) -> None:
+        pillar = self.db.scalar(
+            select(CreditDecisionPolicyPillar).where(
+                CreditDecisionPolicyPillar.policy_id == self.policy.id,
+                CreditDecisionPolicyPillar.code == PILLAR_CODE,
+            )
+        )
+        self.assertIsNotNone(pillar)
+
+        indicators = self.db.scalars(
+            select(CreditDecisionPolicyIndicator)
+            .join(CreditDecisionPolicySubgroup, CreditDecisionPolicySubgroup.id == CreditDecisionPolicyIndicator.subgroup_id)
+            .where(
+                CreditDecisionPolicyIndicator.policy_id == self.policy.id,
+                CreditDecisionPolicySubgroup.pillar_id == pillar.id,
+                CreditDecisionPolicyIndicator.is_enabled.is_(True),
+            )
+            .order_by(CreditDecisionPolicySubgroup.sort_order, CreditDecisionPolicyIndicator.sort_order)
+        ).all()
+        self.assertEqual(len(indicators), 14)
+        self.assertEqual({item.code for item in indicators}, set(PILLAR_1_SCORE_RANGES))
+
+        for indicator in indicators:
+            ranges = self.db.scalars(
+                select(CreditDecisionPolicyScoreRange)
+                .where(
+                    CreditDecisionPolicyScoreRange.policy_id == self.policy.id,
+                    CreditDecisionPolicyScoreRange.indicator_id == indicator.id,
+                    CreditDecisionPolicyScoreRange.is_enabled.is_(True),
+                )
+                .order_by(CreditDecisionPolicyScoreRange.sort_order.asc())
+            ).all()
+            expected_ranges = PILLAR_1_SCORE_RANGES[indicator.code]
+            self.assertEqual(
+                [(item.operator, item.threshold_value, item.score) for item in ranges],
+                [
+                    (operator, threshold.quantize(Decimal("0.0001")), score.quantize(Decimal("0.01")))
+                    for operator, threshold, score in expected_ranges
+                ],
+                indicator.code,
+            )
+
+    def test_seed_fills_missing_pillar_one_range_without_duplicates(self) -> None:
+        indicator = self.db.scalar(
+            select(CreditDecisionPolicyIndicator).where(
+                CreditDecisionPolicyIndicator.policy_id == self.policy.id,
+                CreditDecisionPolicyIndicator.code == "ebitda",
+            )
+        )
+        self.assertIsNotNone(indicator)
+        target_range = self.db.scalar(
+            select(CreditDecisionPolicyScoreRange).where(
+                CreditDecisionPolicyScoreRange.policy_id == self.policy.id,
+                CreditDecisionPolicyScoreRange.indicator_id == indicator.id,
+                CreditDecisionPolicyScoreRange.operator == ">=",
+                CreditDecisionPolicyScoreRange.threshold_value == Decimal("15.0000"),
+            )
+        )
+        self.assertIsNotNone(target_range)
+        self.db.delete(target_range)
+        self.db.commit()
+
+        ensure_default_score_structure(self.db, self.policy)
+        self.db.commit()
+
+        ranges = self.db.scalars(
+            select(CreditDecisionPolicyScoreRange).where(
+                CreditDecisionPolicyScoreRange.policy_id == self.policy.id,
+                CreditDecisionPolicyScoreRange.indicator_id == indicator.id,
+                CreditDecisionPolicyScoreRange.operator == ">=",
+                CreditDecisionPolicyScoreRange.threshold_value == Decimal("15.0000"),
+            )
+        ).all()
+        self.assertEqual(len(ranges), 1)
+
+    def test_pillar_three_roadmap_is_planned_and_no_effect(self) -> None:
+        structure = get_score_structure(self.db, self.policy.id)
+        roadmap = {item["code"]: item for item in structure["pillar_roadmap"]}
+
+        pillar_one = roadmap[PILLAR_CODE]
+        self.assertEqual(pillar_one["status"], "configured")
+        self.assertEqual(pillar_one["indicators_count"], 14)
+        self.assertEqual(pillar_one["indicators_with_ranges_count"], 14)
+
+        pillar_three = roadmap["market_conditions"]
+        self.assertIsNone(pillar_three["id"])
+        self.assertEqual(pillar_three["status"], "planned")
+        self.assertEqual(pillar_three["weight"], Decimal("15"))
+        self.assertFalse(pillar_three["is_effective"])
+        self.assertFalse(pillar_three["affects_score"])
+        self.assertFalse(pillar_three["affects_validation"])
+        self.assertEqual(pillar_three["reason"], "Pilar planejado para fase futura.")
+        self.assertEqual(structure["policy_progress"]["pillars"], {"configured": 4, "expected": 4, "planned": 1, "total": 5})
+        self.assertEqual(structure["policy_progress"]["effective_pillars_weight"], Decimal("85"))
+        self.assertEqual(structure["policy_progress"]["planned_pillars_weight"], Decimal("15"))
+        self.assertEqual(structure["validation_summary"]["configuration_status"], "validated")
+        self.assertEqual(structure["validation_summary"]["operational_status"], "configured")
+        self.assertNotIn(
+            "pillars_not_configured",
+            {warning["code"] for warning in structure["validation_summary"]["warnings"]},
+        )
+
+    def test_no_enabled_indicator_without_score_range(self) -> None:
+        validation = validate_score_structure(self.db, self.policy.id)
+        self.assertNotIn(
+            "indicator_without_score_ranges",
+            {warning["code"] for warning in validation["warnings"]},
+        )
+
     def test_score_ranges_respect_score_bounds(self) -> None:
         ranges = self.db.scalars(select(CreditDecisionPolicyScoreRange).where(CreditDecisionPolicyScoreRange.policy_id == self.policy.id)).all()
-        self.assertGreaterEqual(len(ranges), 24)
+        self.assertGreaterEqual(len(ranges), 84)
         for score_range in ranges:
             self.assertGreaterEqual(score_range.score, Decimal("0"))
             self.assertLessEqual(score_range.score, Decimal("10"))
