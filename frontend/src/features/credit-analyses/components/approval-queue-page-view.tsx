@@ -11,6 +11,7 @@ import { CreditAnalysisMonitorItemDto, CreditPolicyApprovalQueueItemDto, Workflo
 import { useCreditAnalysesApprovalQueueQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-approval-queue-query";
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
 import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
+import { policyGovernanceQueueCta } from "@/features/credit-decision-policy/utils/policy-governance-labels";
 import { OperationalContextBar } from "@/shared/components/layout/operational-context-bar";
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
@@ -197,7 +198,6 @@ function formatDoaRange(range: string | null | undefined): string {
 type ApprovalQueuePolicyCardProps = {
   item: CreditPolicyApprovalQueueItemDto;
   decisionActions: Array<{ value: DecisionAction; label: string }>;
-  canOpenDossier: boolean;
   isMenuOpen: boolean;
   isPending: boolean;
   onToggleMenu: () => void;
@@ -207,7 +207,6 @@ type ApprovalQueuePolicyCardProps = {
 function ApprovalQueuePolicyCard({
   item,
   decisionActions,
-  canOpenDossier,
   isMenuOpen,
   isPending,
   onToggleMenu,
@@ -270,15 +269,9 @@ function ApprovalQueuePolicyCard({
       </div>
 
       <div className="mt-auto flex items-center justify-end gap-3">
-        {canOpenDossier ? (
-          <Link href="/motor-credito/politica-decisao/score" className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
-            Abrir Dossiê
-          </Link>
-        ) : (
-          <button type="button" disabled className="inline-flex h-11 min-w-[150px] cursor-not-allowed items-center justify-center rounded-[14px] border border-[#232B42] bg-[#151A2B] px-5 text-[14px] font-semibold text-[#AEB4C1] opacity-70">
-            Abrir Dossiê
-          </button>
-        )}
+        <Link href={`/politicas-de-decisao/governanca/solicitacoes/${item.request_id}`} className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
+          {policyGovernanceQueueCta(item.action_type)}
+        </Link>
         <div className="relative">
           <button
             type="button"
@@ -442,7 +435,6 @@ export function ApprovalQueuePageView() {
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {items.map((item) => {
           const decisionActions = DECISION_ACTIONS.filter((action) => item.available_actions.includes(action.value));
-          const canOpenDossier = item.item_type === "CREDIT_POLICY" || item.available_actions.includes("view_dossier") || decisionActions.length > 0;
 
           if (item.item_type === "CREDIT_POLICY") {
             return (
@@ -450,7 +442,6 @@ export function ApprovalQueuePageView() {
                 key={`policy-${item.request_id}`}
                 item={item}
                 decisionActions={decisionActions}
-                canOpenDossier={canOpenDossier}
                 isMenuOpen={menuOpenFor === item.request_id}
                 isPending={workflowActionMutation.isPending}
                 onToggleMenu={() => setMenuOpenFor((current) => (current === item.request_id ? null : item.request_id))}
@@ -520,7 +511,7 @@ export function ApprovalQueuePageView() {
               </div>
 
               <div className="mt-auto flex items-center justify-end gap-3">
-                {canOpenDossier ? (
+                {item.available_actions.includes("view_dossier") || decisionActions.length > 0 ? (
                   <Link href={`/analises/${item.analysis_id}`} className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
                     Abrir Dossiê
                   </Link>

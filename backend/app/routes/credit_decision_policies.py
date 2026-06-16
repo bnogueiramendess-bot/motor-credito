@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.security import CurrentUser, require_permissions
+from app.core.security import CurrentUser, get_current_user, require_permissions
 from app.db.session import get_db
 from app.schemas.credit_decision_policy import (
     CreditDecisionPolicyActivateResponse,
@@ -39,6 +39,7 @@ from app.services.credit_decision_policy_governance_workflow import (
     list_governance_requests,
     reject_governance_request,
 )
+from app.services.credit_decision_policy_governance_summary import get_policy_governance_executive_summary
 from app.services.credit_decision_policy_governance import (
     PolicyGovernanceValidationError,
     get_policy_governance_settings,
@@ -194,6 +195,23 @@ def get_policy_governance_request(
     try:
         return PolicyGovernanceRequestRead.model_validate(
             get_governance_request(db, company_id=current.user.company_id, request_id=request_id)
+        )
+    except PolicyGovernanceWorkflowError as exc:
+        _raise_governance_workflow_http_error(exc)
+
+
+@router.get("/governance-requests/{request_id}/executive-summary")
+def get_policy_governance_request_executive_summary(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    try:
+        return get_policy_governance_executive_summary(
+            db,
+            company_id=current.user.company_id,
+            request_id=request_id,
+            current=current,
         )
     except PolicyGovernanceWorkflowError as exc:
         _raise_governance_workflow_http_error(exc)
