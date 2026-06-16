@@ -253,6 +253,7 @@ export type CreditAnalysisQueueOptionsResponse = {
 };
 
 export type CreditAnalysisMonitorItemDto = {
+  item_type: "CREDIT_ANALYSIS";
   analysis_id: number;
   protocol: string;
   customer_name: string;
@@ -286,6 +287,29 @@ export type CreditAnalysisMonitorItemDto = {
   applicable_doa_range?: string | null;
   available_actions: string[];
 };
+
+export type CreditPolicyApprovalQueueItemDto = {
+  item_type: "CREDIT_POLICY";
+  entity_id: number | null;
+  entity_name: string;
+  request_id: number;
+  action_type: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  available_actions: string[];
+  protocol?: string | null;
+  policy_name?: string | null;
+  policy_code?: string | null;
+  policy_version?: string | number | null;
+  policy_type?: string | null;
+  business_unit?: string | null;
+  committee?: string | null;
+  impacted_pillar?: string | null;
+  requester_name?: string | null;
+};
+
+export type ApprovalQueueItemDto = CreditAnalysisMonitorItemDto | CreditPolicyApprovalQueueItemDto;
 
 export type CreditAnalysisJourneyProgressUpdateRequest = {
   current_journey_step?: number | null;
@@ -323,7 +347,7 @@ export type CreditAnalysisApprovalQueueKpisDto = {
 };
 
 export type CreditAnalysisApprovalQueueResponse = {
-  items: CreditAnalysisMonitorItemDto[];
+  items: ApprovalQueueItemDto[];
   kpis: CreditAnalysisApprovalQueueKpisDto;
   total: number;
   page: number;

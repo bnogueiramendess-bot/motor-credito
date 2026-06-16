@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Check, ChevronDown, ChevronsLeft, ChevronsRight, Filter, Search, ShieldAlert, UserRoundCheck } from "lucide-react";
+import { CalendarDays, Check, ChevronDown, ChevronsLeft, ChevronsRight, Filter, Landmark, Search, ShieldAlert, UserRoundCheck } from "lucide-react";
 
 import { executeCreditAnalysisWorkflowAction } from "@/features/credit-analyses/api/credit-analyses.api";
-import { CreditAnalysisMonitorItemDto, WorkflowActionRequest } from "@/features/credit-analyses/api/contracts";
+import { CreditAnalysisMonitorItemDto, CreditPolicyApprovalQueueItemDto, WorkflowActionRequest } from "@/features/credit-analyses/api/contracts";
 import { useCreditAnalysesApprovalQueueQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-approval-queue-query";
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
 import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
@@ -112,6 +112,46 @@ function resolveUserName(value: string | null | undefined): string {
   return trimmed.length > 0 ? trimmed : "Não informado";
 }
 
+function safeText(value: string | number | null | undefined, fallback = "Não informado"): string {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).trim();
+  return text.length > 0 ? text : fallback;
+}
+
+function formatQueueDate(value: string | null | undefined): string {
+  if (!value) return "Não informado";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Não informado";
+  return new Intl.DateTimeFormat("pt-BR").format(date);
+}
+
+function policyActionLabel(actionType: string | null | undefined): string {
+  const normalized = (actionType ?? "").toLowerCase();
+  if (normalized.includes("publish") || normalized.includes("publication") || normalized.includes("publicacao")) return "Publicação";
+  if (normalized.includes("archive") || normalized.includes("arquiv")) return "Arquivamento";
+  if (normalized.includes("edit") || normalized.includes("update") || normalized.includes("edicao")) return "Edição";
+  if (normalized.includes("create") || normalized.includes("criacao")) return "Criação";
+  return safeText(actionType);
+}
+
+function policyVersionLabel(item: CreditPolicyApprovalQueueItemDto): string {
+  if (item.policy_version !== null && item.policy_version !== undefined && String(item.policy_version).trim() !== "") {
+    const raw = String(item.policy_version).trim();
+    return raw.toLowerCase().startsWith("v") ? raw : `v${raw}`;
+  }
+
+  const match = item.entity_name.match(/\bv\d+(?:[.,]\d+)?\b/i);
+  return match?.[0] ?? "-";
+}
+
+function policyNameLabel(item: CreditPolicyApprovalQueueItemDto): string {
+  return safeText(item.policy_name ?? item.entity_name, "Política de Crédito");
+}
+
+function policyProtocolLabel(item: CreditPolicyApprovalQueueItemDto): string {
+  return safeText(item.protocol ?? item.policy_code ?? `POL-${String(item.request_id).padStart(4, "0")}`, "-");
+}
+
 function formatCompactRangeValue(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 1_000_000) {
@@ -152,6 +192,121 @@ function formatDoaRange(range: string | null | undefined): string {
   if (min === null || max === null || !Number.isFinite(min) || !Number.isFinite(max)) return range;
 
   return `${formatCompactRangeValue(min)} a ${formatCompactRangeValue(max)}`;
+}
+
+type ApprovalQueuePolicyCardProps = {
+  item: CreditPolicyApprovalQueueItemDto;
+  decisionActions: Array<{ value: DecisionAction; label: string }>;
+  canOpenDossier: boolean;
+  isMenuOpen: boolean;
+  isPending: boolean;
+  onToggleMenu: () => void;
+  onDecision: (action: DecisionAction) => void;
+};
+
+function ApprovalQueuePolicyCard({
+  item,
+  decisionActions,
+  canOpenDossier,
+  isMenuOpen,
+  isPending,
+  onToggleMenu,
+  onDecision,
+}: ApprovalQueuePolicyCardProps) {
+  const actionLabel = policyActionLabel(item.action_type);
+  const requestedBy = resolveUserName(item.requester_name);
+
+  return (
+    <article className="relative flex h-full flex-col overflow-hidden rounded-[22px] border border-[#232B42] bg-[#0F1220] p-6 text-[#F2F4F8] shadow-[0_18px_38px_rgba(15,18,32,0.22)]">
+      <div className="absolute bottom-0 left-0 top-0 w-[6px] bg-[#7C3AED]" />
+      <div className="mb-5 flex items-start justify-between gap-3 pl-2">
+        <div className="min-w-0">
+          <p className="text-[18px] font-bold leading-tight text-[#F2F4F8]">{policyNameLabel(item)}</p>
+          <p className="mt-2 text-[13px] leading-snug text-[#AEB4C1]">{policyProtocolLabel(item)} • Revisão</p>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <span className="rounded-full border border-[#6155D9]/55 bg-[#312E81]/70 px-3 py-1 text-[11px] font-semibold text-[#DDD6FE]">Política</span>
+          <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${statusBadgeClass(item.status)}`}>{statusLabel(item.status)}</span>
+        </div>
+      </div>
+
+      <div className="mb-4 rounded-[18px] border border-[#232B42] bg-[#151A2B] p-4">
+        <div className="grid grid-cols-[1fr_auto] gap-3">
+          <div>
+            <p className="text-[12px] font-semibold text-[#AEB4C1]">Ação solicitada</p>
+            <p className="mt-1 text-[38px] font-extrabold leading-[0.95] tracking-[-0.02em] text-[#F2F4F8]">{actionLabel}</p>
+            <p className="mt-2 text-[13px] text-[#AEB4C1]">Tipo: <span className="font-semibold text-[#E5E7EB]">{actionLabel} de Política</span></p>
+          </div>
+          <div className="flex min-w-[72px] items-center justify-end">
+            <Landmark className="h-9 w-9 text-[#A78BFA]" />
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-4 grid grid-cols-2 gap-3">
+        <div className="rounded-[16px] border border-[#232B42] bg-[#151A2B] px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[#AEB4C1]">Versão</p>
+          <p className="mt-1 text-[13px] font-bold text-[#F2F4F8]">{policyVersionLabel(item)}</p>
+          <p className="text-[13px] font-semibold text-[#AEB4C1]">Revisão</p>
+        </div>
+        <div className="rounded-[16px] border border-[#232B42] bg-[#151A2B] px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[#AEB4C1]">Solicitado por</p>
+          <p className="mt-1 text-[13px] font-bold text-[#F2F4F8]">{requestedBy}</p>
+          <p className="text-[13px] font-semibold text-[#AEB4C1]">Em {formatQueueDate(item.created_at)}</p>
+        </div>
+      </div>
+
+      <div className="mb-4 border-t border-[#232B42] pt-3">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+          <p className="text-[12px] text-[#AEB4C1]">BU Responsável</p>
+          <p className="text-[13px] font-semibold text-[#F2F4F8]">{safeText(item.business_unit)}</p>
+          <p className="text-[12px] text-[#AEB4C1]">Comitê</p>
+          <p className="text-[13px] font-semibold text-[#F2F4F8]">{safeText(item.committee, "-")}</p>
+          <p className="text-[12px] text-[#AEB4C1]">Tipo de Política</p>
+          <p className="text-[13px] font-semibold text-[#F2F4F8]">{safeText(item.policy_type)}</p>
+          <p className="text-[12px] text-[#AEB4C1]">Pilar Impactado</p>
+          <p className="text-[13px] font-semibold text-[#F2F4F8]">{safeText(item.impacted_pillar, "-")}</p>
+        </div>
+      </div>
+
+      <div className="mt-auto flex items-center justify-end gap-3">
+        {canOpenDossier ? (
+          <Link href="/motor-credito/politica-decisao/score" className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
+            Abrir Dossiê
+          </Link>
+        ) : (
+          <button type="button" disabled className="inline-flex h-11 min-w-[150px] cursor-not-allowed items-center justify-center rounded-[14px] border border-[#232B42] bg-[#151A2B] px-5 text-[14px] font-semibold text-[#AEB4C1] opacity-70">
+            Abrir Dossiê
+          </button>
+        )}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={onToggleMenu}
+            disabled={decisionActions.length === 0 || isPending}
+            className="inline-flex h-11 min-w-[132px] items-center justify-center rounded-[14px] border border-[#D7E1EC] bg-white px-4 text-[14px] font-semibold text-[#334155] disabled:cursor-not-allowed disabled:text-[#94A3B8]"
+          >
+            Decidir <ChevronDown className="ml-1 h-4 w-4" />
+          </button>
+          {isMenuOpen && decisionActions.length > 0 ? (
+            <div className="absolute right-0 z-20 mt-1 min-w-[200px] rounded-[10px] border border-[#232B42] bg-[#151A2B] p-1 shadow-lg">
+              {decisionActions.map((action) => (
+                <button
+                  key={action.value}
+                  type="button"
+                  onClick={() => onDecision(action.value)}
+                  className="flex w-full items-center gap-2 rounded-[8px] px-2 py-2 text-left text-[12px] text-[#F2F4F8] hover:bg-[#232B42]"
+                >
+                  <Check className="h-3.5 w-3.5 text-[#AEB4C1]" />
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
 }
 
 export function ApprovalQueuePageView() {
@@ -286,16 +441,35 @@ export function ApprovalQueuePageView() {
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {items.map((item) => {
+          const decisionActions = DECISION_ACTIONS.filter((action) => item.available_actions.includes(action.value));
+          const canOpenDossier = item.item_type === "CREDIT_POLICY" || item.available_actions.includes("view_dossier") || decisionActions.length > 0;
+
+          if (item.item_type === "CREDIT_POLICY") {
+            return (
+              <ApprovalQueuePolicyCard
+                key={`policy-${item.request_id}`}
+                item={item}
+                decisionActions={decisionActions}
+                canOpenDossier={canOpenDossier}
+                isMenuOpen={menuOpenFor === item.request_id}
+                isPending={workflowActionMutation.isPending}
+                onToggleMenu={() => setMenuOpenFor((current) => (current === item.request_id ? null : item.request_id))}
+                onDecision={() => {
+                  setFeedback("Abra o dossiê da política para concluir esta decisão.");
+                  setMenuOpenFor(null);
+                }}
+              />
+            );
+          }
+
           const recommended = formatCompactCurrency(item.recommended_limit);
           const requested = formatCompactCurrency(item.requested_limit);
           const impact = resolveDecisionImpact(item);
-          const decisionActions = DECISION_ACTIONS.filter((action) => item.available_actions.includes(action.value));
-          const canOpenDossier = item.available_actions.includes("view_dossier") || decisionActions.length > 0;
           const analystName = resolveUserName(item.assigned_analyst_name);
           const requesterName = resolveUserName(item.requester_name);
 
           return (
-            <article key={item.analysis_id} className="relative flex h-full flex-col overflow-hidden rounded-[22px] border border-[#D7E1EC] bg-white p-6 shadow-[0_16px_34px_rgba(15,23,42,0.08)]">
+            <article key={`analysis-${item.analysis_id}`} className="relative flex h-full flex-col overflow-hidden rounded-[22px] border border-[#D7E1EC] bg-white p-6 shadow-[0_16px_34px_rgba(15,23,42,0.08)]">
               <div className="absolute bottom-0 left-0 top-0 w-[6px] bg-[#10B981]" />
               <div className="mb-5 flex items-start justify-between gap-3 pl-2">
                 <div className="min-w-0">
@@ -430,7 +604,7 @@ export function ApprovalQueuePageView() {
         </div>
       ) : null}
 
-      {items.some((item) => item.available_actions.length === 0) ? (
+      {items.some((item) => item.item_type === "CREDIT_ANALYSIS" && item.available_actions.length === 0) ? (
         <div className="mt-3 flex items-center gap-1 text-[11px] text-[#64748B]"><ShieldAlert className="h-3.5 w-3.5" /> Algumas análises podem não ter ações disponíveis no momento.</div>
       ) : null}
     </section>

@@ -232,6 +232,7 @@ class CreditAnalysisQueueOptionsResponse(BaseModel):
 
 
 class CreditAnalysisMonitorItem(BaseModel):
+    item_type: str = "CREDIT_ANALYSIS"
     analysis_id: int
     protocol: str
     customer_name: str
@@ -263,6 +264,18 @@ class CreditAnalysisMonitorItem(BaseModel):
     next_responsible_role: str
     applicable_doa_code: str | None = None
     applicable_doa_range: str | None = None
+    available_actions: list[str]
+
+
+class CreditPolicyApprovalQueueItem(BaseModel):
+    item_type: str = "CREDIT_POLICY"
+    entity_id: int | None = None
+    entity_name: str
+    request_id: int
+    action_type: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
     available_actions: list[str]
 
 
@@ -334,7 +347,7 @@ class CreditAnalysisApprovalQueueKpis(BaseModel):
 
 
 class CreditAnalysisApprovalQueueResponse(BaseModel):
-    items: list[CreditAnalysisMonitorItem]
+    items: list[CreditAnalysisMonitorItem | CreditPolicyApprovalQueueItem]
     kpis: CreditAnalysisApprovalQueueKpis
     total: int
     page: int

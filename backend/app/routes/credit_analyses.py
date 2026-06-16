@@ -47,6 +47,7 @@ from app.schemas.credit_analysis import (
     CreditAnalysisMonitorResponse,
     CreditAnalysisApprovalQueueKpis,
     CreditAnalysisApprovalQueueResponse,
+    CreditPolicyApprovalQueueItem,
     CreditAnalysisApprovalFlowSummary,
     CreditAnalysisJourneyProgressUpdateRequest,
     CreditAnalysisWorkspaceStateUpdateRequest,
@@ -107,6 +108,7 @@ from app.services.workflow_authorization import (
 )
 from app.services.approval_matrix import resolve_required_approval_roles
 from app.services.workflow_transition_engine import resolve_credit_workflow_transition
+from app.services.credit_decision_policy_publication import list_policy_approval_queue_items
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
 logger = logging.getLogger(__name__)
@@ -2982,12 +2984,27 @@ def list_credit_analyses_approval_queue(
                 return False
         return True
 
-    filtered = [item for item in items if _match(item)]
+    filtered: list[CreditAnalysisMonitorItem | CreditPolicyApprovalQueueItem] = [item for item in items if _match(item)]
+    policy_items = [
+        CreditPolicyApprovalQueueItem.model_validate(item)
+        for item in list_policy_approval_queue_items(db, current_user=current.user)
+    ]
+    for item in policy_items:
+        if q and q.strip().lower() not in f"{item.entity_name} {item.action_type}".lower():
+            continue
+        if status_filter and item.status != status_filter:
+            continue
+        filtered.append(item)
+    filtered.sort(key=lambda item: (item.created_at, getattr(item, "request_id", 0)), reverse=True)
     kpis = CreditAnalysisApprovalQueueKpis(
         total=len(filtered),
         awaiting_approval=len(filtered),
-        overdue_sla=sum(1 for item in filtered if item.stage_aging_days > 5),
-        high_value=sum(1 for item in filtered if (item.suggested_limit or Decimal("0")) >= Decimal("1000000")),
+        overdue_sla=sum(1 for item in filtered if getattr(item, "stage_aging_days", 0) > 5),
+        high_value=sum(
+            1
+            for item in filtered
+            if (getattr(item, "suggested_limit", None) or Decimal("0")) >= Decimal("1000000")
+        ),
     )
     total = len(filtered)
     start = (page - 1) * page_size

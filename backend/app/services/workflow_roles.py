@@ -73,6 +73,42 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
         "type": "approval",
         "description": "Papel comercial em aprovações conjuntas/exceções.",
     },
+    {
+        "code": "CEO",
+        "name": "CEO",
+        "type": "governance",
+        "description": "Papel executivo para governança administrativa de políticas.",
+    },
+    {
+        "code": "CFO",
+        "name": "CFO",
+        "type": "governance",
+        "description": "Papel financeiro executivo para governança administrativa de políticas.",
+    },
+    {
+        "code": "HEAD_COMMERCIAL",
+        "name": "Head Comercial",
+        "type": "governance",
+        "description": "Liderança comercial para governança administrativa de políticas.",
+    },
+    {
+        "code": "HEAD_OPERATIONS",
+        "name": "Head de Operações",
+        "type": "governance",
+        "description": "Liderança operacional para governança administrativa de políticas.",
+    },
+    {
+        "code": "HEAD_FINANCE",
+        "name": "Head Financeiro",
+        "type": "governance",
+        "description": "Liderança financeira para governança administrativa de políticas.",
+    },
+    {
+        "code": "LEGAL",
+        "name": "Jurídico",
+        "type": "governance",
+        "description": "Papel jurídico para governança administrativa de políticas.",
+    },
 ]
 
 

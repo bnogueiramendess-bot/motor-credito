@@ -10,6 +10,11 @@ from app.models.credit_report_read import CreditReportRead
 from app.models.credit_policy import CreditPolicy
 from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.credit_decision_policy import CreditDecisionPolicy
+from app.models.company_policy_governance_setting import CompanyPolicyGovernanceSetting
+from app.models.credit_decision_policy_governance_request import CreditDecisionPolicyGovernanceRequest
+from app.models.credit_decision_policy_governance_request_approval import (
+    CreditDecisionPolicyGovernanceRequestApproval,
+)
 from app.models.credit_decision_policy_score_structure import (
     CreditDecisionPolicyIndicator,
     CreditDecisionPolicyPillar,
@@ -63,6 +68,9 @@ __all__ = [
     "CreditPolicy",
     "CreditPolicyRule",
     "CreditDecisionPolicy",
+    "CompanyPolicyGovernanceSetting",
+    "CreditDecisionPolicyGovernanceRequest",
+    "CreditDecisionPolicyGovernanceRequestApproval",
     "CreditDecisionPolicyIndicator",
     "CreditDecisionPolicyPillar",
     "CreditDecisionPolicyScoreRange",

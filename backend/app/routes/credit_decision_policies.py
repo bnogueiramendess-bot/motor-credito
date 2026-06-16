@@ -14,6 +14,35 @@ from app.schemas.credit_decision_policy import (
     CreditDecisionPolicyListItem,
     CreditDecisionPolicyPreviewResult,
     CreditDecisionPolicyRead,
+    PolicyGovernanceSettingRead,
+    PolicyGovernanceRequestCreate,
+    PolicyGovernanceRequestDecision,
+    PolicyGovernanceRequestRead,
+    PolicyGovernanceActionRequest,
+    PolicyGovernanceValidateActionRequest,
+    PolicyGovernanceValidationResult,
+)
+from app.services.credit_decision_policy_publication import (
+    execute_policy_archive,
+    execute_policy_publication,
+    request_policy_archive,
+    request_policy_publication,
+)
+from app.services.credit_decision_policy_governance_workflow import (
+    PolicyGovernanceWorkflowConflictError,
+    PolicyGovernanceWorkflowError,
+    PolicyGovernanceWorkflowForbiddenError,
+    PolicyGovernanceWorkflowNotFoundError,
+    approve_governance_request,
+    create_governance_request,
+    get_governance_request,
+    list_governance_requests,
+    reject_governance_request,
+)
+from app.services.credit_decision_policy_governance import (
+    PolicyGovernanceValidationError,
+    get_policy_governance_settings,
+    validate_policy_action_governance,
 )
 from app.services.credit_decision_policy_preview import (
     CreditDecisionPolicyPreviewNotFoundError,
@@ -22,8 +51,6 @@ from app.services.credit_decision_policy_preview import (
 from app.services.credit_decision_policy_service import (
     CreditDecisionPolicyNotFoundError,
     CreditDecisionPolicyValidationError,
-    activate_credit_decision_policy,
-    archive_credit_decision_policy,
     create_credit_decision_policy,
     get_active_credit_decision_policy,
     get_credit_decision_policy,
@@ -73,6 +100,201 @@ class PillarFiveScoreSimulationRequest(BaseModel):
     analysis_id: int | None = None
 
     model_config = ConfigDict(extra="forbid")
+
+
+@router.get("/governance-settings", response_model=list[PolicyGovernanceSettingRead])
+def list_policy_governance_settings(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> list[PolicyGovernanceSettingRead]:
+    settings = get_policy_governance_settings(db, company_id=current.user.company_id)
+    return [
+        PolicyGovernanceSettingRead(
+            id=item.id,
+            company_id=item.company_id,
+            action_type=item.action_type,
+            required_workflow_role_code=item.workflow_role.code,
+            is_required=item.is_required,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+        )
+        for item in settings
+    ]
+
+
+@router.post("/governance/validate-action", response_model=PolicyGovernanceValidationResult)
+def validate_policy_governance_action(
+    payload: PolicyGovernanceValidateActionRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> PolicyGovernanceValidationResult:
+    try:
+        result = validate_policy_action_governance(
+            db,
+            company_id=current.user.company_id,
+            action_type=payload.action_type,
+            current_user=current.user,
+            policy_id=payload.policy_id,
+        )
+        return PolicyGovernanceValidationResult.model_validate(result)
+    except PolicyGovernanceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+
+def _raise_governance_workflow_http_error(exc: PolicyGovernanceWorkflowError) -> None:
+    if isinstance(exc, PolicyGovernanceWorkflowNotFoundError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if isinstance(exc, PolicyGovernanceWorkflowForbiddenError):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    if isinstance(exc, PolicyGovernanceWorkflowConflictError):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+
+@router.post("/governance-requests", response_model=PolicyGovernanceRequestRead, status_code=status.HTTP_201_CREATED)
+def create_policy_governance_request(
+    payload: PolicyGovernanceRequestCreate,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> PolicyGovernanceRequestRead:
+    try:
+        result = create_governance_request(
+            db,
+            company_id=current.user.company_id,
+            action_type=payload.action_type,
+            current_user=current.user,
+            policy_id=payload.policy_id,
+            justification=payload.justification,
+            metadata_json=payload.metadata_json,
+        )
+        db.commit()
+        return PolicyGovernanceRequestRead.model_validate(result)
+    except PolicyGovernanceWorkflowError as exc:
+        db.rollback()
+        _raise_governance_workflow_http_error(exc)
+
+
+@router.get("/governance-requests", response_model=list[PolicyGovernanceRequestRead])
+def list_policy_governance_requests(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> list[PolicyGovernanceRequestRead]:
+    return [
+        PolicyGovernanceRequestRead.model_validate(item)
+        for item in list_governance_requests(db, company_id=current.user.company_id)
+    ]
+
+
+@router.get("/governance-requests/{request_id}", response_model=PolicyGovernanceRequestRead)
+def get_policy_governance_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> PolicyGovernanceRequestRead:
+    try:
+        return PolicyGovernanceRequestRead.model_validate(
+            get_governance_request(db, company_id=current.user.company_id, request_id=request_id)
+        )
+    except PolicyGovernanceWorkflowError as exc:
+        _raise_governance_workflow_http_error(exc)
+
+
+@router.post("/governance-requests/{request_id}/approve", response_model=PolicyGovernanceRequestRead)
+def approve_policy_governance_request(
+    request_id: int,
+    payload: PolicyGovernanceRequestDecision,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> PolicyGovernanceRequestRead:
+    try:
+        result = approve_governance_request(
+            db,
+            company_id=current.user.company_id,
+            request_id=request_id,
+            current_user=current.user,
+            workflow_role_code=payload.workflow_role_code,
+            justification=payload.justification,
+        )
+        db.commit()
+        return PolicyGovernanceRequestRead.model_validate(result)
+    except PolicyGovernanceWorkflowError as exc:
+        db.rollback()
+        _raise_governance_workflow_http_error(exc)
+
+
+@router.post("/governance-requests/{request_id}/reject", response_model=PolicyGovernanceRequestRead)
+def reject_policy_governance_request(
+    request_id: int,
+    payload: PolicyGovernanceRequestDecision,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+) -> PolicyGovernanceRequestRead:
+    try:
+        result = reject_governance_request(
+            db,
+            company_id=current.user.company_id,
+            request_id=request_id,
+            current_user=current.user,
+            workflow_role_code=payload.workflow_role_code,
+            justification=payload.justification,
+        )
+        db.commit()
+        return PolicyGovernanceRequestRead.model_validate(result)
+    except PolicyGovernanceWorkflowError as exc:
+        db.rollback()
+        _raise_governance_workflow_http_error(exc)
+
+
+@router.post("/{policy_id}/request-publication", response_model=PolicyGovernanceRequestRead, status_code=status.HTTP_201_CREATED)
+def request_credit_decision_policy_publication(
+    policy_id: int,
+    payload: PolicyGovernanceActionRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> PolicyGovernanceRequestRead:
+    try:
+        result = request_policy_publication(
+            db,
+            company_id=current.user.company_id,
+            policy_id=policy_id,
+            current_user=current.user,
+            justification=payload.justification,
+            metadata_json=payload.metadata_json,
+        )
+        db.commit()
+        return PolicyGovernanceRequestRead.model_validate(result)
+    except CreditDecisionPolicyNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PolicyGovernanceWorkflowError as exc:
+        db.rollback()
+        _raise_governance_workflow_http_error(exc)
+
+
+@router.post("/{policy_id}/request-archive", response_model=PolicyGovernanceRequestRead, status_code=status.HTTP_201_CREATED)
+def request_credit_decision_policy_archive(
+    policy_id: int,
+    payload: PolicyGovernanceActionRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> PolicyGovernanceRequestRead:
+    try:
+        result = request_policy_archive(
+            db,
+            company_id=current.user.company_id,
+            policy_id=policy_id,
+            current_user=current.user,
+            justification=payload.justification,
+            metadata_json=payload.metadata_json,
+        )
+        db.commit()
+        return PolicyGovernanceRequestRead.model_validate(result)
+    except CreditDecisionPolicyNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PolicyGovernanceWorkflowError as exc:
+        db.rollback()
+        _raise_governance_workflow_http_error(exc)
 
 
 @router.get("/active", response_model=CreditDecisionPolicyRead)
@@ -254,11 +476,18 @@ def create_policy(
 @router.post("/{policy_id}/activate", response_model=CreditDecisionPolicyActivateResponse)
 def activate_policy(
     policy_id: int,
+    request_id: int | None = None,
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
 ) -> CreditDecisionPolicyActivateResponse:
     try:
-        policy = activate_credit_decision_policy(db, policy_id, current.user)
+        policy = execute_policy_publication(
+            db,
+            company_id=current.user.company_id,
+            policy_id=policy_id,
+            request_id=request_id,
+            current_user=current.user,
+        )
         db.commit()
         db.refresh(policy)
         return CreditDecisionPolicyActivateResponse(
@@ -271,16 +500,26 @@ def activate_policy(
     except CreditDecisionPolicyValidationError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except PolicyGovernanceWorkflowForbiddenError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 
 @router.post("/{policy_id}/archive", response_model=CreditDecisionPolicyArchiveResponse)
 def archive_policy(
     policy_id: int,
+    request_id: int | None = None,
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
 ) -> CreditDecisionPolicyArchiveResponse:
     try:
-        policy = archive_credit_decision_policy(db, policy_id, current.user)
+        policy = execute_policy_archive(
+            db,
+            company_id=current.user.company_id,
+            policy_id=policy_id,
+            request_id=request_id,
+            current_user=current.user,
+        )
         db.commit()
         db.refresh(policy)
         return CreditDecisionPolicyArchiveResponse(
@@ -290,3 +529,6 @@ def archive_policy(
     except CreditDecisionPolicyNotFoundError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PolicyGovernanceWorkflowForbiddenError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

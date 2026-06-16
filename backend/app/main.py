@@ -20,6 +20,7 @@ from app.services.credit_decision_policy_service import ensure_active_credit_dec
 from app.services.bootstrap_admin import ensure_admin_seed
 from app.services.workflow_roles import ensure_workflow_roles_seed
 from app.services.approval_matrix import ensure_approval_matrix_seed
+from app.services.credit_decision_policy_governance import ensure_policy_governance_seed
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.include_router(health_router)
@@ -47,6 +48,7 @@ def bootstrap_credit_policy() -> None:
     with SessionLocal() as db:
         ensure_admin_seed(db)
         ensure_workflow_roles_seed(db)
+        ensure_policy_governance_seed(db)
         ensure_approval_matrix_seed(db)
         ensure_active_policy(db)
         ensure_active_credit_decision_policy_seed_if_enabled(db)
