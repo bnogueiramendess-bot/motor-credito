@@ -3,7 +3,12 @@ import { apiClient } from "@/shared/lib/http/http-client";
 import {
   PolicyGovernanceDecisionRequest,
   PolicyGovernanceExecutiveSummaryResponse,
+  PolicyGovernanceRequestDto,
 } from "@/features/credit-decision-policy/api/policy-governance.contracts";
+
+export async function listPolicyGovernanceRequests() {
+  return apiClient.get<PolicyGovernanceRequestDto[]>("/api/credit-decision-policies/governance-requests");
+}
 
 export async function getPolicyGovernanceExecutiveSummary(requestId: number) {
   return apiClient.get<PolicyGovernanceExecutiveSummaryResponse>(

@@ -93,17 +93,26 @@ export type ScoreValidationIssueDto = {
 export type ScoreValidationSummaryDto = {
   status: "valid" | "warning" | "invalid" | string;
   configuration_status: "incomplete" | "validated" | "invalid" | string;
+  operational_status?: "configured" | "incomplete" | "invalid" | string;
+  effective_pillars_weight?: string | number;
+  planned_pillars_weight?: string | number;
+  configured_effective_pillars?: number;
+  total_effective_pillars?: number;
   checks: ScoreValidationCheckDto[];
   errors: ScoreValidationIssueDto[];
   warnings: ScoreValidationIssueDto[];
 };
 
 export type ScorePolicyProgressDto = {
-  pillars: { configured: number; expected: number };
+  pillars: { configured: number; expected: number; planned?: number; total?: number };
   subgroups: { configured: number; expected: number };
   indicators: { configured: number; expected: number };
   indicators_with_ranges: { configured: number; expected: number };
   score_ranges_count: number;
+  effective_pillars_weight?: string | number;
+  planned_pillars_weight?: string | number;
+  configured_effective_pillars?: number;
+  total_effective_pillars?: number;
 };
 
 export type ScorePillarRoadmapDto = {
@@ -111,11 +120,16 @@ export type ScorePillarRoadmapDto = {
   code: string;
   name: string;
   weight_percent: string | number;
+  weight?: string | number;
   sort_order: number;
-  status: "configured" | "partial" | "not_started";
+  status: "configured" | "partial" | "not_started" | "planned" | string;
   subgroups_count: number;
   indicators_count: number;
   indicators_with_ranges_count: number;
+  is_effective?: boolean;
+  affects_score?: boolean;
+  affects_validation?: boolean;
+  reason?: string;
 };
 
 export type ScoreStructureDto = {

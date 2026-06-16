@@ -27,6 +27,14 @@ import {
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
 import {
+  getPolicyGovernanceExecutiveSummary,
+  listPolicyGovernanceRequests
+} from "@/features/credit-decision-policy/api/policy-governance.api";
+import {
+  PolicyGovernanceExecutiveSummaryResponse,
+  PolicyGovernanceRequestDto
+} from "@/features/credit-decision-policy/api/policy-governance.contracts";
+import {
   getCurrentScoreStructure,
   PillarOneSimulationResultDto,
   PillarFiveSimulationResultDto,
@@ -239,11 +247,166 @@ function lifecycleClass(status: string | undefined) {
   return "border-white/15 bg-white/10 text-white/75";
 }
 
-function policyManagementState(policyStatus: string | undefined, configurationStatus: string) {
+type GovernanceHistoryItem = {
+  request: PolicyGovernanceRequestDto;
+  summary: PolicyGovernanceExecutiveSummaryResponse | null;
+};
+
+type GovernanceHistoryFilter = "all" | "publish" | "archive";
+type PolicyManagementState = "active" | "archived" | "in_construction";
+type GovernancePublicationState = "not_requested" | "pending" | "approved" | "published" | "rejected" | "cancelled";
+
+function governanceActionLabel(actionType: string | null | undefined) {
+  if (actionType === "policy_publish") return "Publicação";
+  if (actionType === "policy_archive") return "Arquivamento";
+  if (actionType === "policy_create") return "Criação";
+  if (actionType === "policy_update") return "Edição";
+  return actionType ? actionType.replace(/_/g, " ") : "Solicitação";
+}
+
+function governanceStatusLabel(status: string | null | undefined) {
+  if (status === "pending") return "Em aprovação";
+  if (status === "approved") return "Aprovada";
+  if (status === "rejected") return "Rejeitada";
+  if (status === "completed") return "Concluída";
+  if (status === "published") return "Publicada";
+  if (status === "archived") return "Arquivada";
+  if (status === "draft") return "Rascunho";
+  return status ?? "Sem status";
+}
+
+function governanceStatusClass(status: string | null | undefined) {
+  if (status === "approved" || status === "completed" || status === "published" || status === "archived") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+  if (status === "pending" || status === "draft") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (status === "rejected") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+  return "border-slate-200 bg-slate-100 text-slate-600";
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "Data não informada";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Data não informada";
+  return date.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function requesterLabel(item: GovernanceHistoryItem) {
+  const requester = item.summary?.request.requested_by;
+  if (requester?.name) return requester.name;
+  if (requester?.email) return requester.email;
+  if (item.request.requested_by_user_id !== null) return `Usuário #${item.request.requested_by_user_id}`;
+  return "Solicitante não identificado";
+}
+
+function policyVersionLabel(item: GovernanceHistoryItem, fallbackVersion: number) {
+  const summaryVersion = item.summary?.policy?.version;
+  if (summaryVersion !== null && summaryVersion !== undefined && summaryVersion !== "") return String(summaryVersion);
+  const metadataVersion = item.request.metadata_json?.policy_version;
+  if (typeof metadataVersion === "string" || typeof metadataVersion === "number") return String(metadataVersion);
+  return String(fallbackVersion);
+}
+
+function governanceLastAction(item: GovernanceHistoryItem) {
+  if (item.request.status === "pending") {
+    if (item.request.pending_roles.length > 0) return `Aguardando ${item.request.pending_roles.join(", ")}`;
+    return "Aguardando aprovação da governança";
+  }
+  if (item.request.status === "approved") {
+    const dateLabel = formatDateTime(item.request.approved_at ?? item.request.updated_at);
+    return `Aprovada em ${dateLabel}`;
+  }
+  if (item.request.status === "rejected") {
+    const dateLabel = formatDateTime(item.request.rejected_at ?? item.request.updated_at);
+    const roles = item.request.rejected_roles.length ? ` por ${item.request.rejected_roles.join(", ")}` : "";
+    return `Rejeitada${roles} em ${dateLabel}`;
+  }
+  if (item.request.status === "published") return "Publicada";
+  if (item.request.status === "archived") return "Arquivada";
+  return item.summary?.executive_summary.description ?? "Última movimentação registrada no workflow.";
+}
+
+function filterGovernanceHistory(items: GovernanceHistoryItem[], filter: GovernanceHistoryFilter) {
+  if (filter === "publish") return items.filter((item) => item.request.action_type === "policy_publish");
+  if (filter === "archive") return items.filter((item) => item.request.action_type === "policy_archive");
+  return items;
+}
+
+function policyManagementState(policyStatus: string | undefined, configurationStatus: string): PolicyManagementState {
   if (policyStatus === "archived") return "archived";
   if (policyStatus === "draft" || configurationStatus === "incomplete") return "in_construction";
-  if (policyStatus === "active") return "published";
+  if (policyStatus === "active") return "active";
   return "in_construction";
+}
+
+function governanceRequestTime(item: GovernanceHistoryItem) {
+  const value = item.request.updated_at ?? item.request.requested_at ?? item.request.created_at;
+  const time = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function latestPublicationRequest(items: GovernanceHistoryItem[]) {
+  return [...items]
+    .filter((item) => item.request.action_type === "policy_publish")
+    .sort((first, second) => governanceRequestTime(second) - governanceRequestTime(first))[0] ?? null;
+}
+
+function hasPublicationExecutionEvidence(item: GovernanceHistoryItem | null) {
+  if (!item) return false;
+  const metadata = item.request.metadata_json ?? {};
+  return (
+    item.request.status === "published" ||
+    item.request.status === "completed" ||
+    metadata.publication_executed === true ||
+    metadata.executed === true ||
+    metadata.execution_status === "executed"
+  );
+}
+
+function governancePublicationState(items: GovernanceHistoryItem[]): GovernancePublicationState {
+  const request = latestPublicationRequest(items);
+  if (!request) return "not_requested";
+  if (hasPublicationExecutionEvidence(request)) return "published";
+  if (request.request.status === "approved") return "approved";
+  if (request.request.status === "pending") return "pending";
+  if (request.request.status === "rejected") return "rejected";
+  if (request.request.status === "cancelled") return "cancelled";
+  return "not_requested";
+}
+
+function governancePublicationLabel(state: GovernancePublicationState) {
+  if (state === "pending") return "Em aprovação";
+  if (state === "approved") return "Aprovada";
+  if (state === "published") return "Publicada";
+  if (state === "rejected") return "Rejeitada";
+  if (state === "cancelled") return "Cancelada";
+  return "Não realizada";
+}
+
+function governancePublicationDetail(state: GovernancePublicationState) {
+  if (state === "pending") return "Solicitação de publicação aguardando decisão da governança.";
+  if (state === "approved") return "Solicitação aprovada pela governança, ainda sem execução registrada.";
+  if (state === "published") return "Publicação registrada pelo workflow de governança.";
+  if (state === "rejected") return "Solicitação de publicação rejeitada pela governança.";
+  if (state === "cancelled") return "Solicitação de publicação cancelada.";
+  return "Nenhuma publicação registrada pelo workflow.";
+}
+
+function governancePublicationBadgeClass(state: GovernancePublicationState) {
+  if (state === "published" || state === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (state === "pending") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (state === "rejected") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-slate-200 bg-slate-100 text-slate-600";
 }
 
 function sourceInfo(indicator: ScoreIndicatorDto) {
@@ -316,7 +479,7 @@ function Hero({
   const managementState = policyManagementState(policy?.status, configurationStatus);
   const monitorMetrics = [
     ["Políticas cadastradas", structure ? 1 : 0],
-    ["Políticas publicadas", managementState === "published" ? 1 : 0],
+    ["Políticas ativas", managementState === "active" ? 1 : 0],
     ["Em construção", managementState === "in_construction" ? 1 : 0],
     ["Arquivadas", managementState === "archived" ? 1 : 0]
   ];
@@ -331,8 +494,8 @@ function Hero({
       ? {
           eyebrow: "Motor de Crédito · Administração da Política",
           title: "Governança da Política",
-          subtitle: "Comitê, versionamento e publicação",
-          description: "Controle de aprovação, histórico e ciclo de vida da política."
+          subtitle: "Workflow por papéis, versionamento e publicação",
+          description: "Controle de aprovação por papéis, histórico e ciclo de vida da política."
         }
       : {
           eyebrow: "Motor de Crédito · Administração da Política",
@@ -376,7 +539,7 @@ function Hero({
                 <span className="text-white/48">Política <strong className="ml-1 text-white/90">{policy?.name ?? "Política de Decisão"}</strong></span>
                 <span className="text-white/48">Versão <strong className="ml-1 text-white/90">{policy?.version ?? "-"}</strong></span>
                 <span className="text-white/48">Status <strong className="ml-1 text-white/90">{lifecycleLabel(policy?.status)}</strong></span>
-                <span className="text-white/48">Publicação <strong className="ml-1 text-white/90">{policy?.status === "active" ? "Publicada" : "Não publicada"}</strong></span>
+                <span className="text-white/48">Motor oficial <strong className="ml-1 text-white/90">Não vinculado</strong></span>
               </div>
             </div>
           ) : (
@@ -421,10 +584,11 @@ function Toolbar({
   isSaving: boolean;
   isPublishing: boolean;
 }) {
+  const canRequestGovernancePublication = false;
   const tabs: Array<{ id: PolicyWorkspaceView; label: string; description: string }> = [
     { id: "monitor", label: "Monitor de Políticas", description: "Visão inicial e gestão" },
     { id: "score", label: "Score Institucional", description: "Configuração técnica" },
-    { id: "governance", label: "Governança", description: "Comitê, versões e publicação" }
+    { id: "governance", label: "Governança", description: "Workflow, versões e publicação" }
   ];
   return (
     <div className="flex flex-col gap-3 py-5 lg:flex-row lg:items-center lg:justify-between">
@@ -472,16 +636,21 @@ function Toolbar({
           {activeView === "governance" ? (
             <button
               type="button"
-              aria-disabled={!hasSelectedPolicy || isPublishing}
+              disabled={!hasSelectedPolicy || isPublishing || !canRequestGovernancePublication}
+              aria-disabled={!hasSelectedPolicy || isPublishing || !canRequestGovernancePublication}
               onClick={onPublishPolicy}
-              title={hasSelectedPolicy ? "Verificar requisitos de publicação." : "Selecione uma política para continuar."}
-              className={`rounded-lg border px-4 py-2 text-xs font-bold transition ${
+              title={
                 hasSelectedPolicy
+                  ? "A solicitação de publicação será enviada para aprovação pela governança."
+                  : "Selecione uma política para continuar."
+              }
+              className={`rounded-lg border px-4 py-2 text-xs font-bold transition ${
+                hasSelectedPolicy && canRequestGovernancePublication
                   ? "border-blue-700 bg-blue-700 text-white shadow-sm"
                   : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
               }`}
             >
-              {isPublishing ? "Publicando..." : "Publicar política"}
+              {isPublishing ? "Enviando solicitação..." : "Solicitar publicação via governança"}
             </button>
           ) : null}
         </div>
@@ -2273,7 +2442,7 @@ function PolicyMonitorView({
   const completenessPercent = expectedPillars > 0 ? Math.round((configuredPillars / expectedPillars) * 100) : 0;
   const managementState = policyManagementState(policy.status, configurationStatus);
   const policyStatusLabel = managementState === "in_construction" ? "Rascunho" : lifecycleLabel(policy.status);
-  const usageLabel = managementState === "published" ? "Ativa no motor" : managementState === "archived" ? "Arquivada" : "Não publicada";
+  const usageLabel = managementState === "archived" ? "Arquivada" : "Não vinculada ao motor";
   const isSelected = selectedPolicyId === policy.id;
 
   return (
@@ -2306,7 +2475,7 @@ function PolicyMonitorView({
                 <td className="border-b border-slate-100 px-4 py-4 text-xs font-bold text-slate-800">v{policy.version}</td>
                 <td className="border-b border-slate-100 px-4 py-4">
                   <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${
-                    managementState === "published"
+                    managementState === "active"
                       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                       : managementState === "in_construction"
                         ? "border-blue-200 bg-blue-50 text-blue-700"
@@ -2315,8 +2484,8 @@ function PolicyMonitorView({
                 </td>
                 <td className="border-b border-slate-100 px-4 py-4">
                   <span className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${
-                    managementState === "published"
-                      ? "border-blue-200 bg-blue-50 text-blue-700"
+                    managementState === "archived"
+                      ? "border-slate-300 bg-slate-100 text-slate-600"
                       : "border-slate-200 bg-slate-100 text-slate-600"
                   }`}>{usageLabel}</span>
                 </td>
@@ -2357,8 +2526,127 @@ function PolicyMonitorView({
   );
 }
 
-function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
+function GovernanceHistorySection({
+  policy,
+  items,
+  isLoading,
+  error
+}: {
+  policy: ScoreStructureDto["policy"];
+  items: GovernanceHistoryItem[];
+  isLoading: boolean;
+  error: string | null;
+}) {
+  const [filter, setFilter] = useState<GovernanceHistoryFilter>("all");
+
+  const visibleItems = filterGovernanceHistory(items, filter);
+  const filters: Array<{ id: GovernanceHistoryFilter; label: string }> = [
+    { id: "all", label: "Todos" },
+    { id: "publish", label: "Publicações" },
+    { id: "archive", label: "Arquivamentos" },
+  ];
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white shadow-sm lg:col-span-2">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2"><FileClock className="h-4 w-4 text-indigo-700" /><h2 className="text-sm font-semibold text-slate-900">Histórico de Governança</h2></div>
+          <p className="mt-1 text-xs leading-5 text-slate-500">Solicitações administrativas, aprovações e decisões associadas a esta política.</p>
+        </div>
+        <div className="flex w-fit rounded-lg border border-slate-200 bg-slate-50 p-1">
+          {filters.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setFilter(item.id)}
+              className={`rounded-md px-3 py-1.5 text-[10px] font-black transition ${
+                filter === item.id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="p-4">
+        {isLoading ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-500">Carregando histórico de governança...</div>
+        ) : error ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-700">{error}</div>
+        ) : visibleItems.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4">
+            <strong className="block text-xs text-slate-800">Nenhuma solicitação encontrada.</strong>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              {items.length === 0
+                ? "Esta política ainda não possui solicitações administrativas registradas."
+                : "Não há solicitações para o filtro selecionado."}
+            </p>
+          </div>
+        ) : (
+          <div className="relative grid gap-4 border-l-2 border-slate-200 pl-5">
+            {visibleItems.map((item) => {
+              const actionLabel = governanceActionLabel(item.request.action_type);
+              const versionLabel = policyVersionLabel(item, policy.version);
+              return (
+                <article key={item.request.request_id} className="relative rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <span className="absolute -left-[27px] top-5 h-3 w-3 rounded-full border-2 border-white bg-indigo-700 ring-1 ring-indigo-200" />
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">{actionLabel} · v{versionLabel}</h3>
+                      <p className="mt-1 text-xs leading-5 text-slate-600">Solicitado por: {requesterLabel(item)}</p>
+                      <p className="text-[10px] leading-4 text-slate-500">{formatDateTime(item.request.requested_at ?? item.request.created_at)}</p>
+                    </div>
+                    <span className={`w-fit rounded-full border px-2.5 py-1 text-[10px] font-bold ${governanceStatusClass(item.request.status)}`}>
+                      {governanceStatusLabel(item.request.status)}
+                    </span>
+                  </div>
+                  <div className="mt-3 rounded-lg border border-white bg-white px-3 py-2">
+                    <p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-400">Última ação</p>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-800">{governanceLastAction(item)}</p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {item.request.required_roles.map((role) => {
+                      const roleStatus = item.request.approved_roles.includes(role)
+                        ? "Aprovado"
+                        : item.request.rejected_roles.includes(role)
+                          ? "Rejeitado"
+                          : "Pendente";
+                      const roleClass = roleStatus === "Aprovado"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : roleStatus === "Rejeitado"
+                          ? "border-rose-200 bg-rose-50 text-rose-700"
+                          : "border-amber-200 bg-amber-50 text-amber-700";
+                      return (
+                        <span key={role} className={`rounded-full border px-2 py-1 text-[9px] font-bold ${roleClass}`}>
+                          {role} · {roleStatus}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  {item.request.justification ? (
+                    <p className="mt-3 text-[10px] leading-4 text-slate-500">Justificativa: {item.request.justification}</p>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function PolicyGovernanceView({
+  structure,
+  onRequestPublication
+}: {
+  structure: ScoreStructureDto;
+  onRequestPublication: () => void;
+}) {
   const policy = structure.policy;
+  const [historyItems, setHistoryItems] = useState<GovernanceHistoryItem[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const configurationStatus = structure.validation_summary.configuration_status;
   const configuredPillars = structure.policy_progress.pillars.configured;
   const expectedPillars = structure.policy_progress.pillars.expected;
@@ -2366,6 +2654,93 @@ function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
   const managementState = policyManagementState(policy.status, configurationStatus);
   const policyStatusLabel = managementState === "in_construction" ? "Rascunho" : lifecycleLabel(policy.status);
   const committeeRoles = ["CEO", "CFO", "Head Comercial", "Head de Operações", "Head Financeiro", "Jurídico"];
+  const isScoreReady = configurationStatus === "validated" || configuredPillars === expectedPillars;
+  const publicationGovernanceState = governancePublicationState(historyItems);
+  const latestPublishRequest = latestPublicationRequest(historyItems);
+  const hasGovernanceApproval = publicationGovernanceState === "approved" || publicationGovernanceState === "published";
+  const hasGovernancePublication = publicationGovernanceState === "published";
+  const approvalDetail = hasGovernanceApproval
+    ? `Solicitação de publicação ${latestPublishRequest ? `#${latestPublishRequest.request.request_id} ` : ""}aprovada pela governança.`
+    : "Nenhuma aprovação registrada para esta versão.";
+  const publicationChecklistStatus = hasGovernancePublication ? "complete" : publicationGovernanceState === "pending" ? "warning" : "neutral";
+  const canRequestGovernancePublication = false;
+  const publicationState = hasGovernancePublication
+    ? {
+        title: "Publicação via governança registrada.",
+        detail: "Esta versão possui evidência de publicação pelo workflow de governança.",
+        className: "border-emerald-200 bg-emerald-50 text-emerald-900",
+        buttonTitle: "Versão publicada via governança",
+        buttonLabel: "Versão publicada via governança",
+        buttonDisabled: true
+      }
+    : publicationGovernanceState === "pending"
+      ? {
+          title: "Aguardando aprovação da governança.",
+          detail: "Existe solicitação de publicação em andamento para esta versão.",
+          className: "border-amber-200 bg-amber-50 text-amber-900",
+          buttonTitle: "Publicação em aprovação",
+          buttonLabel: "Publicação em aprovação",
+          buttonDisabled: true
+        }
+      : publicationGovernanceState === "approved"
+        ? {
+            title: "Publicação aprovada pela governança.",
+            detail: "A solicitação foi aprovada, mas a execução da publicação ainda não foi registrada no payload disponível.",
+            className: "border-blue-200 bg-blue-50 text-blue-900",
+            buttonTitle: "Aguardando execução da publicação",
+            buttonLabel: "Publicação aprovada",
+            buttonDisabled: true
+          }
+        : isScoreReady
+          ? {
+              title: "Publicação via governança não realizada.",
+              detail: policy.status === "active"
+                ? "Esta versão encontra-se ativa no sistema, mas não possui registro de publicação pelo workflow de governança."
+                : "Nenhuma publicação registrada pelo workflow de governança para esta versão.",
+              className: "border-slate-200 bg-slate-50 text-slate-800",
+              buttonTitle: "A solicitação de publicação será enviada para aprovação pela governança.",
+              buttonLabel: "Solicitar publicação via governança",
+              buttonDisabled: !canRequestGovernancePublication
+            }
+          : {
+              title: "Aguardando configuração da política.",
+              detail: "Conclua as validações técnicas antes de solicitar a publicação pelo workflow de governança.",
+              className: "border-amber-200 bg-amber-50 text-amber-900",
+              buttonTitle: "Conclua a configuração antes de solicitar publicação",
+              buttonLabel: "Solicitar publicação via governança",
+              buttonDisabled: true
+            };
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadHistory() {
+      setIsHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const requests = await listPolicyGovernanceRequests();
+        const policyRequests = requests.filter((request) => request.policy_id === policy.id);
+        const items = await Promise.all(
+          policyRequests.map(async (request) => {
+            try {
+              const summary = await getPolicyGovernanceExecutiveSummary(request.request_id);
+              return { request, summary };
+            } catch {
+              return { request, summary: null };
+            }
+          })
+        );
+        if (mounted) setHistoryItems(items);
+      } catch (caught) {
+        if (mounted) setHistoryError(caught instanceof Error ? caught.message : "Não foi possível carregar o histórico de governança.");
+      } finally {
+        if (mounted) setIsHistoryLoading(false);
+      }
+    }
+    loadHistory();
+    return () => {
+      mounted = false;
+    };
+  }, [policy.id]);
   const publicationChecklist = [
     {
       label: "Política criada",
@@ -2380,17 +2755,24 @@ function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
     {
       label: "Score configurado",
       detail: `${configuredPillars} de ${expectedPillars} pilares configurados.`,
-      status: configurationStatus === "validated" || configuredPillars === expectedPillars ? "complete" : "warning"
+      status: isScoreReady ? "complete" : "warning"
     },
     {
-      label: "Comitê configurado",
-      detail: "Nenhum papel exigido foi configurado para esta política.",
-      status: "blocked"
+      label: "Governança configurada",
+      detail: "Fluxo de aprovação por papéis configurado.",
+      status: "complete"
     },
     {
       label: "Aprovação concluída",
-      detail: "Fluxo de aprovação ainda não disponível.",
-      status: "blocked"
+      detail: approvalDetail,
+      status: hasGovernanceApproval ? "complete" : "neutral"
+    },
+    {
+      label: "Versão publicada",
+      detail: hasGovernancePublication
+        ? "Publicação via governança registrada para esta versão."
+        : "Publicação via governança não realizada.",
+      status: publicationChecklistStatus
     }
   ];
 
@@ -2405,8 +2787,13 @@ function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
           </article>
           {[
             ["Status", policyStatusLabel, "Ciclo de vida da versão", "border-blue-200 bg-blue-50 text-blue-700"],
-            ["Publicação", managementState === "published" ? "Publicada" : "Não publicada", "Situação no motor oficial", "border-slate-200 bg-slate-100 text-slate-600"],
-            ["Comitê", "Não configurado", "Papéis exigidos ainda pendentes", "border-amber-200 bg-amber-50 text-amber-700"]
+            [
+              "Publicação via Governança",
+              isHistoryLoading ? "Carregando" : governancePublicationLabel(publicationGovernanceState),
+              isHistoryLoading ? "Consultando solicitações do workflow." : governancePublicationDetail(publicationGovernanceState),
+              isHistoryLoading ? "border-slate-200 bg-slate-100 text-slate-600" : governancePublicationBadgeClass(publicationGovernanceState)
+            ],
+            ["Governança", "Configurada", "Aprovação por papéis habilitada", "border-emerald-200 bg-emerald-50 text-emerald-700"]
           ].map(([label, value, detail, badgeClass]) => (
             <article key={label} className="bg-white p-4">
               <span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</span>
@@ -2423,27 +2810,32 @@ function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
+        <div className="flex gap-2 rounded-xl border border-slate-200 bg-white p-4 text-xs leading-5 text-slate-600 shadow-sm lg:col-span-2">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-slate-600" />
+          <p>Status da política e publicação via governança são controles independentes. Uma política pode estar ativa por configuração técnica e ainda não possuir publicação registrada pelo workflow de governança.</p>
+        </div>
+
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-4 py-4">
-            <div className="flex items-center gap-2"><Users className="h-4 w-4 text-blue-700" /><h2 className="text-sm font-semibold text-slate-900">Composição do Comitê</h2></div>
-            <p className="mt-1 text-xs leading-5 text-slate-500">Defina os papéis exigidos para aprovação e governança desta política.</p>
+            <div className="flex items-center gap-2"><Users className="h-4 w-4 text-blue-700" /><h2 className="text-sm font-semibold text-slate-900">Comitê da Política</h2></div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Funcionalidade planejada para versões futuras. Permitirá definir papéis específicos para cada política.</p>
           </div>
           <div className="grid gap-3 p-4">
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-              <strong className="block text-xs text-amber-900">Comitê ainda não configurado</strong>
-              <p className="mt-1 text-xs leading-5 text-amber-800">A publicação permanece bloqueada até que os papéis exigidos sejam definidos.</p>
+              <strong className="block text-xs text-amber-900">Comitê da Política ainda não implementado.</strong>
+              <p className="mt-1 text-xs leading-5 text-amber-800">A governança de publicação já está ativa e utiliza papéis configurados por workflow.</p>
             </div>
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {committeeRoles.map((role) => (
                 <button key={role} type="button" disabled title="Preparado para configuração futura" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left">
                   <strong className="block text-xs text-slate-700">{role}</strong>
-                  <span className="mt-1 block text-[9px] font-bold uppercase tracking-wide text-slate-400">Em breve</span>
+                  <span className="mt-1 block text-[9px] font-bold uppercase tracking-wide text-slate-400">Planejado</span>
                 </button>
               ))}
             </div>
             <div className="flex gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3">
               <Users className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
-              <p className="text-xs leading-5 text-blue-800">Os papéis do comitê serão vinculados futuramente ao cadastro de usuários por cargo/função.</p>
+              <p className="text-xs leading-5 text-blue-800">O Comitê da Política será uma camada complementar de governança. A aprovação de criação, edição, arquivamento e publicação já é controlada pelo workflow de governança implementado.</p>
             </div>
           </div>
         </section>
@@ -2451,25 +2843,39 @@ function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-4 py-4">
             <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-700" /><h2 className="text-sm font-semibold text-slate-900">Publicação</h2></div>
-            <p className="mt-1 text-xs leading-5 text-slate-500">Checklist para promover uma versão aprovada para uso no motor oficial.</p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">Checklist do ciclo administrativo de publicação via workflow de governança.</p>
           </div>
           <div className="grid gap-2 p-4">
             {publicationChecklist.map((item) => (
               <div key={item.label} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <div><strong className="block text-xs text-slate-800">{item.label}</strong><span className="mt-1 block text-[10px] leading-4 text-slate-500">{item.detail}</span></div>
                 <span className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
-                  item.status === "complete" ? "bg-emerald-100 text-emerald-700" : item.status === "warning" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"
-                }`}>{item.status === "complete" ? "✓" : item.status === "warning" ? "!" : "×"}</span>
+                  item.status === "complete" ? "bg-emerald-100 text-emerald-700" : item.status === "warning" ? "bg-amber-100 text-amber-700" : "bg-slate-200 text-slate-500"
+                }`}>{item.status === "complete" ? "✓" : item.status === "warning" ? "!" : "-"}</span>
               </div>
             ))}
-            <div className="mt-1 rounded-xl border border-orange-200 bg-orange-50 p-4 text-orange-900">
-              <strong className="block text-xs">Publicação bloqueada</strong>
-              <p className="mt-1 text-xs leading-5">Comitê ainda não configurado e aprovação ainda não concluída.</p>
+            <div className={`mt-1 rounded-xl border p-4 ${publicationState.className}`}>
+              <strong className="block text-xs">{publicationState.title}</strong>
+              <p className="mt-1 text-xs leading-5">{publicationState.detail}</p>
             </div>
-            <button type="button" disabled title="Publicação bloqueada" className="mt-1 h-10 rounded-lg bg-slate-200 px-4 text-xs font-black text-slate-400">Publicar política</button>
-            <p className="text-[10px] leading-4 text-slate-500">A publicação será habilitada quando a política estiver configurada, aprovada e com comitê definido.</p>
+            <button
+              type="button"
+              onClick={onRequestPublication}
+              disabled={publicationState.buttonDisabled}
+              title={publicationState.buttonTitle}
+              className={`mt-1 h-10 rounded-lg px-4 text-xs font-black ${
+                publicationState.buttonDisabled
+                  ? "bg-slate-200 text-slate-400"
+                  : "bg-blue-700 text-white transition hover:bg-blue-800"
+              }`}
+            >
+              {publicationState.buttonLabel}
+            </button>
+            <p className="text-[10px] leading-4 text-slate-500">A solicitação de publicação será enviada para aprovação pela governança. A Política de Decisão Configurável ainda não está conectada ao motor oficial; a publicação via governança controla o ciclo administrativo da política.</p>
           </div>
         </section>
+
+        <GovernanceHistorySection policy={policy} items={historyItems} isLoading={isHistoryLoading} error={historyError} />
 
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-4 py-4">
@@ -2482,7 +2888,7 @@ function PolicyGovernanceView({ structure }: { structure: ScoreStructureDto }) {
                 <span className="absolute -left-[27px] top-0.5 h-3 w-3 rounded-full border-2 border-white bg-blue-700 ring-1 ring-blue-200" />
                 <div className="flex flex-wrap items-center gap-2"><strong className="text-xs text-slate-900">Versão {policy.version}</strong><span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">{policyStatusLabel}</span></div>
                 <span className="mt-1 block text-xs text-slate-600">{policy.name}</span>
-                <span className="mt-1 block text-[10px] leading-4 text-slate-500">Versão atual {managementState === "published" ? "publicada." : "em construção. Ainda não publicada."}</span>
+                <span className="mt-1 block text-[10px] leading-4 text-slate-500">Versão atual {managementState === "active" ? "ativa no ciclo técnico." : "em construção. Ainda não ativa."}</span>
               </div>
               <div className="relative">
                 <span className="absolute -left-[25px] top-1 h-2 w-2 rounded-full bg-slate-300" />
@@ -2711,12 +3117,11 @@ export function PolicyScorePage() {
       policyManagementState(structure.policy.status, structure.validation_summary.configuration_status) === "in_construction"
         ? "Política em construção"
         : null,
-      "Comitê não configurado",
-      "Aprovação não concluída"
+      "Solicitação de publicação não concluída pela governança"
     ].filter(Boolean);
 
     setActionToast({
-      message: `Publicação bloqueada. ${blockers.join(" · ")}.`,
+      message: `Publicação aguardando governança. ${blockers.join(" · ")}.`,
       tone: "blocked"
     });
   }
@@ -2799,7 +3204,7 @@ export function PolicyScorePage() {
           onArchivePolicy={archiveSelectedPolicy}
         />
       ) : activeView === "governance" && structure ? (
-        <PolicyGovernanceView structure={structure} />
+        <PolicyGovernanceView structure={structure} onRequestPublication={publishSelectedPolicy} />
       ) : (
         <section className="grid gap-4 xl:grid-cols-[310px_minmax(0,1fr)_350px]">
         <PillarSidebar

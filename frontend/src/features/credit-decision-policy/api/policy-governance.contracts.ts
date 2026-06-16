@@ -3,6 +3,36 @@ export type PolicyGovernanceDecisionRequest = {
   justification?: string | null;
 };
 
+export type PolicyGovernanceRequestApprovalDto = {
+  workflow_role_code: string;
+  decision: "approved" | "rejected" | null | string;
+  approved_by_user_id: number | null;
+  justification: string | null;
+  decided_at: string | null;
+};
+
+export type PolicyGovernanceRequestDto = {
+  request_id: number;
+  company_id: number;
+  policy_id: number | null;
+  action_type: string;
+  approval_item_type: string;
+  status: string;
+  requested_by_user_id: number | null;
+  requested_at: string | null;
+  justification: string | null;
+  metadata_json: Record<string, unknown>;
+  approved_at: string | null;
+  rejected_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  required_roles: string[];
+  approved_roles: string[];
+  rejected_roles: string[];
+  pending_roles: string[];
+  approvals: PolicyGovernanceRequestApprovalDto[];
+};
+
 export type PolicyGovernanceRequesterDto = {
   id: number | null;
   name: string | null;
@@ -32,14 +62,6 @@ export type PolicyGovernanceSummaryPolicyDto = {
   activated_at?: string | null;
 } | null;
 
-export type PolicyGovernanceApprovalDto = {
-  workflow_role_code: string;
-  decision: "approved" | "rejected" | null | string;
-  approved_by_user_id: number | null;
-  justification: string | null;
-  decided_at: string | null;
-};
-
 export type PolicyGovernanceSummaryGovernanceDto = {
   required_roles: string[];
   approved_roles: string[];
@@ -47,7 +69,7 @@ export type PolicyGovernanceSummaryGovernanceDto = {
   rejected_roles: string[];
   can_current_user_decide: boolean;
   current_user_decision_roles: string[];
-  approvals?: PolicyGovernanceApprovalDto[];
+  approvals?: PolicyGovernanceRequestApprovalDto[];
 };
 
 export type PolicyGovernanceExecutiveSummaryDto = {
