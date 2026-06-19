@@ -19,8 +19,14 @@ export class BackendError extends Error {
 
 async function parseErrorMessage(response: Response) {
   try {
-    const payload = (await response.json()) as { detail?: string; message?: string };
-    return payload.detail ?? payload.message ?? "Erro ao consultar o backend.";
+    const payload = (await response.json()) as { detail?: string | { message?: string }; message?: string };
+    if (typeof payload.detail === "string") {
+      return payload.detail;
+    }
+    if (payload.detail && typeof payload.detail.message === "string") {
+      return payload.detail.message;
+    }
+    return payload.message ?? "Erro ao consultar o backend.";
   } catch {
     return "Erro ao consultar o backend.";
   }

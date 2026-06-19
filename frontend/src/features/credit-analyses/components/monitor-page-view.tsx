@@ -104,6 +104,14 @@ function statusBadge(status: string, label: string): string {
     : "border-[#D7E1EC] bg-[#F8FAFC] text-[#295B9A]";
 }
 
+function policyReferenceTone(reference: { fallback_used: boolean; engine: string | null; display_label: string }): string {
+  if (reference.fallback_used) return "border-[#FED7AA] bg-[#FFF7ED] text-[#C2410C]";
+  if (reference.engine === "configurable_policy") return "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]";
+  if (reference.engine === "legacy_policy") return "border-[#CBD5E1] bg-[#F8FAFC] text-[#475569]";
+  if (reference.display_label === "A definir") return "border-[#E2E8F0] bg-white text-[#64748B]";
+  return "border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]";
+}
+
 function typeBadges(item: { is_new_customer: boolean; is_early_review_request: boolean; has_recent_analysis: boolean }): string[] {
   const list: string[] = [];
   list.push(item.is_new_customer ? "Novo cliente" : "Cliente da carteira");
@@ -177,7 +185,7 @@ export function MonitorPageView() {
     { label: "Recusado", value: items.filter((i) => i.current_status === "rejected").length, icon: Undo2, tone: "text-[#B91C1C] bg-[#FEF2F2]" },
     { label: "Revisões antecipadas", value: payload?.kpis.early_reviews ?? 0, icon: CalendarDays, tone: "text-[#2563EB] bg-[#EFF6FF]" }
   ];
-  const rowGridClass = "xl:grid-cols-[minmax(280px,1.7fr)_150px_150px_150px_150px_180px_90px_180px_170px]";
+  const rowGridClass = "xl:grid-cols-[minmax(280px,1.7fr)_150px_150px_160px_150px_150px_180px_90px_180px_170px]";
 
   return (
     <section className="readability-standard rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] p-4">
@@ -253,9 +261,9 @@ export function MonitorPageView() {
 
       <div className="overflow-hidden rounded-[12px] border border-[#E2E8F0] bg-white">
         <div className="overflow-x-auto">
-          <div className="min-w-[1650px]">
+          <div className="min-w-[1810px]">
             <div className={`hidden border-b border-[#EEF2F7] bg-[#F8FAFC] px-4 py-2 text-[11px] font-medium text-[#64748B] xl:grid ${rowGridClass} gap-3 xl:items-center`}>
-              <p className="whitespace-nowrap pl-2.5">Cliente / Protocolo</p><p className="whitespace-nowrap">Status</p><p className="whitespace-nowrap">Tipo</p><p className="whitespace-nowrap">Limite solicitado</p><p className="whitespace-nowrap">Limite aprovado</p><p className="whitespace-nowrap">Responsável atual</p><p className="whitespace-nowrap">Aging</p><p className="whitespace-nowrap">Próxima etapa</p><p className="whitespace-nowrap text-right">Ação</p>
+              <p className="whitespace-nowrap pl-2.5">Cliente / Protocolo</p><p className="whitespace-nowrap">Status</p><p className="whitespace-nowrap">Tipo</p><p className="whitespace-nowrap">Política</p><p className="whitespace-nowrap">Limite solicitado</p><p className="whitespace-nowrap">Limite aprovado</p><p className="whitespace-nowrap">Responsável atual</p><p className="whitespace-nowrap">Aging</p><p className="whitespace-nowrap">Próxima etapa</p><p className="whitespace-nowrap text-right">Ação</p>
             </div>
             {items.map((item) => (
               <article key={item.analysis_id} className={`relative grid min-h-[92px] gap-3 border-b border-[#F1F5F9] px-4 py-3 last:border-b-0 hover:bg-[#FBFDFF] xl:grid ${rowGridClass} xl:items-center`}>
@@ -276,6 +284,15 @@ export function MonitorPageView() {
               {typeBadges(item).map((label) => (
                 <span key={`${item.analysis_id}-${label}`} className="whitespace-nowrap rounded-full border border-[#D7E1EC] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-medium text-[#475569]">{label}</span>
               ))}
+                </div>
+                <div
+                  className={`min-w-0 rounded-[9px] border px-2 py-1 ${policyReferenceTone(item.policy_reference)}`}
+                  title={item.policy_reference.status_label}
+                >
+                  <p className="truncate whitespace-nowrap text-[11px] font-semibold">{item.policy_reference.display_label}</p>
+                  <p className="truncate whitespace-nowrap text-[10px] opacity-75">
+                    {item.policy_reference.fallback_used ? "Fallback" : item.policy_reference.status_label}
+                  </p>
                 </div>
                 <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">{formatCurrencyNoCents(item.requested_limit ?? item.suggested_limit ?? 0)}</div>
                 <div className="whitespace-nowrap text-[12px] font-semibold text-[#0F172A]">

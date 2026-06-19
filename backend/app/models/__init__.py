@@ -11,6 +11,7 @@ from app.models.credit_policy import CreditPolicy
 from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.credit_decision_policy import CreditDecisionPolicy
 from app.models.company_policy_governance_setting import CompanyPolicyGovernanceSetting
+from app.models.company_policy_governance_role import CompanyPolicyGovernanceRole
 from app.models.credit_decision_policy_governance_request import CreditDecisionPolicyGovernanceRequest
 from app.models.credit_decision_policy_governance_request_approval import (
     CreditDecisionPolicyGovernanceRequestApproval,
@@ -69,6 +70,7 @@ __all__ = [
     "CreditPolicyRule",
     "CreditDecisionPolicy",
     "CompanyPolicyGovernanceSetting",
+    "CompanyPolicyGovernanceRole",
     "CreditDecisionPolicyGovernanceRequest",
     "CreditDecisionPolicyGovernanceRequestApproval",
     "CreditDecisionPolicyIndicator",

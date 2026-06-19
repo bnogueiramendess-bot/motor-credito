@@ -14,6 +14,8 @@ from app.schemas.credit_decision_policy import (
     CreditDecisionPolicyListItem,
     CreditDecisionPolicyPreviewResult,
     CreditDecisionPolicyRead,
+    CreditDecisionPolicyScoreStructurePatch,
+    CreditDecisionPolicyVersionCreate,
     PolicyGovernanceSettingRead,
     PolicyGovernanceRequestCreate,
     PolicyGovernanceRequestDecision,
@@ -50,12 +52,16 @@ from app.services.credit_decision_policy_preview import (
     resolve_credit_decision_policy_preview,
 )
 from app.services.credit_decision_policy_service import (
+    CreditDecisionPolicyDraftExistsError,
     CreditDecisionPolicyNotFoundError,
     CreditDecisionPolicyValidationError,
     create_credit_decision_policy,
+    create_credit_decision_policy_version,
+    delete_credit_decision_policy_draft,
     get_active_credit_decision_policy,
     get_credit_decision_policy,
     list_credit_decision_policies,
+    update_credit_decision_policy_score_structure,
 )
 from app.services.credit_decision_policy_score_structure import (
     CreditDecisionPolicyScoreStructureNotFoundError,
@@ -371,6 +377,30 @@ def get_policy_score_structure(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+@router.patch("/{policy_id}/score-structure")
+def update_policy_score_structure(
+    policy_id: int,
+    payload: CreditDecisionPolicyScoreStructurePatch,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> dict[str, Any]:
+    try:
+        update_credit_decision_policy_score_structure(db, policy_id, payload, current.user)
+        db.commit()
+        return get_score_structure(db, policy_id)
+    except CreditDecisionPolicyNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CreditDecisionPolicyValidationError as exc:
+        db.rollback()
+        if "Only draft" in str(exc):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unable to update credit decision policy score structure.") from exc
+
+
 @router.get("/{policy_id}/score-validation")
 def get_policy_score_validation(
     policy_id: int,
@@ -472,6 +502,23 @@ def get_policy(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+@router.delete("/{policy_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_policy_draft(
+    policy_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> None:
+    try:
+        delete_credit_decision_policy_draft(db, policy_id, current.user)
+        db.commit()
+    except CreditDecisionPolicyNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CreditDecisionPolicyValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @router.post("", response_model=CreditDecisionPolicyRead, status_code=status.HTTP_201_CREATED)
 def create_policy(
     payload: CreditDecisionPolicyCreate,
@@ -489,6 +536,42 @@ def create_policy(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unable to create credit decision policy.") from exc
+
+
+@router.post("/{policy_id}/versions", response_model=CreditDecisionPolicyRead, status_code=status.HTTP_201_CREATED)
+def create_policy_version(
+    policy_id: int,
+    payload: CreditDecisionPolicyVersionCreate | None = None,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.manage"])),
+) -> CreditDecisionPolicyRead:
+    payload = payload or CreditDecisionPolicyVersionCreate()
+    try:
+        policy = create_credit_decision_policy_version(
+            db,
+            base_policy_id=policy_id,
+            current_user=current.user,
+            justification=payload.justification,
+            metadata_json=payload.metadata_json,
+        )
+        db.commit()
+        db.refresh(policy)
+        return CreditDecisionPolicyRead.model_validate(policy)
+    except CreditDecisionPolicyNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CreditDecisionPolicyDraftExistsError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(exc), "existing_policy_id": exc.existing_policy_id},
+        ) from exc
+    except CreditDecisionPolicyValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unable to create credit decision policy version.") from exc
 
 
 @router.post("/{policy_id}/activate", response_model=CreditDecisionPolicyActivateResponse)

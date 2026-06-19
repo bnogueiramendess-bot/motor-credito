@@ -98,6 +98,23 @@ def _build_decision_summary(
     }
 
 
+def _apply_score_engine_trace(decision_memory_json: dict[str, Any], score_engine_trace: dict[str, Any] | None) -> None:
+    if not isinstance(score_engine_trace, dict):
+        return
+    decision_memory_json.update(
+        {
+            "score_source": score_engine_trace.get("engine"),
+            "policy_id": score_engine_trace.get("policy_id"),
+            "policy_code": score_engine_trace.get("policy_code"),
+            "policy_version": score_engine_trace.get("policy_version"),
+            "effective_weight": score_engine_trace.get("effective_weight"),
+            "fallback_used": score_engine_trace.get("fallback_used", False),
+            "fallback_reason": score_engine_trace.get("fallback_reason"),
+            "engine_trace": score_engine_trace,
+        }
+    )
+
+
 def calculate_and_apply_decision(
     db: Session, analysis_id: int
 ) -> tuple[CreditAnalysis, ExternalDataEntry, bool]:
@@ -258,9 +275,12 @@ def calculate_and_apply_decision(
     )
 
     score_explainability = None
+    score_engine_trace = None
     if score_result.calculation_memory_json is not None:
         score_explainability = score_result.calculation_memory_json.get("explainability")
+        score_engine_trace = score_result.calculation_memory_json.get("engine_trace")
 
+    previous_decision_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
     decision_memory_json = {
         "score_band": score_result.score_band.value,
         "score_final": score_result.final_score,
@@ -294,6 +314,9 @@ def calculate_and_apply_decision(
             "score_explainability": score_explainability,
         },
     }
+    if isinstance(previous_decision_memory.get("policy_snapshot"), dict):
+        decision_memory_json["policy_snapshot"] = previous_decision_memory["policy_snapshot"]
+    _apply_score_engine_trace(decision_memory_json, score_engine_trace)
 
     recalculated = analysis.decision_calculated_at is not None
     analysis.motor_result = motor_result

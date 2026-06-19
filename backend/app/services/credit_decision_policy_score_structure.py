@@ -132,6 +132,7 @@ def _policy_to_dict(policy: CreditDecisionPolicy, *, source: str) -> dict[str, A
         "version": policy.version,
         "status": policy.status,
         "description": policy.description,
+        "base_policy_id": policy.base_policy_id,
         "source": source,
     }
 

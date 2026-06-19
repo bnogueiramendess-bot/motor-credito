@@ -57,6 +57,24 @@ export type WorkflowRoleDto = {
   is_active: boolean;
 };
 
+export type PolicyGovernanceApprovalType = "POLICY_PUBLISH" | "POLICY_ARCHIVE" | "POLICY_STRUCTURE_CHANGE";
+
+export type CompanyPolicyGovernanceRoleDto = {
+  role_id: number;
+  role_code: string;
+  role_name: string;
+};
+
+export type CompanyPolicyGovernanceDto = {
+  company_id: number;
+  approval_roles: Record<PolicyGovernanceApprovalType, CompanyPolicyGovernanceRoleDto[]>;
+  fallback_used: Partial<Record<PolicyGovernanceApprovalType, boolean>>;
+};
+
+export type CompanyPolicyGovernanceUpdatePayload = {
+  approval_roles: Record<PolicyGovernanceApprovalType, number[]>;
+};
+
 export type UserWorkflowRoleDto = {
   role_id: number;
   code: string;
@@ -250,6 +268,17 @@ export async function getCompany() {
 
 export async function updateCompany(payload: CompanyUpdatePayload) {
   return apiClient.patch<CompanyDto, CompanyUpdatePayload>("/api/admin/company", payload);
+}
+
+export async function getCompanyPolicyGovernance() {
+  return apiClient.get<CompanyPolicyGovernanceDto>("/api/admin/company/policy-governance");
+}
+
+export async function updateCompanyPolicyGovernance(payload: CompanyPolicyGovernanceUpdatePayload) {
+  return apiClient.put<CompanyPolicyGovernanceDto, CompanyPolicyGovernanceUpdatePayload>(
+    "/api/admin/company/policy-governance",
+    payload
+  );
 }
 
 export async function inviteAdminUser(payload: InviteUserPayload) {

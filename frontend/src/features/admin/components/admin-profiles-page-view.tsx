@@ -32,7 +32,7 @@ const permissionGroups: PermissionGroup[] = [
     { key: "credit.approval.approve", label: "Aprovar Crédito", hint: "Concede papel de aprovador no fluxo." },
     { key: "credit.approval.reject", label: "Reprovar Crédito", hint: "Concede papel de aprovador no fluxo." },
     { key: "credit.policy.view", label: "Visualizar Política de Crédito" },
-    { key: "credit.policy.manage", label: "Gerenciar Política de Crédito", hint: "Permissão crítica de governança." }
+    { key: "credit.policy.manage", label: "Gerenciar Política de Crédito", hint: "Permissão crítica de administração." }
   ]},
   { id: "administracao", title: "Administração", items: [
     { key: "company:view", label: "Visualizar Empresa" },
@@ -187,8 +187,8 @@ export function AdminProfilesPageView() {
       </article>
 
       <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-slate-700" /><h2 className="text-base font-semibold text-slate-900">Visão de Governança</h2></div>
-        {matrixQuery.isLoading ? <p className="text-sm text-slate-500">Carregando visão de governança...</p> : null}
+        <div className="mb-3 flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-slate-700" /><h2 className="text-base font-semibold text-slate-900">Visão de Aprovação (DOA)</h2></div>
+        {matrixQuery.isLoading ? <p className="text-sm text-slate-500">Carregando visão de aprovação...</p> : null}
         {matrixQuery.isError ? <p className="text-sm text-slate-500">Matriz técnica indisponível.</p> : null}
         {!matrixQuery.isLoading && !matrixQuery.isError && allPermissions.length > 0 ? <p className="text-sm text-slate-600">Matriz técnica mantida como apoio. O cadastro operacional permanece na seção principal.</p> : null}
       </article>

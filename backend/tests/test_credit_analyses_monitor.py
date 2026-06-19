@@ -46,6 +46,7 @@ from app.models.enums import ActorType, FinalDecision, AnalysisStatus, MotorResu
 from app.schemas.final_decision import FinalDecisionApplyRequest
 from app.schemas.credit_analysis import CreditAnalysisWorkspaceStateUpdateRequest
 from app.services.security import hash_password
+from app.services.workflow_roles import ensure_workflow_roles_seed
 
 
 class CreditAnalysesMonitorTestCase(unittest.TestCase):
@@ -179,9 +180,10 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
 
     def _attach_workflow_role(self, user_id: int, workflow_role_code: str) -> None:
         with SessionLocal() as db:
+            ensure_workflow_roles_seed(db)
             role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == workflow_role_code, WorkflowRole.is_active.is_(True)))
             if role is None:
-                role = WorkflowRole(code=workflow_role_code, name=workflow_role_code, is_active=True)
+                role = WorkflowRole(code=workflow_role_code, name=workflow_role_code, description=workflow_role_code, type="operational", is_active=True)
                 db.add(role)
                 db.flush()
             link = UserWorkflowRole(user_id=user_id, workflow_role_id=role.id)
@@ -226,6 +228,14 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.created["audits"].append(audit.id)
             db.commit()
             return analysis.id
+
+    def _monitor_item_for(self, current: CurrentUser, analysis_id: int):
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=current)
+        item = next((entry for entry in response.items if entry.analysis_id == analysis_id), None)
+        self.assertIsNotNone(item)
+        assert item is not None
+        return item
 
     def test_commercial_sees_only_own_requests(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -307,6 +317,28 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.assertIn("continue_analysis", response.items[0].available_actions)
         with SessionLocal() as db:
             detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+        self.assertEqual(detail.id, analysis_id)
+
+    def test_consultant_can_view_monitor_and_detail_without_edit_actions(self) -> None:
+        bu_id, run_id = self._setup_base()
+        consultant = self._create_user("consultor.workflow@indorama.com", [], bu_id)
+        self._attach_workflow_role(consultant.user.id, "CREDIT_CONSULTANT")
+        analysis_id = self._create_analysis(run_id, "comercial.consultor@indorama.com", status="in_progress")
+
+        with SessionLocal() as db:
+            response = list_credit_analyses_monitor(db=db, current=consultant)
+        item = next((entry for entry in response.items if entry.analysis_id == analysis_id), None)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertIn("view_tracking", item.available_actions)
+        self.assertNotIn("start_analysis", item.available_actions)
+        self.assertNotIn("continue_analysis", item.available_actions)
+        self.assertNotIn("submit_approval", item.available_actions)
+        self.assertNotIn("approve", item.available_actions)
+        self.assertNotIn("reject", item.available_actions)
+
+        with SessionLocal() as db:
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=consultant)
         self.assertEqual(detail.id, analysis_id)
 
     def test_analyst_with_view_own_and_technical_capability_still_sees_submitted_request_from_another_requester(self) -> None:
@@ -422,6 +454,148 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         self.assertGreaterEqual(response.total, 1)
         self.assertIn("start_analysis", response.items[0].available_actions)
 
+    def test_monitor_policy_reference_pending_when_analysis_not_started(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.pending@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.pending@indorama.com")
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "A definir")
+        self.assertEqual(item.policy_reference.status_label, "Capturada no início da análise")
+        self.assertIsNone(item.policy_reference.engine)
+
+    def test_monitor_policy_reference_uses_configurable_snapshot(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.config@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.config@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["policy_snapshot"] = {
+                "engine": "configurable_policy",
+                "policy_id": 759,
+                "policy_code": "coface_first",
+                "policy_name": "COFACE First",
+                "policy_version": 18,
+                "captured_at": "2026-06-18T10:30:00Z",
+            }
+            analysis.decision_memory_json = memory
+            db.commit()
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "COFACE First v18")
+        self.assertEqual(item.policy_reference.status_label, "Política configurável")
+        self.assertEqual(item.policy_reference.policy_id, 759)
+        self.assertEqual(item.policy_reference.policy_version, 18)
+
+    def test_monitor_policy_reference_uses_legacy_snapshot(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.legacy@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.legacy@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["policy_snapshot"] = {
+                "engine": "legacy_policy",
+                "policy_id": 1,
+                "policy_name": "Política Legado",
+                "policy_version": 1,
+                "captured_at": "2026-06-18T10:30:00Z",
+            }
+            analysis.decision_memory_json = memory
+            db.commit()
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "Legado v1")
+        self.assertEqual(item.policy_reference.status_label, "Motor legado")
+        self.assertEqual(item.policy_reference.engine, "legacy_policy")
+
+    def test_monitor_policy_reference_uses_engine_trace_fallback_reason(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.fallback@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.fallback@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["engine_trace"] = {
+                "engine": "legacy_policy",
+                "source": "configurable_policy_fallback",
+                "fallback_used": True,
+                "fallback_reason": "policy_not_published",
+            }
+            analysis.decision_memory_json = memory
+            db.commit()
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "Legado")
+        self.assertTrue(item.policy_reference.fallback_used)
+        self.assertEqual(item.policy_reference.fallback_reason, "policy_not_published")
+        self.assertIn("policy_not_published", item.policy_reference.status_label)
+
+    def test_monitor_policy_reference_does_not_use_current_active_policy_without_snapshot(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.no.snapshot@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.no.snapshot@indorama.com")
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "A definir")
+        self.assertNotIn("COFACE", item.policy_reference.display_label)
+
+    def test_monitor_policy_reference_preserves_snapshot_after_new_policy_publication(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.preserved@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.preserved@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["policy_snapshot"] = {
+                "engine": "configurable_policy",
+                "policy_id": 759,
+                "policy_code": "coface_first",
+                "policy_name": "COFACE First",
+                "policy_version": 17,
+            }
+            memory["engine_trace"] = {
+                "engine": "configurable_policy",
+                "policy_id": 800,
+                "policy_code": "coface_first",
+                "policy_name": "COFACE First",
+                "policy_version": 18,
+            }
+            analysis.decision_memory_json = memory
+            db.commit()
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "COFACE First v17")
+        self.assertEqual(item.policy_reference.policy_id, 759)
+
+    def test_monitor_policy_reference_identifies_incomplete_started_analysis(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.incomplete@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.incomplete@indorama.com", status="in_progress")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+            memory["policy_snapshot"] = {"engine": "configurable_policy", "policy_code": "coface_first"}
+            analysis.decision_memory_json = memory
+            db.commit()
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "Política não identificada")
+        self.assertIn("Não foi possível identificar", item.policy_reference.status_label)
+
     def test_start_analysis_changes_status_to_in_progress(self) -> None:
         bu_id, run_id = self._setup_base()
         analyst = self._create_user("analista@indorama.com", ["credit_request_validate"], bu_id)
@@ -439,6 +613,13 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.assertIsNone(updated.approved_at)
             self.assertIsNone(updated.rejected_at)
             self.assertIsNone(updated.motor_result)
+            self.assertIsInstance(updated.decision_memory_json, dict)
+            assert isinstance(updated.decision_memory_json, dict)
+            policy_snapshot = updated.decision_memory_json.get("policy_snapshot")
+            self.assertIsInstance(policy_snapshot, dict)
+            assert isinstance(policy_snapshot, dict)
+            self.assertEqual(policy_snapshot.get("engine"), "legacy_policy")
+            self.assertIsNotNone(policy_snapshot.get("captured_at"))
             event = db.scalar(
                 select(DecisionEvent).where(
                     DecisionEvent.credit_analysis_id == analysis_id,
@@ -601,7 +782,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 get_score_result(analysis_id=analysis_bu_b, db=db, current=analyst_bu_a)
         self.assertEqual(ctx.exception.status_code, 403)
-        self.assertIn("unidade de negÃ³cio", str(ctx.exception.detail).lower())
+        self.assertIn("unidade de negócio", str(ctx.exception.detail).lower())
 
     def test_scope_all_bu_can_view_multi_bu_monitor(self) -> None:
         bu_a_id, _bu_b_id, run_id = self._setup_base_two_bus()
@@ -1309,7 +1490,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         classification = detail.decision_memory_json.get("recommendation_classification")
         self.assertIsInstance(classification, dict)
         assert isinstance(classification, dict)
-        self.assertEqual(classification.get("label"), "ManutenÃ§Ã£o do limite atual recomendada")
+        self.assertEqual(classification.get("label"), "Manutenção do Limite Atual")
         self.assertEqual(classification.get("requested_limit"), "5000000.00")
         self.assertEqual(classification.get("current_approved_limit"), "4500000.00")
         self.assertEqual(classification.get("coface_coverage_limit"), "4500000.0")
@@ -1443,7 +1624,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         assert isinstance(detail.decision_memory_json, dict)
         classification = detail.decision_memory_json.get("recommendation_classification")
         assert isinstance(classification, dict)
-        self.assertEqual(classification.get("label"), "ManutenÃ§Ã£o do limite atual recomendada")
+        self.assertEqual(classification.get("label"), "Manutenção do Limite Atual")
         self.assertEqual(classification.get("current_approved_limit"), "4500000.00")
 
     def test_get_credit_analysis_legacy_without_triage_source_still_identifies_existing_customer(self) -> None:
@@ -1524,7 +1705,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         assert isinstance(detail.decision_memory_json, dict)
         classification = detail.decision_memory_json.get("recommendation_classification")
         assert isinstance(classification, dict)
-        self.assertEqual(classification.get("label"), "ManutenÃ§Ã£o do limite atual recomendada")
+        self.assertEqual(classification.get("label"), "Manutenção do Limite Atual")
         self.assertEqual(classification.get("is_existing_customer"), True)
 
 

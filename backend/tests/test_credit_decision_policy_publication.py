@@ -76,6 +76,11 @@ class CreditDecisionPolicyPublicationTestCase(unittest.TestCase):
     def setUpClass(cls) -> None:
         with SessionLocal() as db:
             bind = db.get_bind()
+            CreditDecisionPolicy.__table__.create(bind, checkfirst=True)
+            policy_columns = {column["name"] for column in inspect(bind).get_columns("credit_decision_policies")}
+            if "base_policy_id" not in policy_columns:
+                db.execute(text("ALTER TABLE credit_decision_policies ADD COLUMN base_policy_id INTEGER"))
+                db.commit()
             CompanyPolicyGovernanceSetting.__table__.create(bind, checkfirst=True)
             CreditDecisionPolicyGovernanceRequest.__table__.create(bind, checkfirst=True)
             columns = {column["name"] for column in inspect(bind).get_columns("credit_decision_policy_governance_requests")}
@@ -196,7 +201,29 @@ class CreditDecisionPolicyPublicationTestCase(unittest.TestCase):
                 current_user=self.user,
             )
 
-    def test_approved_request_allows_publication(self) -> None:
+    def test_approved_request_publishes_automatically(self) -> None:
+        self._assign_head_finance()
+        request = self._request_publication()
+        approve_governance_request(
+            self.db,
+            company_id=self.company_id,
+            request_id=request["request_id"],
+            current_user=self.user,
+        )
+        self.db.refresh(self.policy)
+
+        self.assertEqual(self.policy.status, "active")
+        actions = list(
+            self.db.scalars(
+                select(AuditLog.action).where(
+                    AuditLog.resource == "credit_decision_policy",
+                    AuditLog.resource_id == str(self.policy.id),
+                )
+            ).all()
+        )
+        self.assertEqual(actions.count("policy_publication_executed"), 1)
+
+    def test_approved_request_does_not_execute_publication_twice(self) -> None:
         self._assign_head_finance()
         request = self._request_publication()
         approve_governance_request(
@@ -206,15 +233,24 @@ class CreditDecisionPolicyPublicationTestCase(unittest.TestCase):
             current_user=self.user,
         )
 
-        policy = execute_policy_publication(
-            self.db,
-            company_id=self.company_id,
-            policy_id=self.policy.id,
-            request_id=request["request_id"],
-            current_user=self.user,
-        )
+        with self.assertRaises(PolicyGovernanceWorkflowForbiddenError):
+            execute_policy_publication(
+                self.db,
+                company_id=self.company_id,
+                policy_id=self.policy.id,
+                request_id=request["request_id"],
+                current_user=self.user,
+            )
 
-        self.assertEqual(policy.status, "active")
+        actions = list(
+            self.db.scalars(
+                select(AuditLog.action).where(
+                    AuditLog.resource == "credit_decision_policy",
+                    AuditLog.resource_id == str(self.policy.id),
+                )
+            ).all()
+        )
+        self.assertEqual(actions.count("policy_publication_executed"), 1)
 
     def test_approved_request_allows_archive(self) -> None:
         self._assign_head_finance()
@@ -273,13 +309,6 @@ class CreditDecisionPolicyPublicationTestCase(unittest.TestCase):
             request_id=request["request_id"],
             current_user=self.user,
         )
-        execute_policy_publication(
-            self.db,
-            company_id=self.company_id,
-            policy_id=self.policy.id,
-            request_id=request["request_id"],
-            current_user=self.user,
-        )
 
         actions = set(
             self.db.scalars(
@@ -315,13 +344,6 @@ class CreditDecisionPolicyPublicationTestCase(unittest.TestCase):
         approve_governance_request(
             self.db,
             company_id=self.company_id,
-            request_id=request["request_id"],
-            current_user=self.user,
-        )
-        execute_policy_publication(
-            self.db,
-            company_id=self.company_id,
-            policy_id=self.policy.id,
             request_id=request["request_id"],
             current_user=self.user,
         )

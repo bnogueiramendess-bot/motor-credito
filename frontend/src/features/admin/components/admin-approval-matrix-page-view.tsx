@@ -105,7 +105,7 @@ export function AdminApprovalMatrixPageView() {
     return base;
   }, [optionsQuery.data?.workflow_roles]);
 
-  const totalAvailableRoles = groupedRoles.operational.length + groupedRoles.governance.length + groupedRoles.approval.length;
+  const totalAvailableRoles = groupedRoles.governance.length;
 
   function resetForm() {
     setEditingRuleId(null);
@@ -188,15 +188,15 @@ export function AdminApprovalMatrixPageView() {
   return (
     <section className="space-y-5">
       <header className="rounded-2xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 px-6 py-5 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Governança</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Papéis de Aprovação (DOA)</p>
         <h1 className="mt-1 text-2xl font-semibold text-slate-900">Matriz de Aprovação</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Estrutura institucional de alçadas, aprovadores e exceções, preparada para integração gradual com o workflow.
+          Papéis corporativos utilizados na Matriz de Aprovação (DOA) para definição de alçadas, aprovações e exceções.
         </p>
       </header>
 
       <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="text-sm text-slate-600">Gerencie regras por faixa, papéis aprovadores e obrigatoriedades de governança.</p>
+        <p className="text-sm text-slate-600">Gerencie regras por faixa, papéis aprovadores e exigências da estrutura DOA.</p>
         <button type="button" onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
           <PlusCircle className="h-4 w-4" /> Nova regra
         </button>
@@ -257,7 +257,7 @@ export function AdminApprovalMatrixPageView() {
                 <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Informações da regra</p>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <FieldLabel title="Código da regra" helpText="Identificador técnico e institucional da regra utilizado para rastreabilidade, auditoria e governança." />
+                    <FieldLabel title="Código da regra" helpText="Identificador técnico e institucional da regra utilizado para rastreabilidade e auditoria da DOA." />
                     <div className="relative">
                       <input value={code} readOnly placeholder="DOA-0001" className="h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 pr-9 text-sm text-slate-800 placeholder:text-slate-400" />
                       <Lock className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -307,7 +307,7 @@ export function AdminApprovalMatrixPageView() {
               </section>
 
               <section className="space-y-4 border-b border-slate-200 pb-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Governança</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Critérios DOA</p>
                 <div className="grid gap-3 md:grid-cols-3">
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
@@ -330,17 +330,17 @@ export function AdminApprovalMatrixPageView() {
                 <div className="flex items-center gap-2 text-slate-800">
                   <Shield className="h-4 w-4" />
                   <p className="text-sm font-semibold">Papéis aprovadores</p>
-                  <HelpTip text="Define quais papéis institucionais possuem alçada para aprovação nesta regra." />
+                  <HelpTip text="Os papéis abaixo definem quem pode aprovar, rejeitar ou solicitar ajustes em análises de crédito conforme a Matriz DOA." />
                 </div>
                 {optionsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
                 {optionsQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar os papéis de workflow.</p> : null}
                 {!optionsQuery.isLoading && !optionsQuery.isError && totalAvailableRoles === 0 ? (
                   <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                    Nenhum papel de workflow ativo encontrado. Cadastre ou ative papéis antes de criar regras de aprovação.
+                    Nenhum papel de Aprovação (DOA) ativo encontrado. Cadastre ou ative papéis corporativos antes de criar regras de aprovação.
                   </p>
                 ) : null}
                 <div className="space-y-4">
-                  {([["Operacionais", groupedRoles.operational], ["Governança", groupedRoles.governance], ["Aprovação", groupedRoles.approval]] as const)
+                  {([["Papéis de Aprovação (DOA)", groupedRoles.governance]] as const)
                     .filter(([, roleList]) => roleList.length > 0)
                     .map(([title, roleList]) => (
                     <div key={title} className="space-y-2">
@@ -352,12 +352,8 @@ export function AdminApprovalMatrixPageView() {
                             className={cn(
                               "flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm transition-colors",
                               selectedRoleCodes.includes(role.code)
-                                ? title === "Aprovação"
-                                  ? "border-emerald-300 bg-emerald-50/70"
-                                  : "border-slate-400 bg-white"
-                                : title === "Aprovação"
-                                  ? "border-emerald-200 bg-white"
-                                  : "border-slate-200 bg-white"
+                                ? "border-emerald-300 bg-emerald-50/70"
+                                : "border-emerald-200 bg-white"
                             )}
                           >
                             <span className="flex items-center gap-2">
@@ -366,7 +362,7 @@ export function AdminApprovalMatrixPageView() {
                             </span>
                             <span className="inline-flex items-center gap-1">
                               {selectedRoleCodes.includes(role.code) ? <Check className="h-3.5 w-3.5 text-emerald-700" /> : null}
-                              {title === "Aprovação" ? <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-emerald-700">Alçada</span> : null}
+                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-emerald-700">DOA</span>
                             </span>
                           </label>
                         ))}

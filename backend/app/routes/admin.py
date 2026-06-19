@@ -29,6 +29,8 @@ from app.schemas.administration import (
     BusinessUnitStatusUpdate,
     BusinessUnitUpdate,
     CompanyCreate,
+    CompanyPolicyGovernanceRead,
+    CompanyPolicyGovernanceUpdate,
     CompanyRead,
     CompanyUpdate,
     InviteRead,
@@ -75,6 +77,11 @@ from app.services.approval_matrix import (
     generate_next_approval_matrix_code,
     list_approval_matrix_rules,
     update_approval_matrix_rule,
+)
+from app.services.company_policy_governance_roles import (
+    CompanyPolicyGovernanceRoleError,
+    get_company_policy_governance_config,
+    update_company_policy_governance_config,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -635,6 +642,39 @@ def update_company(
         corporate_email_required=company.corporate_email_required,
         allowed_domains=company.allowed_domains_json,
     )
+
+
+@router.get("/company/policy-governance", response_model=CompanyPolicyGovernanceRead)
+def get_company_policy_governance(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["company:manage"])),
+) -> CompanyPolicyGovernanceRead:
+    try:
+        return CompanyPolicyGovernanceRead(
+            **get_company_policy_governance_config(db, company_id=current.user.company_id)
+        )
+    except CompanyPolicyGovernanceRoleError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.put("/company/policy-governance", response_model=CompanyPolicyGovernanceRead)
+def update_company_policy_governance(
+    payload: CompanyPolicyGovernanceUpdate,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["company:manage"])),
+) -> CompanyPolicyGovernanceRead:
+    try:
+        result = update_company_policy_governance_config(
+            db,
+            company_id=current.user.company_id,
+            approval_roles=payload.approval_roles,
+            current_user_id=current.user.id,
+        )
+        db.commit()
+        return CompanyPolicyGovernanceRead(**result)
+    except CompanyPolicyGovernanceRoleError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/business-units", response_model=BusinessUnitRead, status_code=status.HTTP_201_CREATED)

@@ -4,7 +4,7 @@ from decimal import Decimal
 import unittest
 
 from sqlalchemy import CheckConstraint, Index
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, inspect, select, text
 
 from app.db.session import SessionLocal
 from app.models.credit_decision_policy import CreditDecisionPolicy
@@ -99,6 +99,10 @@ class CreditDecisionPolicyScoreStructureTestCase(unittest.TestCase):
         with SessionLocal() as db:
             bind = db.get_bind()
             CreditDecisionPolicy.__table__.create(bind, checkfirst=True)
+            columns = {column["name"] for column in inspect(bind).get_columns("credit_decision_policies")}
+            if "base_policy_id" not in columns:
+                db.execute(text("ALTER TABLE credit_decision_policies ADD COLUMN base_policy_id INTEGER"))
+                db.commit()
             CreditDecisionPolicyPillar.__table__.create(bind, checkfirst=True)
             CreditDecisionPolicySubgroup.__table__.create(bind, checkfirst=True)
             CreditDecisionPolicyIndicator.__table__.create(bind, checkfirst=True)

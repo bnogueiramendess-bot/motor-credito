@@ -4,7 +4,7 @@ from decimal import Decimal
 import unittest
 import uuid
 
-from sqlalchemy import func, inspect, select
+from sqlalchemy import func, inspect, select, text
 
 from app.core.config import settings
 from app.db.session import SessionLocal
@@ -81,6 +81,10 @@ class CreditDecisionPoliciesTestCase(unittest.TestCase):
             inspector = inspect(bind)
             if not inspector.has_table("credit_decision_policies"):
                 CreditDecisionPolicy.__table__.create(bind, checkfirst=True)
+            columns = {column["name"] for column in inspect(bind).get_columns("credit_decision_policies")}
+            if "base_policy_id" not in columns:
+                db.execute(text("ALTER TABLE credit_decision_policies ADD COLUMN base_policy_id INTEGER"))
+                db.commit()
 
             cls.seed_user_id = db.scalar(select(User.id).order_by(User.id.asc()))
             if cls.seed_user_id is not None:

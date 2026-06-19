@@ -252,6 +252,19 @@ export type CreditAnalysisQueueOptionsResponse = {
   analysts: QueueOptionDto[];
 };
 
+export type CreditAnalysisPolicyReferenceDto = {
+  engine: "configurable_policy" | "legacy_policy" | string | null;
+  policy_id: number | null;
+  policy_code: string | null;
+  policy_name: string | null;
+  policy_version: number | null;
+  captured_at: string | null;
+  fallback_used: boolean;
+  fallback_reason: string | null;
+  display_label: string;
+  status_label: string;
+};
+
 export type CreditAnalysisMonitorItemDto = {
   item_type: "CREDIT_ANALYSIS";
   analysis_id: number;
@@ -285,6 +298,7 @@ export type CreditAnalysisMonitorItemDto = {
   next_responsible_role: "comercial" | "analista_financeiro" | "aprovador" | string;
   applicable_doa_code?: string | null;
   applicable_doa_range?: string | null;
+  policy_reference: CreditAnalysisPolicyReferenceDto;
   available_actions: string[];
 };
 

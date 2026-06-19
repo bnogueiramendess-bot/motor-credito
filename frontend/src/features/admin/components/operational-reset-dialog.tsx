@@ -49,7 +49,7 @@ const DOMAIN_OPTIONS: ResetDomainOption[] = [
   },
   {
     key: "governance",
-    title: "Governança e Permissões",
+    title: "Administração e Permissões",
     description: "Remove empresas, perfis e permissões operacionais. A estrutura mínima de acesso Master/Admin será recriada quando necessário."
   },
   {
@@ -304,4 +304,3 @@ export function OperationalResetDialog({ open, onOpenChange, onSuccess }: Operat
     </>
   );
 }
-

@@ -16,6 +16,10 @@ from app.models.credit_decision_policy_governance_request_approval import (
 from app.models.user import User
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
+from app.services.company_policy_governance_roles import (
+    get_fallback_governance_workflow_roles_for_policy_action,
+    get_governance_workflow_roles_for_policy_action,
+)
 from app.services.credit_decision_policy_governance import POLICY_GOVERNANCE_ACTION_TYPES
 
 
@@ -71,7 +75,14 @@ def _audit(
 
 
 def _required_roles(db: Session, *, company_id: int, action_type: str) -> list[WorkflowRole]:
-    return list(
+    configured_roles = get_governance_workflow_roles_for_policy_action(
+        db,
+        company_id=company_id,
+        action_type=action_type,
+    )
+    if configured_roles:
+        return configured_roles
+    legacy_roles = list(
         db.scalars(
             select(WorkflowRole)
             .join(
@@ -87,6 +98,9 @@ def _required_roles(db: Session, *, company_id: int, action_type: str) -> list[W
             .order_by(WorkflowRole.code.asc())
         ).all()
     )
+    if legacy_roles:
+        return legacy_roles
+    return get_fallback_governance_workflow_roles_for_policy_action(db, action_type=action_type)
 
 
 def _serialize(request: CreditDecisionPolicyGovernanceRequest) -> dict[str, Any]:
@@ -288,6 +302,46 @@ def refresh_governance_request_status(
     return request.status
 
 
+def _execute_approved_policy_publication(
+    db: Session,
+    *,
+    request: CreditDecisionPolicyGovernanceRequest,
+    current_user: User,
+) -> None:
+    if (
+        request.status != "approved"
+        or request.approval_item_type != "CREDIT_POLICY"
+        or request.action_type != "policy_publish"
+        or request.policy_id is None
+    ):
+        return
+
+    from app.services.credit_decision_policy_publication import (
+        execute_policy_publication,
+        validate_policy_publication_allowed,
+    )
+
+    validation = validate_policy_publication_allowed(
+        db,
+        company_id=request.company_id,
+        policy_id=request.policy_id,
+        request_id=request.id,
+        action_type="policy_publish",
+    )
+    if not validation["can_execute"]:
+        if validation["reason"] == "SolicitaÃ§Ã£o de governanÃ§a jÃ¡ executada.":
+            return
+        raise PolicyGovernanceWorkflowForbiddenError(validation["reason"])
+
+    execute_policy_publication(
+        db,
+        company_id=request.company_id,
+        policy_id=request.policy_id,
+        request_id=request.id,
+        current_user=current_user,
+    )
+
+
 def _decide_governance_request(
     db: Session,
     *,
@@ -334,7 +388,9 @@ def _decide_governance_request(
         workflow_role_code=approval.workflow_role.code,
         justification=justification,
     )
-    refresh_governance_request_status(db, request=request, completed_by_user_id=current_user.id)
+    status = refresh_governance_request_status(db, request=request, completed_by_user_id=current_user.id)
+    if status == "approved":
+        _execute_approved_policy_publication(db, request=request, current_user=current_user)
     return _serialize(request)
 
 

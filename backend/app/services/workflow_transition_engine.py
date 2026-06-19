@@ -14,6 +14,7 @@ from app.models.decision_event import DecisionEvent
 from app.models.enums import ActorType, AnalysisStatus, FinalDecision
 from app.models.score_result import ScoreResult
 from app.services.bu_scope import resolve_analysis_business_unit
+from app.services.score import capture_analysis_policy_snapshot
 from app.services.workflow_authorization import (
     resolve_credit_workflow_action,
     resolve_credit_workflow_available_actions,
@@ -183,12 +184,13 @@ def resolve_credit_workflow_transition(
         next_owner_role = _owner_for_status(next_status)
         analysis.analysis_started_at = analysis.analysis_started_at or transition_at
         analysis.claimed_at = transition_at
-        memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+        memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
         journey_progress = memory.get("journey_progress") if isinstance(memory.get("journey_progress"), dict) else {}
         journey_progress["current_journey_step"] = 2
         journey_progress["last_completed_journey_step"] = max(int(journey_progress.get("last_completed_journey_step", 1)), 1)
         memory["journey_progress"] = journey_progress
         analysis.decision_memory_json = memory
+        capture_analysis_policy_snapshot(db, analysis, captured_at=transition_at)
         timeline_event = "analysis_started"
     elif action in {"generate_preliminary_decision", "submit_for_approval", "submit_approval"}:
         if analysis.motor_result is None or analysis.decision_calculated_at is None:
@@ -258,7 +260,7 @@ def resolve_credit_workflow_transition(
     analysis.current_owner_role = next_owner_role
     analysis.current_stage_started_at = transition_at
 
-    decision_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    decision_memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
     decision_memory["workflow_transition"] = {
         "action": action,
         "at": transition_at.isoformat(),

@@ -66,7 +66,44 @@ export type ScorePolicyDto = {
   version: number;
   status: string;
   description: string | null;
-  source: string;
+  base_policy_id: number | null;
+  source?: string;
+  created_at?: string;
+  updated_at?: string;
+  activated_at?: string | null;
+};
+
+export type CreatePolicyVersionPayload = {
+  justification?: string | null;
+  metadata_json?: Record<string, unknown>;
+};
+
+export type ScoreStructurePatchPayload = {
+  pillars?: Array<{
+    id: number;
+    weight_percent?: string | number | null;
+    is_enabled?: boolean | null;
+  }>;
+  subgroups?: Array<{
+    id: number;
+    weight_percent?: string | number | null;
+    is_enabled?: boolean | null;
+  }>;
+  indicators?: Array<{
+    id: number;
+    weight_percent?: string | number | null;
+    is_enabled?: boolean | null;
+  }>;
+  score_ranges?: Array<{
+    id: number;
+    operator?: string | null;
+    threshold_value?: string | number | null;
+    threshold_value_to?: string | number | null;
+    score?: string | number | null;
+    label?: string | null;
+    sort_order?: number | null;
+    is_enabled?: boolean | null;
+  }>;
 };
 
 export type ScoreValidationCheckDto = {
@@ -357,6 +394,32 @@ export type PillarFiveSimulationResultDto = {
 
 export function getCurrentScoreStructure() {
   return apiClient.get<ScoreStructureDto>("/api/admin/credit-decision-policies/current-score-structure");
+}
+
+export function getScoreStructure(policyId: number) {
+  return apiClient.get<ScoreStructureDto>(`/api/admin/credit-decision-policies/${policyId}/score-structure`);
+}
+
+export function listPolicies() {
+  return apiClient.get<ScorePolicyDto[]>("/api/credit-decision-policies");
+}
+
+export function createPolicyVersion(policyId: number, payload: CreatePolicyVersionPayload) {
+  return apiClient.post<ScorePolicyDto, CreatePolicyVersionPayload>(
+    `/api/credit-decision-policies/${policyId}/versions`,
+    payload
+  );
+}
+
+export function updateScoreStructure(policyId: number, payload: ScoreStructurePatchPayload) {
+  return apiClient.patch<ScoreStructureDto, ScoreStructurePatchPayload>(
+    `/api/admin/credit-decision-policies/${policyId}/score-structure`,
+    payload
+  );
+}
+
+export function deletePolicyDraft(policyId: number) {
+  return apiClient.delete<void>(`/api/credit-decision-policies/${policyId}`);
 }
 
 export function simulatePillarOneScore(policyId: number, payload: PillarOneSimulationPayload) {

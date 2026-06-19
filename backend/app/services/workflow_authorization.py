@@ -50,7 +50,7 @@ ACTION_POLICIES: dict[str, dict] = {
         "statuses": {"in_progress"},
     },
     "save_technical_analysis": {
-        "workflow_roles": ("CREDIT_OPINION",),
+        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
         "legacy_permissions": ("credit.dossier.edit", "credit.analysis.execute"),
         "statuses": {"in_progress"},
     },
@@ -65,18 +65,18 @@ ACTION_POLICIES: dict[str, dict] = {
         "statuses": {"in_progress"},
     },
     "execute_decision_engine": {
-        "workflow_roles": ("CREDIT_OPINION",),
+        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
         "legacy_permissions": ("credit.request.submit",),
         "statuses": {"in_progress"},
     },
     "generate_opinion": {
-        "workflow_roles": ("CREDIT_OPINION",),
+        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
         "legacy_permissions": ("credit.dossier.edit",),
         "statuses": {"in_progress"},
     },
     "generate_dossier": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_progress", "in_approval", "approved", "rejected"}},
     "submit_approval": {
-        "workflow_roles": ("CREDIT_OPINION",),
+        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
         "legacy_permissions": ("credit.request.submit",),
         "statuses": {"in_progress"},
     },
@@ -85,12 +85,17 @@ ACTION_POLICIES: dict[str, dict] = {
     "request_changes": {"workflow_roles": (), "legacy_permissions": ("credit.approval.reject",), "statuses": {"in_approval"}},
     "return_to_analysis": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_approval"}},
     "finalize": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"approved", "rejected"}},
-    "view_result": {"workflow_roles": (), "legacy_permissions": ("credit.requests.view",), "statuses": {"approved", "rejected"}},
-    "view_dossier": {"workflow_roles": (), "legacy_permissions": ("clients.dossier.view",), "statuses": {"in_approval", "approved", "rejected"}},
+    "view_result": {"workflow_roles": ("CREDIT_CONSULTANT",), "legacy_permissions": ("credit.requests.view",), "statuses": {"approved", "rejected"}},
+    "view_dossier": {"workflow_roles": ("CREDIT_CONSULTANT",), "legacy_permissions": ("clients.dossier.view",), "statuses": {"in_approval", "approved", "rejected"}},
     "view_tracking": {
-        "workflow_roles": ("CREDIT_REQUESTER",),
+        "workflow_roles": ("CREDIT_REQUESTER", "CREDIT_CONSULTANT"),
         "legacy_permissions": ("credit.requests.view",),
         "statuses": {"pending", "in_progress", "in_approval"},
+    },
+    "view_analysis": {
+        "workflow_roles": ("CREDIT_CONSULTANT",),
+        "legacy_permissions": (),
+        "statuses": {"pending", "in_progress", "in_approval", "approved", "rejected"},
     },
     "access_workspace": {
         "workflow_roles": ("CREDIT_ANALYST", "CREDIT_REVIEWER", "CREDIT_OPINION"),

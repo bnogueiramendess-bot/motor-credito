@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.audit_log import AuditLog
+from app.models.credit_analysis import CreditAnalysis
 from app.models.credit_decision_policy import CreditDecisionPolicy
+from app.models.credit_decision_policy_governance_request import CreditDecisionPolicyGovernanceRequest
+from app.models.credit_decision_policy_score_structure import (
+    CreditDecisionPolicyIndicator,
+    CreditDecisionPolicyPillar,
+    CreditDecisionPolicyScoreRange,
+    CreditDecisionPolicySubgroup,
+)
 from app.models.user import User
 from app.services.credit_decision_policy_score_seed import ensure_default_score_structure
 
@@ -77,6 +88,17 @@ class CreditDecisionPolicyNotFoundError(CreditDecisionPolicyServiceError):
 
 class CreditDecisionPolicyValidationError(CreditDecisionPolicyServiceError):
     pass
+
+
+class CreditDecisionPolicyDraftExistsError(CreditDecisionPolicyValidationError):
+    def __init__(self, existing_policy_id: int):
+        super().__init__(
+            "Ja existe uma versao em rascunho para esta politica. Continue editando a versao existente ou arquive-a antes de criar outra."
+        )
+        self.existing_policy_id = existing_policy_id
+
+
+SCORE_RANGE_OPERATORS = {">=", ">", "<=", "<", "=", "between"}
 
 
 def _validate_config_json(config_json: dict[str, Any]) -> None:
@@ -177,6 +199,301 @@ def create_credit_decision_policy(
     return policy
 
 
+def _decimal(value: Any, *, field_name: str) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise CreditDecisionPolicyValidationError(f"{field_name} must be numeric.") from exc
+
+
+def _validate_decimal_bounds(value: Any, *, field_name: str, minimum: Decimal, maximum: Decimal) -> Decimal:
+    decimal_value = _decimal(value, field_name=field_name)
+    if decimal_value < minimum or decimal_value > maximum:
+        raise CreditDecisionPolicyValidationError(f"{field_name} must be between {minimum} and {maximum}.")
+    return decimal_value
+
+
+def _ensure_draft_policy(policy: CreditDecisionPolicy) -> None:
+    if policy.status != "draft":
+        raise CreditDecisionPolicyValidationError("Only draft credit decision policies can be edited.")
+
+
+def _load_policy_child(db: Session, model: type[Any], *, policy_id: int, item_id: int, label: str) -> Any:
+    item = db.scalar(select(model).where(model.id == item_id, model.policy_id == policy_id))
+    if item is None:
+        raise CreditDecisionPolicyNotFoundError(f"{label} not found for this policy.")
+    return item
+
+
+def _validate_score_range_values(score_range: CreditDecisionPolicyScoreRange) -> None:
+    if score_range.operator not in SCORE_RANGE_OPERATORS:
+        raise CreditDecisionPolicyValidationError("score range operator is invalid.")
+    _validate_decimal_bounds(score_range.score, field_name="score", minimum=Decimal("0"), maximum=Decimal("10"))
+    if score_range.operator == "between":
+        if score_range.threshold_value_to is None:
+            raise CreditDecisionPolicyValidationError("between score range requires threshold_value_to.")
+        if _decimal(score_range.threshold_value_to, field_name="threshold_value_to") < _decimal(
+            score_range.threshold_value,
+            field_name="threshold_value",
+        ):
+            raise CreditDecisionPolicyValidationError("threshold_value_to must be greater than or equal to threshold_value.")
+    elif score_range.threshold_value_to is not None:
+        raise CreditDecisionPolicyValidationError("threshold_value_to must be empty when operator is not between.")
+
+
+def update_credit_decision_policy_score_structure(
+    db: Session,
+    policy_id: int,
+    payload: Any,
+    current_user: User,
+) -> CreditDecisionPolicy:
+    policy = get_credit_decision_policy(db, policy_id)
+    _ensure_draft_policy(policy)
+
+    changes: dict[str, list[dict[str, Any]]] = {
+        "pillars": [],
+        "subgroups": [],
+        "indicators": [],
+        "score_ranges": [],
+    }
+
+    for patch in payload.pillars:
+        pillar = _load_policy_child(db, CreditDecisionPolicyPillar, policy_id=policy.id, item_id=patch.id, label="Pillar")
+        if patch.weight_percent is not None:
+            pillar.weight_percent = _validate_decimal_bounds(
+                patch.weight_percent,
+                field_name="pillar weight_percent",
+                minimum=Decimal("0"),
+                maximum=Decimal("100"),
+            )
+        if patch.is_enabled is not None:
+            pillar.is_enabled = patch.is_enabled
+        changes["pillars"].append({"id": pillar.id, "code": pillar.code})
+
+    for patch in payload.subgroups:
+        subgroup = _load_policy_child(db, CreditDecisionPolicySubgroup, policy_id=policy.id, item_id=patch.id, label="Subgroup")
+        if patch.weight_percent is not None:
+            subgroup.weight_percent = _validate_decimal_bounds(
+                patch.weight_percent,
+                field_name="subgroup weight_percent",
+                minimum=Decimal("0"),
+                maximum=Decimal("100"),
+            )
+        if patch.is_enabled is not None:
+            subgroup.is_enabled = patch.is_enabled
+        changes["subgroups"].append({"id": subgroup.id, "code": subgroup.code})
+
+    for patch in payload.indicators:
+        indicator = _load_policy_child(db, CreditDecisionPolicyIndicator, policy_id=policy.id, item_id=patch.id, label="Indicator")
+        if patch.weight_percent is not None:
+            indicator.weight_percent = _validate_decimal_bounds(
+                patch.weight_percent,
+                field_name="indicator weight_percent",
+                minimum=Decimal("0"),
+                maximum=Decimal("100"),
+            )
+        if patch.is_enabled is not None:
+            indicator.is_enabled = patch.is_enabled
+        changes["indicators"].append({"id": indicator.id, "code": indicator.code})
+
+    for patch in payload.score_ranges:
+        score_range = _load_policy_child(db, CreditDecisionPolicyScoreRange, policy_id=policy.id, item_id=patch.id, label="Score range")
+        if patch.operator is not None:
+            score_range.operator = patch.operator
+        if patch.threshold_value is not None:
+            score_range.threshold_value = _decimal(patch.threshold_value, field_name="threshold_value")
+        if "threshold_value_to" in patch.model_fields_set:
+            score_range.threshold_value_to = (
+                None if patch.threshold_value_to is None else _decimal(patch.threshold_value_to, field_name="threshold_value_to")
+            )
+        if patch.score is not None:
+            score_range.score = _validate_decimal_bounds(
+                patch.score,
+                field_name="score",
+                minimum=Decimal("0"),
+                maximum=Decimal("10"),
+            )
+        if "label" in patch.model_fields_set:
+            score_range.label = patch.label
+        if patch.sort_order is not None:
+            score_range.sort_order = patch.sort_order
+        if patch.is_enabled is not None:
+            score_range.is_enabled = patch.is_enabled
+        _validate_score_range_values(score_range)
+        changes["score_ranges"].append({"id": score_range.id, "indicator_id": score_range.indicator_id})
+
+    policy.updated_by_user_id = current_user.id
+    db.add(
+        AuditLog(
+            actor_user_id=current_user.id,
+            action="policy_draft_updated",
+            resource="credit_decision_policy",
+            resource_id=str(policy.id),
+            metadata_json={
+                "policy_id": policy.id,
+                "policy_version": policy.version,
+                "updated_by": current_user.id,
+                "changes": changes,
+            },
+        )
+    )
+    db.flush()
+    return policy
+
+
+def _clone_score_structure(db: Session, *, base_policy_id: int, new_policy_id: int) -> None:
+    pillar_id_map: dict[int, int] = {}
+    subgroup_id_map: dict[int, int] = {}
+    indicator_id_map: dict[int, int] = {}
+
+    base_pillars = list(
+        db.scalars(
+            select(CreditDecisionPolicyPillar)
+            .where(CreditDecisionPolicyPillar.policy_id == base_policy_id)
+            .order_by(CreditDecisionPolicyPillar.sort_order.asc(), CreditDecisionPolicyPillar.id.asc())
+        ).all()
+    )
+    for base in base_pillars:
+        cloned = CreditDecisionPolicyPillar(
+            policy_id=new_policy_id,
+            code=base.code,
+            name=base.name,
+            description=base.description,
+            weight_percent=base.weight_percent,
+            sort_order=base.sort_order,
+            is_enabled=base.is_enabled,
+        )
+        db.add(cloned)
+        db.flush()
+        pillar_id_map[base.id] = cloned.id
+
+    base_subgroups = list(
+        db.scalars(
+            select(CreditDecisionPolicySubgroup)
+            .where(CreditDecisionPolicySubgroup.policy_id == base_policy_id)
+            .order_by(CreditDecisionPolicySubgroup.sort_order.asc(), CreditDecisionPolicySubgroup.id.asc())
+        ).all()
+    )
+    for base in base_subgroups:
+        cloned = CreditDecisionPolicySubgroup(
+            policy_id=new_policy_id,
+            pillar_id=pillar_id_map[base.pillar_id],
+            code=base.code,
+            name=base.name,
+            description=base.description,
+            weight_percent=base.weight_percent,
+            sort_order=base.sort_order,
+            is_enabled=base.is_enabled,
+        )
+        db.add(cloned)
+        db.flush()
+        subgroup_id_map[base.id] = cloned.id
+
+    base_indicators = list(
+        db.scalars(
+            select(CreditDecisionPolicyIndicator)
+            .where(CreditDecisionPolicyIndicator.policy_id == base_policy_id)
+            .order_by(CreditDecisionPolicyIndicator.sort_order.asc(), CreditDecisionPolicyIndicator.id.asc())
+        ).all()
+    )
+    for base in base_indicators:
+        cloned = CreditDecisionPolicyIndicator(
+            policy_id=new_policy_id,
+            subgroup_id=subgroup_id_map[base.subgroup_id],
+            code=base.code,
+            name=base.name,
+            description=base.description,
+            source_key=base.source_key,
+            value_type=base.value_type,
+            weight_percent=base.weight_percent,
+            aggregation_method=base.aggregation_method,
+            missing_data_behavior=base.missing_data_behavior,
+            sort_order=base.sort_order,
+            is_enabled=base.is_enabled,
+        )
+        db.add(cloned)
+        db.flush()
+        indicator_id_map[base.id] = cloned.id
+
+    base_ranges = list(
+        db.scalars(
+            select(CreditDecisionPolicyScoreRange)
+            .where(CreditDecisionPolicyScoreRange.policy_id == base_policy_id)
+            .order_by(CreditDecisionPolicyScoreRange.sort_order.asc(), CreditDecisionPolicyScoreRange.id.asc())
+        ).all()
+    )
+    for base in base_ranges:
+        db.add(
+            CreditDecisionPolicyScoreRange(
+                policy_id=new_policy_id,
+                indicator_id=indicator_id_map[base.indicator_id],
+                operator=base.operator,
+                threshold_value=base.threshold_value,
+                threshold_value_to=base.threshold_value_to,
+                score=base.score,
+                label=base.label,
+                sort_order=base.sort_order,
+                is_enabled=base.is_enabled,
+            )
+        )
+
+
+def create_credit_decision_policy_version(
+    db: Session,
+    base_policy_id: int,
+    current_user: User,
+    *,
+    justification: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> CreditDecisionPolicy:
+    base_policy = get_credit_decision_policy(db, base_policy_id)
+    existing_draft = db.scalar(
+        select(CreditDecisionPolicy)
+        .where(
+            CreditDecisionPolicy.code == base_policy.code,
+            CreditDecisionPolicy.status == "draft",
+        )
+        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
+    )
+    if existing_draft is not None:
+        raise CreditDecisionPolicyDraftExistsError(existing_draft.id)
+
+    new_policy = CreditDecisionPolicy(
+        code=base_policy.code,
+        name=base_policy.name,
+        version=_next_version_for_code(db, base_policy.code),
+        status="draft",
+        description=base_policy.description,
+        base_policy_id=base_policy.id,
+        config_json=deepcopy(base_policy.config_json),
+        created_by_user_id=current_user.id,
+        updated_by_user_id=current_user.id,
+    )
+    db.add(new_policy)
+    db.flush()
+
+    _clone_score_structure(db, base_policy_id=base_policy.id, new_policy_id=new_policy.id)
+    db.add(
+        AuditLog(
+            actor_user_id=current_user.id,
+            action="policy_version_created",
+            resource="credit_decision_policy",
+            resource_id=str(new_policy.id),
+            metadata_json={
+                "base_policy_id": base_policy.id,
+                "base_policy_version": base_policy.version,
+                "new_policy_id": new_policy.id,
+                "new_policy_version": new_policy.version,
+                "created_by": current_user.id,
+                "metadata_json": metadata_json or {},
+            },
+            notes=justification,
+        )
+    )
+    db.flush()
+    return new_policy
+
+
 def activate_credit_decision_policy(db: Session, policy_id: int, current_user: User) -> CreditDecisionPolicy:
     target = get_credit_decision_policy(db, policy_id)
     if target.status == "archived":
@@ -184,15 +501,15 @@ def activate_credit_decision_policy(db: Session, policy_id: int, current_user: U
 
     if target.status != "active":
         _validate_config_json(target.config_json)
-        previous_active = db.scalar(
+        previous_active_policies = db.scalars(
             select(CreditDecisionPolicy)
             .where(
                 CreditDecisionPolicy.status == "active",
                 CreditDecisionPolicy.id != target.id,
             )
             .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
-        )
-        if previous_active is not None:
+        ).all()
+        for previous_active in previous_active_policies:
             previous_active.status = "archived"
             previous_active.effective_to = datetime.now(timezone.utc)
             previous_active.updated_by_user_id = current_user.id
@@ -203,6 +520,7 @@ def activate_credit_decision_policy(db: Session, policy_id: int, current_user: U
         target.activated_at = datetime.now(timezone.utc)
         target.activated_by_user_id = current_user.id
         target.updated_by_user_id = current_user.id
+        db.flush()
 
     return target
 
@@ -216,6 +534,55 @@ def archive_credit_decision_policy(db: Session, policy_id: int, current_user: Us
     target.effective_to = datetime.now(timezone.utc)
     target.updated_by_user_id = current_user.id
     return target
+
+
+def _has_governance_request_for_policy(db: Session, policy_id: int) -> bool:
+    return db.scalar(
+        select(CreditDecisionPolicyGovernanceRequest.id)
+        .where(
+            CreditDecisionPolicyGovernanceRequest.policy_id == policy_id,
+            CreditDecisionPolicyGovernanceRequest.status.in_(("pending", "approved")),
+        )
+        .limit(1)
+    ) is not None
+
+
+def _has_analysis_policy_snapshot(db: Session, policy_id: int) -> bool:
+    rows = db.scalars(select(CreditAnalysis.decision_memory_json).where(CreditAnalysis.decision_memory_json.is_not(None))).all()
+    for memory in rows:
+        if not isinstance(memory, dict):
+            continue
+        snapshot = memory.get("policy_snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("policy_id") == policy_id:
+            return True
+    return False
+
+
+def delete_credit_decision_policy_draft(db: Session, policy_id: int, current_user: User) -> None:
+    target = get_credit_decision_policy(db, policy_id)
+    if target.status != "draft":
+        raise CreditDecisionPolicyValidationError("Somente versões em rascunho podem ser excluídas.")
+    if _has_governance_request_for_policy(db, target.id):
+        raise CreditDecisionPolicyValidationError("Não é possível excluir rascunho com solicitação de governança em andamento.")
+    if _has_analysis_policy_snapshot(db, target.id):
+        raise CreditDecisionPolicyValidationError("Não é possível excluir rascunho utilizado por snapshot de análise.")
+
+    db.add(
+        AuditLog(
+            actor_user_id=current_user.id,
+            action="policy_draft_deleted",
+            resource="credit_decision_policy",
+            resource_id=str(target.id),
+            metadata_json={
+                "policy_id": target.id,
+                "policy_code": target.code,
+                "policy_version": target.version,
+                "base_policy_id": target.base_policy_id,
+            },
+        )
+    )
+    db.delete(target)
+    db.flush()
 
 
 def ensure_active_credit_decision_policy_seed(db: Session) -> CreditDecisionPolicy:

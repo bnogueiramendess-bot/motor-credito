@@ -3,6 +3,11 @@ export type PolicyGovernanceDecisionRequest = {
   justification?: string | null;
 };
 
+export type PolicyGovernanceActionRequest = {
+  justification?: string | null;
+  metadata_json?: Record<string, unknown>;
+};
+
 export type PolicyGovernanceRequestApprovalDto = {
   workflow_role_code: string;
   decision: "approved" | "rejected" | null | string;

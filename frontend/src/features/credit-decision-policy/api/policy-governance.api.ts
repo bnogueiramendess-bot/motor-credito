@@ -1,6 +1,7 @@
 import { apiClient } from "@/shared/lib/http/http-client";
 
 import {
+  PolicyGovernanceActionRequest,
   PolicyGovernanceDecisionRequest,
   PolicyGovernanceExecutiveSummaryResponse,
   PolicyGovernanceRequestDto,
@@ -13,6 +14,16 @@ export async function listPolicyGovernanceRequests() {
 export async function getPolicyGovernanceExecutiveSummary(requestId: number) {
   return apiClient.get<PolicyGovernanceExecutiveSummaryResponse>(
     `/api/credit-decision-policies/governance-requests/${requestId}/executive-summary`,
+  );
+}
+
+export async function requestPolicyPublication(
+  policyId: number,
+  payload: PolicyGovernanceActionRequest,
+) {
+  return apiClient.post<PolicyGovernanceRequestDto, PolicyGovernanceActionRequest>(
+    `/api/credit-decision-policies/${policyId}/request-publication`,
+    payload,
   );
 }
 

@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from app.core.config import settings
-from app.services.approval_matrix import resolve_required_approval_roles
+from app.services.approval_matrix import INITIAL_APPROVAL_MATRIX_RULES, resolve_required_approval_roles
 from app.models.enums import AnalysisStatus
 from app.services.workflow_authorization import (
     can_execute_approval_action,
@@ -15,6 +15,7 @@ from app.services.workflow_authorization import (
     resolve_credit_workflow_action,
     resolve_credit_workflow_available_actions,
 )
+from app.services.workflow_roles import WORKFLOW_ROLE_CATALOG
 
 
 @dataclass
@@ -79,6 +80,18 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
     def test_doa_enforcement_is_enabled_by_default(self) -> None:
         self.assertTrue(settings.credit_approval_matrix_enforcement_enabled)
 
+    def test_initial_approval_matrix_uses_official_doa_roles(self) -> None:
+        seeded_roles = {
+            item["code"]: item["workflow_role_codes"]
+            for item in INITIAL_APPROVAL_MATRIX_RULES
+        }
+
+        self.assertEqual(seeded_roles["DOA-0001"], ["HEAD_FINANCE"])
+        self.assertEqual(seeded_roles["DOA-0002"], ["CFO"])
+        self.assertEqual(seeded_roles["DOA-0003"], ["CFO"])
+        self.assertEqual(seeded_roles["DOA-0004"], ["CEO"])
+        self.assertEqual(seeded_roles["DOA-0005"], ["CREDIT_COMMITTEE"])
+
     def test_user_with_credit_analyst_role_can_execute_analysis(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=1), permissions=set())
         with patch(
@@ -118,6 +131,96 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
             result = can_execute_credit_analysis(db=object(), current=current)  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertEqual(result.workflow_role_matched, "CREDIT_ANALYST")
+
+    def test_operational_role_catalog_reflects_simplified_workflow(self) -> None:
+        catalog = {item["code"]: item for item in WORKFLOW_ROLE_CATALOG}
+        self.assertEqual(catalog["CREDIT_REQUESTER"]["name"], "Solicitante")
+        self.assertEqual(catalog["CREDIT_CONSULTANT"]["name"], "Consultor")
+        self.assertEqual(catalog["CREDIT_CONSULTANT"]["type"], "operational")
+        self.assertIn("sem realizar alterações", catalog["CREDIT_CONSULTANT"]["description"])
+        self.assertIn("CREDIT_REVIEWER", catalog)
+        self.assertIn("CREDIT_OPINION", catalog)
+
+    def test_credit_analyst_can_execute_full_technical_flow(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=41), permissions=set())
+        analysis = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            motor_result=None,
+        )
+        actions = [
+            "start_analysis",
+            "continue_analysis",
+            "import_technical_reports",
+            "calculate_score",
+            "save_technical_analysis",
+            "execute_decision_engine",
+            "generate_opinion",
+            "submit_approval",
+        ]
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_ANALYST"]):
+            for action in actions:
+                target = None if action == "start_analysis" else analysis
+                if action == "start_analysis":
+                    target = DummyAnalysis(
+                        final_limit=None,
+                        suggested_limit=Decimal("100000"),
+                        requested_limit=Decimal("100000"),
+                        analysis_status=AnalysisStatus.CREATED,
+                        motor_result=None,
+                    )
+                result = resolve_credit_workflow_action(db=object(), current=current, action=action, analysis=target)  # type: ignore[arg-type]
+                self.assertTrue(result.allowed, action)
+                self.assertIn("CREDIT_ANALYST", result.workflow_context.get("matched_roles", []))
+
+    def test_legacy_operational_roles_still_work_during_compatibility_period(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=42), permissions=set())
+        in_progress = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            motor_result=None,
+        )
+        pending = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            analysis_status=AnalysisStatus.CREATED,
+            motor_result=None,
+        )
+
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_OPINION"]):
+            result = resolve_credit_workflow_action(db=object(), current=current, action="submit_approval", analysis=in_progress)  # type: ignore[arg-type]
+            self.assertTrue(result.allowed)
+
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_REVIEWER"]):
+            result = resolve_credit_workflow_action(db=object(), current=current, action="start_analysis", analysis=pending)  # type: ignore[arg-type]
+            self.assertTrue(result.allowed)
+
+    def test_credit_consultant_has_read_only_workflow_access(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=43), permissions=set())
+        in_progress = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            motor_result=None,
+        )
+        approved = DummyAnalysis(
+            final_limit=Decimal("100000"),
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            final_decision="approved",
+        )
+
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_CONSULTANT"]):
+            self.assertTrue(resolve_credit_workflow_action(db=object(), current=current, action="view_tracking", analysis=in_progress).allowed)  # type: ignore[arg-type]
+            self.assertTrue(resolve_credit_workflow_action(db=object(), current=current, action="view_analysis", analysis=in_progress).allowed)  # type: ignore[arg-type]
+            self.assertTrue(resolve_credit_workflow_action(db=object(), current=current, action="view_result", analysis=approved).allowed)  # type: ignore[arg-type]
+            self.assertFalse(resolve_credit_workflow_action(db=object(), current=current, action="start_analysis", analysis=in_progress).allowed)  # type: ignore[arg-type]
+            self.assertFalse(resolve_credit_workflow_action(db=object(), current=current, action="continue_analysis", analysis=in_progress).allowed)  # type: ignore[arg-type]
+            self.assertFalse(resolve_credit_workflow_action(db=object(), current=current, action="submit_approval", analysis=in_progress).allowed)  # type: ignore[arg-type]
+            self.assertFalse(resolve_credit_workflow_action(db=object(), current=current, action="approve", analysis=in_progress).allowed)  # type: ignore[arg-type]
 
     def test_resolve_required_approval_roles_by_amount_inactive_and_priority(self) -> None:
         high_priority = DummyRule(
@@ -183,6 +286,38 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
             result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
         self.assertTrue(result.allowed)
         self.assertEqual(result.authorization_source, "approval_matrix")
+
+    def test_official_doa_role_approves_new_matrix_rule(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=60), permissions=set())
+        analysis = DummyAnalysis(final_limit=None, suggested_limit=Decimal("900000"), requested_limit=Decimal("900000"))
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["HEAD_FINANCE"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={"rule_id": 1, "rule_name": "Faixa 0-1MM", "required_roles": ["HEAD_FINANCE"], "required_approvals": 1, "requires_committee": False},
+            ),
+        ):
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.authorization_source, "approval_matrix")
+
+    def test_legacy_approval_role_is_not_sufficient_for_new_matrix_rule(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=61), permissions=set())
+        analysis = DummyAnalysis(final_limit=None, suggested_limit=Decimal("900000"), requested_limit=Decimal("900000"))
+        with (
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={"rule_id": 1, "rule_name": "Faixa 0-1MM", "required_roles": ["HEAD_FINANCE"], "required_approvals": 1, "requires_committee": False},
+            ),
+        ):
+            result = can_execute_approval_action(db=object(), current=current, analysis=analysis, action="approve")  # type: ignore[arg-type]
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.authorization_source, "denied")
 
     def test_enforcement_true_user_without_required_role_is_blocked(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=7), permissions=set())

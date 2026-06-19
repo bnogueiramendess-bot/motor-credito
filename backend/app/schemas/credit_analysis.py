@@ -232,6 +232,19 @@ class CreditAnalysisQueueOptionsResponse(BaseModel):
     analysts: list[CreditAnalysisQueueOption]
 
 
+class CreditAnalysisPolicyReference(BaseModel):
+    engine: str | None = None
+    policy_id: int | None = None
+    policy_code: str | None = None
+    policy_name: str | None = None
+    policy_version: int | None = None
+    captured_at: datetime | str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    display_label: str
+    status_label: str
+
+
 class CreditAnalysisMonitorItem(BaseModel):
     item_type: str = "CREDIT_ANALYSIS"
     analysis_id: int
@@ -265,6 +278,7 @@ class CreditAnalysisMonitorItem(BaseModel):
     next_responsible_role: str
     applicable_doa_code: str | None = None
     applicable_doa_range: str | None = None
+    policy_reference: CreditAnalysisPolicyReference
     available_actions: list[str]
 
 

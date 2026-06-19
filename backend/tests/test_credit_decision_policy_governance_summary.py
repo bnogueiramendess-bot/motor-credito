@@ -78,6 +78,11 @@ class CreditDecisionPolicyGovernanceSummaryTestCase(unittest.TestCase):
     def setUpClass(cls) -> None:
         with SessionLocal() as db:
             bind = db.get_bind()
+            CreditDecisionPolicy.__table__.create(bind, checkfirst=True)
+            policy_columns = {column["name"] for column in inspect(bind).get_columns("credit_decision_policies")}
+            if "base_policy_id" not in policy_columns:
+                db.execute(text("ALTER TABLE credit_decision_policies ADD COLUMN base_policy_id INTEGER"))
+                db.commit()
             CompanyPolicyGovernanceSetting.__table__.create(bind, checkfirst=True)
             CreditDecisionPolicyGovernanceRequest.__table__.create(bind, checkfirst=True)
             columns = {column["name"] for column in inspect(bind).get_columns("credit_decision_policy_governance_requests")}

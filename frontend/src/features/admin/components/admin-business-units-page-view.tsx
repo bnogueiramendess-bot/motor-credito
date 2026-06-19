@@ -117,7 +117,7 @@ export function AdminBusinessUnitsPageView() {
           <div>
           <h1 className="text-2xl font-semibold text-slate-900">Cadastro de BUs</h1>
             <p className="mt-2 text-sm text-slate-600">
-              Gerencie as unidades de negócio utilizadas para controle de acesso, carteira e governança.
+              Gerencie as unidades de negócio utilizadas para controle de acesso, carteira e regras administrativas.
             </p>
           </div>
           <button

@@ -3,11 +3,12 @@ from __future__ import annotations
 import unittest
 
 from fastapi import HTTPException
-from sqlalchemy import delete, inspect, select
+from sqlalchemy import delete, inspect, select, text
 
 from app.core.security import CurrentUser
 from app.db.session import SessionLocal
 from app.models.audit_log import AuditLog
+from app.models.company_policy_governance_role import CompanyPolicyGovernanceRole
 from app.models.company_policy_governance_setting import CompanyPolicyGovernanceSetting
 from app.models.credit_decision_policy import CreditDecisionPolicy
 from app.models.credit_decision_policy_governance_request import CreditDecisionPolicyGovernanceRequest
@@ -37,7 +38,13 @@ class CreditDecisionPolicyGovernanceWorkflowTestCase(unittest.TestCase):
     def setUpClass(cls) -> None:
         with SessionLocal() as db:
             bind = db.get_bind()
+            CreditDecisionPolicy.__table__.create(bind, checkfirst=True)
+            policy_columns = {column["name"] for column in inspect(bind).get_columns("credit_decision_policies")}
+            if "base_policy_id" not in policy_columns:
+                db.execute(text("ALTER TABLE credit_decision_policies ADD COLUMN base_policy_id INTEGER"))
+                db.commit()
             CompanyPolicyGovernanceSetting.__table__.create(bind, checkfirst=True)
+            CompanyPolicyGovernanceRole.__table__.create(bind, checkfirst=True)
             CreditDecisionPolicyGovernanceRequest.__table__.create(bind, checkfirst=True)
             CreditDecisionPolicyGovernanceRequestApproval.__table__.create(bind, checkfirst=True)
             ensure_workflow_roles_seed(db)
@@ -51,6 +58,8 @@ class CreditDecisionPolicyGovernanceWorkflowTestCase(unittest.TestCase):
         self.db = SessionLocal()
         self.user = self.db.get(User, self.seed_user_id)
         self.policy = self.db.get(CreditDecisionPolicy, self.policy_id)
+        self.policy.status = "draft"
+        self.policy.activated_at = None
         self.company_id = self.user.company_id
         request_ids = list(
             self.db.scalars(
@@ -69,6 +78,11 @@ class CreditDecisionPolicyGovernanceWorkflowTestCase(unittest.TestCase):
         self.db.execute(
             delete(CreditDecisionPolicyGovernanceRequest).where(
                 CreditDecisionPolicyGovernanceRequest.company_id == self.company_id
+            )
+        )
+        self.db.execute(
+            delete(CompanyPolicyGovernanceRole).where(
+                CompanyPolicyGovernanceRole.company_id == self.company_id
             )
         )
         self.db.execute(
@@ -319,15 +333,9 @@ class CreditDecisionPolicyGovernanceWorkflowTestCase(unittest.TestCase):
         )
         self.assertEqual(actions, {"request_created", "request_rejected"})
 
-    def test_workflow_does_not_activate_publish_or_change_policy(self) -> None:
+    def test_final_policy_publish_approval_executes_publication_once(self) -> None:
         self._assign("HEAD_FINANCE")
-        before = {
-            "status": self.policy.status,
-            "version": self.policy.version,
-            "config_json": self.policy.config_json,
-            "activated_at": self.policy.activated_at,
-            "updated_at": self.policy.updated_at,
-        }
+        before_config = self.policy.config_json
         created = self._create()
         approve_governance_request(
             self.db,
@@ -337,15 +345,18 @@ class CreditDecisionPolicyGovernanceWorkflowTestCase(unittest.TestCase):
         )
         self.db.flush()
         self.db.refresh(self.policy)
-        after = {
-            "status": self.policy.status,
-            "version": self.policy.version,
-            "config_json": self.policy.config_json,
-            "activated_at": self.policy.activated_at,
-            "updated_at": self.policy.updated_at,
-        }
+        actions = list(
+            self.db.scalars(
+                select(AuditLog.action).where(
+                    AuditLog.resource == "credit_decision_policy",
+                    AuditLog.resource_id == str(self.policy.id),
+                )
+            ).all()
+        )
 
-        self.assertEqual(before, after)
+        self.assertEqual(self.policy.status, "active")
+        self.assertEqual(self.policy.config_json, before_config)
+        self.assertEqual(actions.count("policy_publication_executed"), 1)
 
     def test_policy_create_request_allows_no_policy_id(self) -> None:
         created = self._create(action_type="policy_create")

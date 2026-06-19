@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
     {
         "code": "CREDIT_REQUESTER",
-        "name": "Solicitante Comercial",
+        "name": "Solicitante",
         "type": "operational",
         "description": "Pode abrir solicitações de crédito.",
     },
@@ -24,6 +24,12 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
         "name": "Analista de Crédito",
         "type": "operational",
         "description": "Pode executar análise técnica.",
+    },
+    {
+        "code": "CREDIT_CONSULTANT",
+        "name": "Consultor",
+        "type": "operational",
+        "description": "Pode consultar análises, decisões e históricos sem realizar alterações.",
     },
     {
         "code": "CREDIT_REVIEWER",

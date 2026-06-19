@@ -45,6 +45,7 @@ from app.schemas.credit_analysis import (
     CreditAnalysisMonitorItem,
     CreditAnalysisMonitorKpis,
     CreditAnalysisMonitorResponse,
+    CreditAnalysisPolicyReference,
     CreditAnalysisApprovalQueueKpis,
     CreditAnalysisApprovalQueueResponse,
     CreditPolicyApprovalQueueItem,
@@ -945,6 +946,132 @@ def _resolve_financial_impact(analysis: CreditAnalysis) -> Decimal | None:
     return recommended - analysis.current_limit
 
 
+def _policy_display_name(policy_name: object, policy_code: object) -> str | None:
+    name = str(policy_name).strip() if policy_name is not None else ""
+    if name:
+        return name
+    code = str(policy_code).strip() if policy_code is not None else ""
+    if not code:
+        return None
+    parts = [part for part in code.replace("-", "_").split("_") if part]
+    if not parts:
+        return None
+    label = " ".join(part.upper() if part.lower() in {"coface", "doa"} else part.capitalize() for part in parts)
+    return label or None
+
+
+def _to_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _policy_reference_unidentified() -> CreditAnalysisPolicyReference:
+    return CreditAnalysisPolicyReference(
+        engine=None,
+        display_label="Política não identificada",
+        status_label="Não foi possível identificar a política utilizada nesta análise.",
+    )
+
+
+def _policy_reference_from_payload(payload: dict, *, source: str) -> CreditAnalysisPolicyReference:
+    engine = payload.get("engine") or payload.get("score_source")
+    engine_value = str(engine).strip() if engine is not None else None
+    fallback_used = bool(payload.get("fallback_used"))
+    fallback_reason = str(payload.get("fallback_reason")).strip() if payload.get("fallback_reason") else None
+    policy_version = _to_int_or_none(payload.get("policy_version"))
+
+    if fallback_used:
+        return CreditAnalysisPolicyReference(
+            engine=engine_value or "legacy_policy",
+            policy_id=_to_int_or_none(payload.get("policy_id")),
+            policy_code=str(payload.get("policy_code")).strip() if payload.get("policy_code") else None,
+            policy_name=str(payload.get("policy_name")).strip() if payload.get("policy_name") else None,
+            policy_version=policy_version,
+            captured_at=payload.get("captured_at"),
+            fallback_used=True,
+            fallback_reason=fallback_reason,
+            display_label="Legado",
+            status_label=f"Fallback utilizado: {fallback_reason}" if fallback_reason else "Fallback utilizado",
+        )
+
+    if engine_value == "legacy_policy":
+        return CreditAnalysisPolicyReference(
+            engine="legacy_policy",
+            policy_id=_to_int_or_none(payload.get("policy_id")) or 1,
+            policy_name=str(payload.get("policy_name")).strip() if payload.get("policy_name") else "Política Legado",
+            policy_version=policy_version or 1,
+            captured_at=payload.get("captured_at"),
+            fallback_used=False,
+            fallback_reason=None,
+            display_label=f"Legado v{policy_version or 1}",
+            status_label="Motor legado",
+        )
+
+    if engine_value == "configurable_policy":
+        label = _policy_display_name(payload.get("policy_name"), payload.get("policy_code"))
+        if not label or policy_version is None:
+            return _policy_reference_unidentified()
+        return CreditAnalysisPolicyReference(
+            engine="configurable_policy",
+            policy_id=_to_int_or_none(payload.get("policy_id")),
+            policy_code=str(payload.get("policy_code")).strip() if payload.get("policy_code") else None,
+            policy_name=label,
+            policy_version=policy_version,
+            captured_at=payload.get("captured_at"),
+            fallback_used=False,
+            fallback_reason=None,
+            display_label=f"{label} v{policy_version}",
+            status_label="Política configurável",
+        )
+
+    if source == "engine_trace" and payload.get("score_source") == "legacy_policy":
+        return CreditAnalysisPolicyReference(
+            engine="legacy_policy",
+            policy_id=1,
+            policy_name="Política Legado",
+            policy_version=1,
+            fallback_used=False,
+            fallback_reason=None,
+            display_label="Legado v1",
+            status_label="Motor legado",
+        )
+
+    return _policy_reference_unidentified()
+
+
+def _resolve_policy_reference(analysis: CreditAnalysis) -> CreditAnalysisPolicyReference:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    snapshot = memory.get("policy_snapshot")
+    if isinstance(snapshot, dict):
+        return _policy_reference_from_payload(snapshot, source="policy_snapshot")
+
+    engine_trace = memory.get("engine_trace")
+    if isinstance(engine_trace, dict):
+        return _policy_reference_from_payload(engine_trace, source="engine_trace")
+
+    score_source = memory.get("score_source")
+    if score_source:
+        payload = {"score_source": score_source, "engine": score_source}
+        if "fallback_used" in memory:
+            payload["fallback_used"] = memory.get("fallback_used")
+        if "fallback_reason" in memory:
+            payload["fallback_reason"] = memory.get("fallback_reason")
+        return _policy_reference_from_payload(payload, source="score_source")
+
+    if analysis.analysis_status == AnalysisStatus.CREATED and analysis.analysis_started_at is None:
+        return CreditAnalysisPolicyReference(
+            engine=None,
+            display_label="A definir",
+            status_label="Capturada no início da análise",
+        )
+
+    return _policy_reference_unidentified()
+
+
 def _clamp_journey_step(step: int | None) -> int | None:
     if step is None:
         return None
@@ -1148,6 +1275,7 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
         resolve_credit_workflow_action(db, current, action="return_to_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_dossier", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_result", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="view_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
     ]
     if any(visibility_checks):
         return
@@ -2569,7 +2697,17 @@ def list_credit_analyses_monitor(
     page_size = min(max(page_size, 1), 100)
     can_view_own = _has_any_permission(current, "credit_request_view_own", "credit.requests.view")
     can_view_bu = _has_any_permission(current, "credit_request_view_bu", "scope:all_bu")
-    if not can_view_own and not current.bu_ids and "scope:all_bu" not in current.permissions:
+    is_consultant = db.scalar(
+        select(UserWorkflowRole.id)
+        .join(WorkflowRole, WorkflowRole.id == UserWorkflowRole.workflow_role_id)
+        .where(
+            UserWorkflowRole.user_id == current.user.id,
+            WorkflowRole.code == "CREDIT_CONSULTANT",
+            WorkflowRole.is_active.is_(True),
+        )
+        .limit(1)
+    ) is not None
+    if not can_view_own and not is_consultant and not current.bu_ids and "scope:all_bu" not in current.permissions:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissao para visualizar o monitor de solicitacoes.")
 
     bu_context = resolve_business_unit_context(db, current, business_unit_context)
@@ -2661,7 +2799,7 @@ def list_credit_analyses_monitor(
             continue
         has_technical_visibility = any(action in TECHNICAL_MONITOR_VISIBILITY_ACTIONS for action in available_actions)
 
-        if can_view_own and not can_view_bu:
+        if can_view_own and not can_view_bu and not is_consultant:
             is_requester = requester_email == current.user.email.strip().lower()
             if not is_requester and not has_technical_visibility:
                 continue
@@ -2708,6 +2846,7 @@ def list_credit_analyses_monitor(
             aging_days=aging_days,
             stage_aging_days=stage_aging_days,
             next_responsible_role=next_role,
+            policy_reference=_resolve_policy_reference(analysis),
             available_actions=sorted(set(available_actions)),
         )
         items.append(item)
@@ -2962,6 +3101,7 @@ def list_credit_analyses_approval_queue(
             next_responsible_role="aprovador",
             applicable_doa_code=approval_summary.applicable_doa_code,
             applicable_doa_range=approval_summary.applicable_doa_range,
+            policy_reference=_resolve_policy_reference(analysis),
             available_actions=available_actions,
         )
         items.append(item)

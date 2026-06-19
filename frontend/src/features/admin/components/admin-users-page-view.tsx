@@ -14,6 +14,9 @@ import { useWorkflowRolesQuery } from "@/features/admin/hooks/use-workflow-roles
 import { ApiError } from "@/shared/lib/http/http-client";
 import { cn } from "@/shared/lib/utils";
 
+const VISIBLE_OPERATIONAL_WORKFLOW_ROLE_CODES = new Set(["CREDIT_REQUESTER", "CREDIT_ANALYST", "CREDIT_CONSULTANT"]);
+const OPERATIONAL_WORKFLOW_ROLE_ORDER = ["CREDIT_REQUESTER", "CREDIT_ANALYST", "CREDIT_CONSULTANT"];
+
 function userStatusLabel(user: AdminUserDto) {
   if (user.first_access_pending) return "Pendente de primeiro acesso";
   return user.is_active ? "Ativo" : "Inativo";
@@ -49,7 +52,12 @@ export function AdminUsersPageView() {
   );
   const workflowRolesByType = useMemo(
     () => ({
-      operational: (workflowRolesQuery.data ?? []).filter((role) => role.type === "operational"),
+      operational: (workflowRolesQuery.data ?? [])
+        .filter((role) => role.type === "operational" && VISIBLE_OPERATIONAL_WORKFLOW_ROLE_CODES.has(role.code))
+        .sort(
+          (first, second) =>
+            OPERATIONAL_WORKFLOW_ROLE_ORDER.indexOf(first.code) - OPERATIONAL_WORKFLOW_ROLE_ORDER.indexOf(second.code)
+        ),
       governance: (workflowRolesQuery.data ?? []).filter((role) => role.type === "governance"),
       approval: (workflowRolesQuery.data ?? []).filter((role) => role.type === "approval")
     }),
@@ -116,14 +124,14 @@ export function AdminUsersPageView() {
       const type = workflowRoleTypeByCode.get(code);
       if (type) groups.add(type);
     }
+    groups.delete("approval");
 
-    if (groups.size === 3) return "Todos";
+    if (groups.size === 2) return "Todos";
     if (groups.size === 0) return "Sem vínculo";
 
     const labels: Array<{ type: WorkflowRoleDto["type"]; label: string }> = [
       { type: "operational", label: "Operacionais" },
-      { type: "governance", label: "Governança" },
-      { type: "approval", label: "Aprovação" }
+      { type: "governance", label: "Papéis de Aprovação (DOA)" }
     ];
     return labels.filter((item) => groups.has(item.type)).map((item) => item.label).join(", ");
   }
@@ -422,7 +430,8 @@ export function AdminUsersPageView() {
                 <div className="space-y-2 rounded-lg border border-slate-300 p-3">
                   <p className="text-sm font-medium text-slate-700">Papéis no Workflow</p>
                   <p className="text-xs text-slate-500">
-                    Defina os papéis operacionais da pessoa no fluxo de crédito. Esse vínculo não altera os acessos administrativos por flag.
+                    Defina os papéis operacionais e os papéis corporativos utilizados na Matriz de Aprovação (DOA) para
+                    alçadas, aprovações e exceções. Esse vínculo não altera os acessos administrativos por flag.
                   </p>
                   {workflowRolesQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
                   {workflowRolesQuery.isError ? (
@@ -431,8 +440,7 @@ export function AdminUsersPageView() {
                   {!workflowRolesQuery.isLoading && !workflowRolesQuery.isError ? (
                     <div className="space-y-4">
                       {renderWorkflowRoleGroup("Operacionais", workflowRolesByType.operational)}
-                      {renderWorkflowRoleGroup("Governança", workflowRolesByType.governance)}
-                      {renderWorkflowRoleGroup("Aprovação", workflowRolesByType.approval)}
+                      {renderWorkflowRoleGroup("Papéis de Aprovação (DOA)", workflowRolesByType.governance)}
                     </div>
                   ) : null}
                 </div>

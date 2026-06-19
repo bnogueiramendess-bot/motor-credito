@@ -497,6 +497,12 @@ def _find_base_policy_from_metadata(db: Session, request: CreditDecisionPolicyGo
         return None
 
 
+def _find_base_policy_from_target(db: Session, target_policy: CreditDecisionPolicy | None) -> CreditDecisionPolicy | None:
+    if target_policy is None or target_policy.base_policy_id is None:
+        return None
+    return db.get(CreditDecisionPolicy, target_policy.base_policy_id)
+
+
 def _find_latest_active_policy(
     db: Session,
     *,
@@ -540,7 +546,7 @@ def build_policy_change_summary(
             "warnings": [],
         }
     if request.action_type == "policy_edit":
-        base_policy = _find_base_policy_from_metadata(db, request)
+        base_policy = _find_base_policy_from_target(db, target_policy) or _find_base_policy_from_metadata(db, request)
         if base_policy is None:
             return {
                 "has_comparison": False,
@@ -552,7 +558,7 @@ def build_policy_change_summary(
             }
         return compare_policy_versions(db, base_policy=base_policy, target_policy=target_policy)
     if request.action_type == "policy_publish":
-        base_policy = _find_latest_active_policy(db, target_policy=target_policy)
+        base_policy = _find_base_policy_from_target(db, target_policy) or _find_latest_active_policy(db, target_policy=target_policy)
         if base_policy is None:
             return {
                 "has_comparison": False,

@@ -14,6 +14,7 @@ class CreditDecisionPolicyRead(BaseModel):
     version: int
     status: str
     description: str | None = None
+    base_policy_id: int | None = None
     effective_from: datetime | None = None
     effective_to: datetime | None = None
     config_json: dict[str, Any]
@@ -31,6 +32,7 @@ class CreditDecisionPolicyListItem(BaseModel):
     version: int
     status: str
     description: str | None = None
+    base_policy_id: int | None = None
     effective_from: datetime | None = None
     effective_to: datetime | None = None
     created_at: datetime
@@ -43,6 +45,57 @@ class CreditDecisionPolicyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1000)
     config_json: dict[str, Any]
+
+
+class CreditDecisionPolicyVersionCreate(BaseModel):
+    justification: str | None = Field(default=None, max_length=2000)
+    metadata_json: dict[str, Any] | None = None
+
+
+class CreditDecisionPolicyPillarPatch(BaseModel):
+    id: int
+    weight_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    is_enabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreditDecisionPolicySubgroupPatch(BaseModel):
+    id: int
+    weight_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    is_enabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreditDecisionPolicyIndicatorPatch(BaseModel):
+    id: int
+    weight_percent: Decimal | None = Field(default=None, ge=0, le=100)
+    is_enabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreditDecisionPolicyScoreRangePatch(BaseModel):
+    id: int
+    operator: str | None = None
+    threshold_value: Decimal | None = None
+    threshold_value_to: Decimal | None = None
+    score: Decimal | None = Field(default=None, ge=0, le=10)
+    label: str | None = Field(default=None, max_length=255)
+    sort_order: int | None = None
+    is_enabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CreditDecisionPolicyScoreStructurePatch(BaseModel):
+    pillars: list[CreditDecisionPolicyPillarPatch] = Field(default_factory=list)
+    subgroups: list[CreditDecisionPolicySubgroupPatch] = Field(default_factory=list)
+    indicators: list[CreditDecisionPolicyIndicatorPatch] = Field(default_factory=list)
+    score_ranges: list[CreditDecisionPolicyScoreRangePatch] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class CreditDecisionPolicyActivateResponse(BaseModel):

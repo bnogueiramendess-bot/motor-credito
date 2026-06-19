@@ -28,14 +28,18 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
 import {
   getPolicyGovernanceExecutiveSummary,
-  listPolicyGovernanceRequests
+  listPolicyGovernanceRequests,
+  requestPolicyPublication
 } from "@/features/credit-decision-policy/api/policy-governance.api";
 import {
+  PolicyGovernanceActionRequest,
   PolicyGovernanceExecutiveSummaryResponse,
   PolicyGovernanceRequestDto
 } from "@/features/credit-decision-policy/api/policy-governance.contracts";
 import {
   getCurrentScoreStructure,
+  getScoreStructure,
+  listPolicies,
   PillarOneSimulationResultDto,
   PillarFiveSimulationResultDto,
   PillarFourSimulationResultDto,
@@ -43,19 +47,25 @@ import {
   ScoreIndicatorDto,
   ScorePillarDto,
   ScorePillarRoadmapDto,
+  ScorePolicyDto,
   ScorePolicyProgressDto,
   ScoreRangeDto,
+  ScoreStructurePatchPayload,
   ScoreStructureDto,
   ScoreSubgroupDto,
   ScoreValidationCheckDto,
   ScoreValidationIssueDto,
+  createPolicyVersion,
+  deletePolicyDraft,
   simulatePillarOneScore,
   simulatePillarFiveScore,
   simulatePillarFourScore,
-  simulatePillarTwoScore
+  simulatePillarTwoScore,
+  updateScoreStructure
 } from "@/features/credit-decision-policy/api/score-policy.api";
 import { formatCurrencyInputBRL, toNullableNumberInput } from "@/features/analysis-journey/utils/formatters";
 import { hasPermission } from "@/shared/lib/auth/permissions";
+import { ApiError } from "@/shared/lib/http/http-client";
 
 function toNumber(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") return null;
@@ -67,6 +77,19 @@ function displayPercent(value: string | number | null | undefined) {
   const numberValue = toNumber(value);
   if (numberValue === null) return "-";
   return `${numberValue.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
+}
+
+function editableNumberValue(value: string | number | null | undefined) {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(".", ",");
+}
+
+function normalizeDecimalInput(value: string) {
+  return value.replace(/[^\d,.-]/g, "").replace(",", ".");
+}
+
+function sumPercent(values: Array<string | number | null | undefined>) {
+  return values.reduce<number>((total, value) => total + (toNumber(value) ?? 0), 0);
 }
 
 function displayDecimal(value: string | number | null | undefined) {
@@ -573,7 +596,11 @@ function Toolbar({
   onSaveDraft,
   onPublishPolicy,
   isSaving,
-  isPublishing
+  canSaveDraft,
+  isPublishing,
+  publicationButtonDisabled,
+  publicationButtonLabel,
+  publicationButtonTitle
 }: {
   activeView: PolicyWorkspaceView;
   hasSelectedPolicy: boolean;
@@ -582,9 +609,12 @@ function Toolbar({
   onSaveDraft: () => void;
   onPublishPolicy: () => void;
   isSaving: boolean;
+  canSaveDraft: boolean;
   isPublishing: boolean;
+  publicationButtonDisabled: boolean;
+  publicationButtonLabel: string;
+  publicationButtonTitle: string;
 }) {
-  const canRequestGovernancePublication = false;
   const tabs: Array<{ id: PolicyWorkspaceView; label: string; description: string }> = [
     { id: "monitor", label: "Monitor de Políticas", description: "Visão inicial e gestão" },
     { id: "score", label: "Score Institucional", description: "Configuração técnica" },
@@ -622,35 +652,38 @@ function Toolbar({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            aria-disabled={!hasSelectedPolicy || isSaving}
+            disabled={!hasSelectedPolicy || isSaving || !canSaveDraft}
+            aria-disabled={!hasSelectedPolicy || isSaving || !canSaveDraft}
             onClick={onSaveDraft}
-            title={hasSelectedPolicy ? "Verificar alterações pendentes." : "Selecione uma política para continuar."}
+            title={
+              !hasSelectedPolicy
+                ? "Selecione uma política para continuar."
+                : canSaveDraft
+                  ? "Salvar alterações da versão draft."
+                  : "Nenhuma alteração de rascunho pendente."
+            }
             className={`rounded-lg border px-4 py-2 text-xs font-bold transition ${
-              hasSelectedPolicy
+              hasSelectedPolicy && canSaveDraft
                 ? "border-slate-300 bg-white text-slate-700 shadow-sm"
                 : "cursor-not-allowed border-slate-200 bg-white text-slate-400"
             }`}
           >
-            {isSaving ? "Salvando..." : "Salvar rascunho"}
+            {isSaving ? "Salvando rascunho..." : "Salvar rascunho"}
           </button>
           {activeView === "governance" ? (
             <button
               type="button"
-              disabled={!hasSelectedPolicy || isPublishing || !canRequestGovernancePublication}
-              aria-disabled={!hasSelectedPolicy || isPublishing || !canRequestGovernancePublication}
+              disabled={!hasSelectedPolicy || isPublishing || publicationButtonDisabled}
+              aria-disabled={!hasSelectedPolicy || isPublishing || publicationButtonDisabled}
               onClick={onPublishPolicy}
-              title={
-                hasSelectedPolicy
-                  ? "A solicitação de publicação será enviada para aprovação pela governança."
-                  : "Selecione uma política para continuar."
-              }
+              title={hasSelectedPolicy ? publicationButtonTitle : "Selecione uma política para continuar."}
               className={`rounded-lg border px-4 py-2 text-xs font-bold transition ${
-                hasSelectedPolicy && canRequestGovernancePublication
+                hasSelectedPolicy && !publicationButtonDisabled
                   ? "border-blue-700 bg-blue-700 text-white shadow-sm"
                   : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
               }`}
             >
-              {isPublishing ? "Enviando solicitação..." : "Solicitar publicação via governança"}
+              {isPublishing ? "Enviando solicitação..." : publicationButtonLabel}
             </button>
           ) : null}
         </div>
@@ -726,7 +759,17 @@ function PillarSidebar({
   );
 }
 
-function PillarSummary({ pillar, validationStatus }: { pillar: ScorePillarDto | null; validationStatus: string }) {
+function PillarSummary({
+  pillar,
+  validationStatus,
+  isEditable,
+  onWeightChange
+}: {
+  pillar: ScorePillarDto | null;
+  validationStatus: string;
+  isEditable: boolean;
+  onWeightChange: (pillarId: number, value: string) => void;
+}) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-4 py-4">
@@ -736,7 +779,20 @@ function PillarSummary({ pillar, validationStatus }: { pillar: ScorePillarDto | 
       <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
           <span className="text-xs font-bold uppercase text-slate-500">Peso institucional</span>
-          <strong className="mt-2 block text-2xl text-slate-950">{displayPercent(pillar?.weight_percent)}</strong>
+          {isEditable && pillar ? (
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                inputMode="decimal"
+                value={editableNumberValue(pillar.weight_percent)}
+                onChange={(event) => onWeightChange(pillar.id, normalizeDecimalInput(event.target.value))}
+                className="h-10 w-24 rounded-lg border border-blue-200 bg-white px-3 text-lg font-black text-slate-950 outline-none focus:border-blue-500"
+                aria-label="Peso do pilar"
+              />
+              <span className="text-sm font-bold text-slate-500">%</span>
+            </div>
+          ) : (
+            <strong className="mt-2 block text-2xl text-slate-950">{displayPercent(pillar?.weight_percent)}</strong>
+          )}
           <small className="text-xs text-slate-500">Configurável por versão</small>
         </div>
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -810,40 +866,60 @@ function PolicyProgress({ progress }: { progress: ScorePolicyProgressDto | null 
 function SubgroupList({
   pillar,
   selectedSubgroupId,
-  onSelect
+  onSelect,
+  isEditable,
+  onWeightChange
 }: {
   pillar: ScorePillarDto | null;
   selectedSubgroupId: number | null;
   onSelect: (subgroup: ScoreSubgroupDto) => void;
+  isEditable: boolean;
+  onWeightChange: (subgroupId: number, value: string) => void;
 }) {
+  const subgroupTotal = sumPercent(pillar?.subgroups.map((subgroup) => subgroup.weight_percent) ?? []);
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-4 py-4">
         <h2 className="text-sm font-semibold text-slate-900">Subgrupos do Pilar</h2>
-        <p className="mt-1 text-xs leading-5 text-slate-500">Selecione um subgrupo para revisar seus indicadores.</p>
+        <p className="mt-1 text-xs leading-5 text-slate-500">
+          Selecione um subgrupo para revisar seus indicadores.{isEditable ? ` Soma atual: ${subgroupTotal.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%.` : ""}
+        </p>
       </div>
       <div className="max-h-[360px] overflow-auto p-4">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
           {pillar?.subgroups.map((subgroup) => {
             const active = subgroup.id === selectedSubgroupId;
             return (
-              <button
+              <article
                 key={subgroup.id}
-                type="button"
-                onClick={() => onSelect(subgroup)}
                 className={`rounded-lg border p-3 text-left transition ${
                   active ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"
                 }`}
               >
-                <strong className="block min-h-10 text-sm leading-5 text-slate-900">{subgroup.name}</strong>
+                <button type="button" onClick={() => onSelect(subgroup)} className="block w-full text-left">
+                  <strong className="block min-h-10 text-sm leading-5 text-slate-900">{subgroup.name}</strong>
+                </button>
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
                   <div className="h-full rounded-full bg-blue-600" style={{ width: displayPercent(subgroup.weight_percent) }} />
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-2">
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{displayPercent(subgroup.weight_percent)}</span>
+                  {isEditable ? (
+                    <label className="flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-xs font-bold text-slate-700">
+                      <span className="sr-only">Peso do subgrupo</span>
+                      <input
+                        inputMode="decimal"
+                        value={editableNumberValue(subgroup.weight_percent)}
+                        onChange={(event) => onWeightChange(subgroup.id, normalizeDecimalInput(event.target.value))}
+                        className="h-8 w-16 rounded-md border border-blue-200 px-2 text-right text-xs font-black outline-none focus:border-blue-500"
+                      />
+                      %
+                    </label>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">{displayPercent(subgroup.weight_percent)}</span>
+                  )}
                   <span className="text-xs text-slate-500">{subgroup.indicators_count} indicadores</span>
                 </div>
-              </button>
+              </article>
             );
           })}
           {!pillar?.subgroups.length ? <EmptyState text="Nenhum subgrupo cadastrado para este pilar." /> : null}
@@ -856,17 +932,26 @@ function SubgroupList({
 function IndicatorList({
   subgroup,
   selectedIndicatorId,
-  onSelect
+  onSelect,
+  isEditable,
+  onWeightChange,
+  onEnabledChange
 }: {
   subgroup: ScoreSubgroupDto | null;
   selectedIndicatorId: number | null;
   onSelect: (indicator: ScoreIndicatorDto) => void;
+  isEditable: boolean;
+  onWeightChange: (indicatorId: number, value: string) => void;
+  onEnabledChange: (indicatorId: number, isEnabled: boolean) => void;
 }) {
+  const indicatorTotal = sumPercent(subgroup?.indicators.filter((indicator) => indicator.is_enabled).map((indicator) => indicator.weight_percent) ?? []);
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-4 py-4">
         <h2 className="text-sm font-semibold text-slate-900">Indicadores{subgroup ? ` · ${subgroup.name}` : ""}</h2>
-        <p className="mt-1 text-xs leading-5 text-slate-500">Linguagem de negócio primeiro; detalhe técnico sob demanda.</p>
+        <p className="mt-1 text-xs leading-5 text-slate-500">
+          Linguagem de negócio primeiro; detalhe técnico sob demanda.{isEditable ? ` Soma ativa: ${indicatorTotal.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%.` : ""}
+        </p>
       </div>
       <div className="p-4">
         <div className="max-h-[440px] overflow-auto rounded-lg border border-slate-200">
@@ -874,22 +959,43 @@ function IndicatorList({
             const active = indicator.id === selectedIndicatorId;
             const info = sourceInfo(indicator);
             return (
-              <button
+              <article
                 key={indicator.id}
-                type="button"
-                onClick={() => onSelect(indicator)}
                 className={`grid w-full grid-cols-[1fr_auto] gap-3 border-b border-slate-200 px-4 py-3 text-left last:border-b-0 lg:grid-cols-[1fr_90px] ${
                   active ? "bg-blue-50 shadow-[inset_3px_0_0_#2563eb]" : "bg-white hover:bg-slate-50"
                 }`}
               >
-                <span>
+                <button type="button" onClick={() => onSelect(indicator)} className="min-w-0 text-left">
                   <strong className="block text-sm text-slate-900">{indicator.name}</strong>
                   <span className="mt-1 block text-xs leading-5 text-slate-500">
                     Origem: {info.origin} · Campo: {info.field}
                   </span>
-                </span>
-                <span className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-right text-xs font-bold text-slate-800">{displayPercent(indicator.weight_percent)}</span>
-              </button>
+                </button>
+                {isEditable ? (
+                  <div className="grid justify-items-end gap-1.5">
+                    <label className="flex items-center gap-1 text-xs font-bold text-slate-700">
+                      <input
+                        inputMode="decimal"
+                        value={editableNumberValue(indicator.weight_percent)}
+                        onChange={(event) => onWeightChange(indicator.id, normalizeDecimalInput(event.target.value))}
+                        className="h-8 w-16 rounded-md border border-blue-200 bg-white px-2 text-right text-xs font-black outline-none focus:border-blue-500"
+                        aria-label={`Peso do indicador ${indicator.name}`}
+                      />
+                      %
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+                      <input
+                        type="checkbox"
+                        checked={indicator.is_enabled}
+                        onChange={(event) => onEnabledChange(indicator.id, event.target.checked)}
+                      />
+                      Ativo
+                    </label>
+                  </div>
+                ) : (
+                  <span className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-right text-xs font-bold text-slate-800">{displayPercent(indicator.weight_percent)}</span>
+                )}
+              </article>
             );
           })}
           {!subgroup?.indicators.length ? <EmptyState text="Nenhum indicador cadastrado para este subgrupo." /> : null}
@@ -923,7 +1029,15 @@ function TechnicalIndicatorDetail({ indicator }: { indicator: ScoreIndicatorDto 
   );
 }
 
-function ScoreRangeTable({ indicator }: { indicator: ScoreIndicatorDto | null }) {
+function ScoreRangeTable({
+  indicator,
+  isEditable,
+  onRangeChange
+}: {
+  indicator: ScoreIndicatorDto | null;
+  isEditable: boolean;
+  onRangeChange: (rangeId: number, patch: Partial<ScoreRangeDto>) => void;
+}) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 px-4 py-4">
@@ -933,19 +1047,85 @@ function ScoreRangeTable({ indicator }: { indicator: ScoreIndicatorDto | null })
       </div>
       <div className="p-4">
         <div className="max-h-[420px] overflow-auto rounded-lg border border-slate-200">
-          <table className="w-full min-w-[420px] border-collapse text-sm">
+          <table className="w-full min-w-[640px] border-collapse text-sm">
             <thead className="sticky top-0 bg-slate-50">
               <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
-                <th className="px-4 py-3">Faixa</th>
+                <th className="px-4 py-3">Operador</th>
+                <th className="px-4 py-3">Valor</th>
+                <th className="px-4 py-3">Valor final</th>
+                <th className="px-4 py-3">Label</th>
                 <th className="w-28 px-4 py-3 text-right">Nota</th>
               </tr>
             </thead>
             <tbody>
               {indicator?.score_ranges.map((range) => (
                 <tr key={range.id} className="border-b border-slate-100 bg-white last:border-b-0">
-                  <td className="px-4 py-3 font-semibold text-slate-800">{displayRange(range)}</td>
+                  <td className="px-4 py-3 font-semibold text-slate-800">
+                    {isEditable ? (
+                      <select
+                        value={range.operator}
+                        onChange={(event) => onRangeChange(range.id, { operator: event.target.value })}
+                        className="h-9 rounded-lg border border-blue-200 bg-white px-2 text-xs font-bold outline-none focus:border-blue-500"
+                      >
+                        {[">=", ">", "<=", "<", "=", "between"].map((operator) => (
+                          <option key={operator} value={operator}>{operator}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      displayRange(range)
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {isEditable ? (
+                      <input
+                        inputMode="decimal"
+                        value={editableNumberValue(range.threshold_value)}
+                        onChange={(event) => onRangeChange(range.id, { threshold_value: normalizeDecimalInput(event.target.value) })}
+                        className="h-9 w-24 rounded-lg border border-blue-200 bg-white px-2 text-right text-xs font-bold outline-none focus:border-blue-500"
+                        aria-label="Valor da faixa"
+                      />
+                    ) : (
+                      displayDecimal(range.threshold_value)
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {isEditable ? (
+                      <input
+                        inputMode="decimal"
+                        disabled={range.operator !== "between"}
+                        value={editableNumberValue(range.threshold_value_to)}
+                        onChange={(event) => onRangeChange(range.id, { threshold_value_to: normalizeDecimalInput(event.target.value) })}
+                        className="h-9 w-24 rounded-lg border border-blue-200 bg-white px-2 text-right text-xs font-bold outline-none focus:border-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
+                        aria-label="Valor final da faixa"
+                      />
+                    ) : (
+                      displayDecimal(range.threshold_value_to)
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {isEditable ? (
+                      <input
+                        value={range.label ?? ""}
+                        onChange={(event) => onRangeChange(range.id, { label: event.target.value })}
+                        className="h-9 w-44 rounded-lg border border-blue-200 bg-white px-2 text-xs font-semibold outline-none focus:border-blue-500"
+                        aria-label="Label da faixa"
+                      />
+                    ) : (
+                      range.label ?? "-"
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-right">
-                    <span className="inline-flex min-w-10 justify-center rounded-lg bg-indigo-50 px-3 py-2 font-black text-indigo-700">{displayScore(range.score)}</span>
+                    {isEditable ? (
+                      <input
+                        inputMode="decimal"
+                        value={editableNumberValue(range.score)}
+                        onChange={(event) => onRangeChange(range.id, { score: normalizeDecimalInput(event.target.value) })}
+                        className="h-9 w-16 rounded-lg border border-blue-200 bg-white px-2 text-right text-xs font-black text-indigo-700 outline-none focus:border-blue-500"
+                        aria-label="Nota da faixa"
+                      />
+                    ) : (
+                      <span className="inline-flex min-w-10 justify-center rounded-lg bg-indigo-50 px-3 py-2 font-black text-indigo-700">{displayScore(range.score)}</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -966,6 +1146,65 @@ function ScoreRangeTable({ indicator }: { indicator: ScoreIndicatorDto | null })
           </details>
         ) : null}
       </div>
+    </section>
+  );
+}
+
+function DraftStructureEditor({
+  pillar,
+  validationStatus,
+  selectedSubgroupId,
+  selectedIndicatorId,
+  selectedSubgroup,
+  selectedIndicator,
+  isEditable,
+  onPillarWeightChange,
+  onSelectSubgroup,
+  onSubgroupWeightChange,
+  onSelectIndicator,
+  onIndicatorWeightChange,
+  onIndicatorEnabledChange,
+  onRangeChange
+}: {
+  pillar: ScorePillarDto | null;
+  validationStatus: string;
+  selectedSubgroupId: number | null;
+  selectedIndicatorId: number | null;
+  selectedSubgroup: ScoreSubgroupDto | null;
+  selectedIndicator: ScoreIndicatorDto | null;
+  isEditable: boolean;
+  onPillarWeightChange: (pillarId: number, value: string) => void;
+  onSelectSubgroup: (subgroup: ScoreSubgroupDto) => void;
+  onSubgroupWeightChange: (subgroupId: number, value: string) => void;
+  onSelectIndicator: (indicator: ScoreIndicatorDto) => void;
+  onIndicatorWeightChange: (indicatorId: number, value: string) => void;
+  onIndicatorEnabledChange: (indicatorId: number, isEnabled: boolean) => void;
+  onRangeChange: (rangeId: number, patch: Partial<ScoreRangeDto>) => void;
+}) {
+  return (
+    <section className="grid gap-4">
+      <PillarSummary
+        pillar={pillar}
+        validationStatus={validationStatus}
+        isEditable={isEditable}
+        onWeightChange={onPillarWeightChange}
+      />
+      <SubgroupList
+        pillar={pillar}
+        selectedSubgroupId={selectedSubgroupId}
+        onSelect={onSelectSubgroup}
+        isEditable={isEditable}
+        onWeightChange={onSubgroupWeightChange}
+      />
+      <IndicatorList
+        subgroup={selectedSubgroup}
+        selectedIndicatorId={selectedIndicatorId}
+        onSelect={onSelectIndicator}
+        isEditable={isEditable}
+        onWeightChange={onIndicatorWeightChange}
+        onEnabledChange={onIndicatorEnabledChange}
+      />
+      <ScoreRangeTable indicator={selectedIndicator} isEditable={isEditable} onRangeChange={onRangeChange} />
     </section>
   );
 }
@@ -2424,26 +2663,34 @@ function PillarThreeRightRail() {
 
 function PolicyMonitorView({
   structure,
+  policies,
   selectedPolicyId,
   onOpenPolicy,
-  onDuplicatePolicy,
-  onArchivePolicy
+  onCreateVersion,
+  onDeleteDraftPolicy,
+  onArchivePolicy,
+  isCreatingVersion,
+  isDeletingDraft
 }: {
   structure: ScoreStructureDto;
+  policies: ScorePolicyDto[];
   selectedPolicyId: number | null;
-  onOpenPolicy: () => void;
-  onDuplicatePolicy: () => void;
-  onArchivePolicy: () => void;
+  onOpenPolicy: (policyId: number) => void;
+  onCreateVersion: (policy: ScorePolicyDto) => void;
+  onDeleteDraftPolicy: (policy: ScorePolicyDto) => void;
+  onArchivePolicy: (policy: ScorePolicyDto) => void;
+  isCreatingVersion: boolean;
+  isDeletingDraft: boolean;
 }) {
   const policy = structure.policy;
   const configurationStatus = structure.validation_summary.configuration_status;
   const configuredPillars = structure.policy_progress.pillars.configured;
   const expectedPillars = structure.policy_progress.pillars.expected;
   const completenessPercent = expectedPillars > 0 ? Math.round((configuredPillars / expectedPillars) * 100) : 0;
-  const managementState = policyManagementState(policy.status, configurationStatus);
-  const policyStatusLabel = managementState === "in_construction" ? "Rascunho" : lifecycleLabel(policy.status);
-  const usageLabel = managementState === "archived" ? "Arquivada" : "Não vinculada ao motor";
-  const isSelected = selectedPolicyId === policy.id;
+  const policyRows = [...(policies.length > 0 ? policies : [policy])].sort((first, second) => {
+    if (first.code !== second.code) return first.code.localeCompare(second.code);
+    return second.version - first.version;
+  });
 
   return (
     <section>
@@ -2464,60 +2711,98 @@ function PolicyMonitorView({
               </tr>
             </thead>
             <tbody>
-              <tr className={`transition ${isSelected ? "bg-blue-50/80" : "bg-blue-50/30 hover:bg-blue-50/60"}`}>
-                <td className="border-b border-slate-100 px-4 py-4">
-                  <div className="flex items-center gap-2">
-                    <strong className="block text-xs text-slate-950">{policy.name}</strong>
-                    {isSelected ? <span className="rounded-full bg-blue-700 px-2 py-0.5 text-[8px] font-black uppercase tracking-wide text-white">Selecionada</span> : null}
-                  </div>
-                  <span className="mt-1 block text-[10px] text-slate-500">{policy.code}</span>
-                </td>
-                <td className="border-b border-slate-100 px-4 py-4 text-xs font-bold text-slate-800">v{policy.version}</td>
-                <td className="border-b border-slate-100 px-4 py-4">
-                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${
-                    managementState === "active"
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : managementState === "in_construction"
-                        ? "border-blue-200 bg-blue-50 text-blue-700"
-                        : "border-slate-200 bg-slate-100 text-slate-600"
-                  }`}>{policyStatusLabel}</span>
-                </td>
-                <td className="border-b border-slate-100 px-4 py-4">
-                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${
-                    managementState === "archived"
-                      ? "border-slate-300 bg-slate-100 text-slate-600"
-                      : "border-slate-200 bg-slate-100 text-slate-600"
-                  }`}>{usageLabel}</span>
-                </td>
-                <td className="border-b border-slate-100 px-4 py-4">
-                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${statusClass(configurationStatus)}`}>{statusLabel(configurationStatus)}</span>
-                </td>
-                <td className="border-b border-slate-100 px-4 py-4">
-                  <div className="w-36">
-                    <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold text-slate-600">
-                      <span>{configuredPillars} de {expectedPillars} pilares</span>
-                      <span>{completenessPercent}%</span>
-                    </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
-                      <div className="h-full rounded-full bg-blue-700" style={{ width: `${completenessPercent}%` }} />
-                    </div>
-                  </div>
-                </td>
-                <td className="border-b border-slate-100 px-4 py-4 text-xs text-slate-500">Não disponível</td>
-                <td className="border-b border-slate-100 px-4 py-4 text-right">
-                  <div className="flex items-center justify-end gap-1.5">
-                    <button type="button" onClick={onOpenPolicy} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-700 px-3 text-xs font-black text-white transition hover:bg-blue-800">
-                      Abrir <ArrowRight className="h-3.5 w-3.5" />
-                    </button>
-                    <button type="button" onClick={onDuplicatePolicy} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">
-                      Duplicar
-                    </button>
-                    <button type="button" onClick={onArchivePolicy} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">
-                      Arquivar
-                    </button>
-                  </div>
-                </td>
-              </tr>
+              {policyRows.map((row) => {
+                const rowSelected = selectedPolicyId === row.id || (!selectedPolicyId && row.id === policy.id);
+                const rowIsLoaded = row.id === policy.id;
+                const rowManagementState = policyManagementState(row.status, rowIsLoaded ? configurationStatus : "validated");
+                const rowStatusLabel = rowManagementState === "in_construction" ? "Rascunho" : lifecycleLabel(row.status);
+                const rowUsageLabel =
+                  row.status === "active"
+                    ? "Vinculada ao motor"
+                    : rowManagementState === "archived"
+                      ? "Arquivada"
+                      : "Não vinculada ao motor";
+                return (
+                  <tr key={row.id} className={`transition ${rowSelected ? "bg-blue-50/80" : "bg-white hover:bg-slate-50"}`}>
+                    <td className="border-b border-slate-100 px-4 py-4">
+                      <div className="flex items-center gap-2">
+                        <strong className="block text-xs text-slate-950">{row.name}</strong>
+                        {rowSelected ? <span className="rounded-full bg-blue-700 px-2 py-0.5 text-[8px] font-black uppercase tracking-wide text-white">Selecionada</span> : null}
+                      </div>
+                      <span className="mt-1 block text-[10px] text-slate-500">{row.code}</span>
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-4 text-xs font-bold text-slate-800">v{row.version}</td>
+                    <td className="border-b border-slate-100 px-4 py-4">
+                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${
+                        rowManagementState === "active"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : rowManagementState === "in_construction"
+                            ? "border-blue-200 bg-blue-50 text-blue-700"
+                            : "border-slate-200 bg-slate-100 text-slate-600"
+                      }`}>{rowStatusLabel}</span>
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-4">
+                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${
+                        row.status === "active"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-slate-200 bg-slate-100 text-slate-600"
+                      }`}>{rowUsageLabel}</span>
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-4">
+                      {rowIsLoaded ? (
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold ${statusClass(configurationStatus)}`}>{statusLabel(configurationStatus)}</span>
+                      ) : (
+                        <span className="inline-flex rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600">Disponível</span>
+                      )}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-4">
+                      {rowIsLoaded ? (
+                        <div className="w-36">
+                          <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold text-slate-600">
+                            <span>{configuredPillars} de {expectedPillars} pilares</span>
+                            <span>{completenessPercent}%</span>
+                          </div>
+                          <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                            <div className="h-full rounded-full bg-blue-700" style={{ width: `${completenessPercent}%` }} />
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-500">Abra para consultar</span>
+                      )}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-4 text-xs text-slate-500">{formatDateTime(row.updated_at)}</td>
+                    <td className="border-b border-slate-100 px-4 py-4 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button type="button" onClick={() => onOpenPolicy(row.id)} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-700 px-3 text-xs font-black text-white transition hover:bg-blue-800">
+                          Abrir <ArrowRight className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onCreateVersion(row)}
+                          disabled={isCreatingVersion}
+                          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isCreatingVersion ? "Criando versão..." : "Criar nova versão"}
+                        </button>
+                        {row.status === "draft" ? (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteDraftPolicy(row)}
+                            disabled={isDeletingDraft}
+                            className="h-9 rounded-lg border border-rose-200 bg-white px-3 text-xs font-bold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {isDeletingDraft ? "Excluindo..." : "Excluir"}
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => onArchivePolicy(row)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">
+                            Arquivar
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -2638,15 +2923,22 @@ function GovernanceHistorySection({
 
 function PolicyGovernanceView({
   structure,
-  onRequestPublication
+  onRequestPublication,
+  historyItems,
+  isHistoryLoading,
+  historyError,
+  isPublishing,
+  canManagePolicy
 }: {
   structure: ScoreStructureDto;
   onRequestPublication: () => void;
+  historyItems: GovernanceHistoryItem[];
+  isHistoryLoading: boolean;
+  historyError: string | null;
+  isPublishing: boolean;
+  canManagePolicy: boolean;
 }) {
   const policy = structure.policy;
-  const [historyItems, setHistoryItems] = useState<GovernanceHistoryItem[]>([]);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState<string | null>(null);
   const configurationStatus = structure.validation_summary.configuration_status;
   const configuredPillars = structure.policy_progress.pillars.configured;
   const expectedPillars = structure.policy_progress.pillars.expected;
@@ -2663,7 +2955,12 @@ function PolicyGovernanceView({
     ? `Solicitação de publicação ${latestPublishRequest ? `#${latestPublishRequest.request.request_id} ` : ""}aprovada pela governança.`
     : "Nenhuma aprovação registrada para esta versão.";
   const publicationChecklistStatus = hasGovernancePublication ? "complete" : publicationGovernanceState === "pending" ? "warning" : "neutral";
-  const canRequestGovernancePublication = false;
+  const canRequestGovernancePublication =
+    canManagePolicy &&
+    isScoreReady &&
+    publicationGovernanceState !== "pending" &&
+    publicationGovernanceState !== "approved" &&
+    publicationGovernanceState !== "published";
   const publicationState = hasGovernancePublication
     ? {
         title: "Publicação via governança registrada.",
@@ -2698,7 +2995,9 @@ function PolicyGovernanceView({
                 ? "Esta versão encontra-se ativa no sistema, mas não possui registro de publicação pelo workflow de governança."
                 : "Nenhuma publicação registrada pelo workflow de governança para esta versão.",
               className: "border-slate-200 bg-slate-50 text-slate-800",
-              buttonTitle: "A solicitação de publicação será enviada para aprovação pela governança.",
+              buttonTitle: canManagePolicy
+                ? "A solicitação de publicação será enviada para aprovação pela governança."
+                : "Você não possui permissão para solicitar a publicação desta política.",
               buttonLabel: "Solicitar publicação via governança",
               buttonDisabled: !canRequestGovernancePublication
             }
@@ -2710,37 +3009,6 @@ function PolicyGovernanceView({
               buttonLabel: "Solicitar publicação via governança",
               buttonDisabled: true
             };
-
-  useEffect(() => {
-    let mounted = true;
-    async function loadHistory() {
-      setIsHistoryLoading(true);
-      setHistoryError(null);
-      try {
-        const requests = await listPolicyGovernanceRequests();
-        const policyRequests = requests.filter((request) => request.policy_id === policy.id);
-        const items = await Promise.all(
-          policyRequests.map(async (request) => {
-            try {
-              const summary = await getPolicyGovernanceExecutiveSummary(request.request_id);
-              return { request, summary };
-            } catch {
-              return { request, summary: null };
-            }
-          })
-        );
-        if (mounted) setHistoryItems(items);
-      } catch (caught) {
-        if (mounted) setHistoryError(caught instanceof Error ? caught.message : "Não foi possível carregar o histórico de governança.");
-      } finally {
-        if (mounted) setIsHistoryLoading(false);
-      }
-    }
-    loadHistory();
-    return () => {
-      mounted = false;
-    };
-  }, [policy.id]);
   const publicationChecklist = [
     {
       label: "Política criada",
@@ -2861,15 +3129,15 @@ function PolicyGovernanceView({
             <button
               type="button"
               onClick={onRequestPublication}
-              disabled={publicationState.buttonDisabled}
+              disabled={publicationState.buttonDisabled || isPublishing}
               title={publicationState.buttonTitle}
               className={`mt-1 h-10 rounded-lg px-4 text-xs font-black ${
-                publicationState.buttonDisabled
+                publicationState.buttonDisabled || isPublishing
                   ? "bg-slate-200 text-slate-400"
                   : "bg-blue-700 text-white transition hover:bg-blue-800"
               }`}
             >
-              {publicationState.buttonLabel}
+              {isPublishing ? "Enviando solicitação..." : publicationState.buttonLabel}
             </button>
             <p className="text-[10px] leading-4 text-slate-500">A solicitação de publicação será enviada para aprovação pela governança. A Política de Decisão Configurável ainda não está conectada ao motor oficial; a publicação via governança controla o ciclo administrativo da política.</p>
           </div>
@@ -2992,6 +3260,7 @@ export function PolicyScorePage() {
   const [navigationNotice, setNavigationNotice] = useState<string | null>(null);
   const [actionToast, setActionToast] = useState<{ message: string; tone: "success" | "error" | "blocked" | "info" } | null>(null);
   const [structure, setStructure] = useState<ScoreStructureDto | null>(null);
+  const [policies, setPolicies] = useState<ScorePolicyDto[]>([]);
   const [selectedPillarId, setSelectedPillarId] = useState<number | null>(null);
   const [selectedPillarCode, setSelectedPillarCode] = useState<string | null>(null);
   const [selectedSubgroupId, setSelectedSubgroupId] = useState<number | null>(null);
@@ -3003,10 +3272,19 @@ export function PolicyScorePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canViewPolicy, setCanViewPolicy] = useState<boolean | null>(null);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [hasDraftChanges, setHasDraftChanges] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [isCreatingVersion, setIsCreatingVersion] = useState(false);
+  const [isDeletingDraft, setIsDeletingDraft] = useState(false);
+  const [historyItems, setHistoryItems] = useState<GovernanceHistoryItem[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const canManagePolicy = hasPermission("credit.policy.manage");
 
   useEffect(() => {
     let mounted = true;
-    async function load() {
+    async function loadStructure() {
       const canView = hasPermission("credit.policy.view");
       if (!canView) {
         if (mounted) {
@@ -3020,26 +3298,64 @@ export function PolicyScorePage() {
       setIsLoading(true);
       setError(null);
       try {
-        const response = await getCurrentScoreStructure();
+        const [response, policyList] = await Promise.all([getCurrentScoreStructure(), listPolicies()]);
         if (!mounted) return;
+        setPolicies(policyList);
         setStructure(response);
-        const pillar = firstEnabled(response.pillars);
-        setSelectedPillarId(pillar?.id ?? null);
-        setSelectedPillarCode(pillar?.code ?? response.pillar_roadmap[0]?.code ?? null);
-        const subgroup = firstEnabled(pillar?.subgroups);
-        setSelectedSubgroupId(subgroup?.id ?? null);
-        setSelectedIndicatorId(firstEnabled(subgroup?.indicators)?.id ?? null);
+        selectInitialNodes(response);
       } catch (caught) {
         if (mounted) setError(caught instanceof Error ? caught.message : "Não foi possível carregar a Política.");
       } finally {
         if (mounted) setIsLoading(false);
       }
     }
-    load();
+    loadStructure();
     return () => {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const policyId = structure?.policy.id ?? null;
+    if (!policyId) {
+      setHistoryItems([]);
+      setIsHistoryLoading(false);
+      setHistoryError(null);
+      return;
+    }
+
+    let mounted = true;
+    async function loadGovernanceHistory() {
+      setIsHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const requests = await listPolicyGovernanceRequests();
+        const policyRequests = requests.filter((request) => request.policy_id === policyId);
+        const items = await Promise.all(
+          policyRequests.map(async (request) => {
+            try {
+              const summary = await getPolicyGovernanceExecutiveSummary(request.request_id);
+              return { request, summary };
+            } catch {
+              return { request, summary: null };
+            }
+          }),
+        );
+        if (mounted) setHistoryItems(items);
+      } catch (caught) {
+        if (mounted) {
+          setHistoryError(caught instanceof Error ? caught.message : "Não foi possível carregar o histórico de governança.");
+        }
+      } finally {
+        if (mounted) setIsHistoryLoading(false);
+      }
+    }
+
+    loadGovernanceHistory();
+    return () => {
+      mounted = false;
+    };
+  }, [structure?.policy.id]);
 
   useEffect(() => {
     if (!actionToast) return;
@@ -3063,10 +3379,199 @@ export function PolicyScorePage() {
     () => structure?.pillar_roadmap.find((item) => item.code === selectedPillarCode) ?? null,
     [selectedPillarCode, structure]
   );
+  const publicationGovernanceState = useMemo(() => governancePublicationState(historyItems), [historyItems]);
+  const governanceToolbarButton = useMemo(() => {
+    if (!selectedPolicyId) {
+      return {
+        disabled: true,
+        label: "Solicitar publicação via governança",
+        title: "Selecione uma política para continuar.",
+      };
+    }
+    if (publicationGovernanceState === "pending") {
+      return {
+        disabled: true,
+        label: "Publicação em aprovação",
+        title: "Existe solicitação de publicação em andamento para esta versão.",
+      };
+    }
+    if (publicationGovernanceState === "approved") {
+      return {
+        disabled: true,
+        label: "Publicação aprovada",
+        title: "A solicitação foi aprovada e aguarda execução do workflow.",
+      };
+    }
+    if (publicationGovernanceState === "published") {
+      return {
+        disabled: true,
+        label: "Versão publicada via governança",
+        title: "Esta versão já possui publicação registrada via governança.",
+      };
+    }
+    if (!canManagePolicy) {
+      return {
+        disabled: true,
+        label: "Sem permissão para solicitar publicação",
+        title: "Você não possui permissão para solicitar a publicação desta política.",
+      };
+    }
+    return {
+      disabled: false,
+      label: "Solicitar publicação via governança",
+      title: "A solicitação de publicação será enviada para aprovação pela governança.",
+    };
+  }, [canManagePolicy, publicationGovernanceState, selectedPolicyId]);
   const isPillarTwo = selectedPillar?.code === PILLAR_TWO_CODE;
   const isPillarThree = selectedPillarCode === PILLAR_THREE_CODE;
   const isPillarFour = selectedPillar?.code === PILLAR_FOUR_CODE;
   const isPillarFive = selectedPillar?.code === PILLAR_FIVE_CODE;
+  const canEditDraft = structure?.policy.status === "draft" && canManagePolicy;
+
+  function markDraftChanged(nextStructure: ScoreStructureDto): ScoreStructureDto {
+    if (canEditDraft) {
+      setHasDraftChanges(true);
+    }
+    return nextStructure;
+  }
+
+  function updatePillarWeight(pillarId: number, value: string) {
+    if (!canEditDraft) return;
+    setStructure((current) => {
+      if (!current) return current;
+      return markDraftChanged({
+        ...current,
+        pillars: current.pillars.map((pillar) => (pillar.id === pillarId ? { ...pillar, weight_percent: value } : pillar)),
+      });
+    });
+  }
+
+  function updateSubgroupWeight(subgroupId: number, value: string) {
+    if (!canEditDraft) return;
+    setStructure((current) => {
+      if (!current) return current;
+      return markDraftChanged({
+        ...current,
+        pillars: current.pillars.map((pillar) => ({
+          ...pillar,
+          subgroups: pillar.subgroups.map((subgroup) => (subgroup.id === subgroupId ? { ...subgroup, weight_percent: value } : subgroup)),
+        })),
+      });
+    });
+  }
+
+  function updateIndicatorWeight(indicatorId: number, value: string) {
+    if (!canEditDraft) return;
+    setStructure((current) => {
+      if (!current) return current;
+      return markDraftChanged({
+        ...current,
+        pillars: current.pillars.map((pillar) => ({
+          ...pillar,
+          subgroups: pillar.subgroups.map((subgroup) => ({
+            ...subgroup,
+            indicators: subgroup.indicators.map((indicator) =>
+              indicator.id === indicatorId ? { ...indicator, weight_percent: value } : indicator
+            ),
+          })),
+        })),
+      });
+    });
+  }
+
+  function updateIndicatorEnabled(indicatorId: number, isEnabled: boolean) {
+    if (!canEditDraft) return;
+    setStructure((current) => {
+      if (!current) return current;
+      return markDraftChanged({
+        ...current,
+        pillars: current.pillars.map((pillar) => ({
+          ...pillar,
+          subgroups: pillar.subgroups.map((subgroup) => ({
+            ...subgroup,
+            indicators: subgroup.indicators.map((indicator) =>
+              indicator.id === indicatorId ? { ...indicator, is_enabled: isEnabled } : indicator
+            ),
+          })),
+        })),
+      });
+    });
+  }
+
+  function updateScoreRange(rangeId: number, patch: Partial<ScoreRangeDto>) {
+    if (!canEditDraft) return;
+    setStructure((current) => {
+      if (!current) return current;
+      return markDraftChanged({
+        ...current,
+        pillars: current.pillars.map((pillar) => ({
+          ...pillar,
+          subgroups: pillar.subgroups.map((subgroup) => ({
+            ...subgroup,
+            indicators: subgroup.indicators.map((indicator) => ({
+              ...indicator,
+              score_ranges: indicator.score_ranges.map((range) => {
+                if (range.id !== rangeId) return range;
+                const nextRange = { ...range, ...patch };
+                if (patch.operator && patch.operator !== "between") {
+                  nextRange.threshold_value_to = null;
+                }
+                return nextRange;
+              }),
+            })),
+          })),
+        })),
+      });
+    });
+  }
+
+  function buildScoreStructurePatchPayload(nextStructure: ScoreStructureDto): ScoreStructurePatchPayload {
+    const pillars = nextStructure.pillars;
+    const subgroups = pillars.flatMap((pillar) => pillar.subgroups);
+    const indicators = subgroups.flatMap((subgroup) => subgroup.indicators);
+    const scoreRanges = indicators.flatMap((indicator) => indicator.score_ranges);
+    return {
+      pillars: pillars.map((pillar) => ({
+        id: pillar.id,
+        weight_percent: pillar.weight_percent,
+        is_enabled: pillar.is_enabled,
+      })),
+      subgroups: subgroups.map((subgroup) => ({
+        id: subgroup.id,
+        weight_percent: subgroup.weight_percent,
+        is_enabled: subgroup.is_enabled,
+      })),
+      indicators: indicators.map((indicator) => ({
+        id: indicator.id,
+        weight_percent: indicator.weight_percent,
+        is_enabled: indicator.is_enabled,
+      })),
+      score_ranges: scoreRanges.map((range) => ({
+        id: range.id,
+        operator: range.operator,
+        threshold_value: range.threshold_value,
+        threshold_value_to: range.operator === "between" ? range.threshold_value_to : null,
+        score: range.score,
+        label: range.label,
+        sort_order: range.sort_order,
+        is_enabled: range.is_enabled,
+      })),
+    };
+  }
+
+  function selectInitialNodes(nextStructure: ScoreStructureDto) {
+    const pillar = firstEnabled(nextStructure.pillars);
+    setSelectedPillarId(pillar?.id ?? null);
+    setSelectedPillarCode(pillar?.code ?? nextStructure.pillar_roadmap[0]?.code ?? null);
+    const subgroup = firstEnabled(pillar?.subgroups);
+    setSelectedSubgroupId(subgroup?.id ?? null);
+    setSelectedIndicatorId(firstEnabled(subgroup?.indicators)?.id ?? null);
+    setSimulationResult(null);
+    setPillarTwoSimulationResult(null);
+    setPillarFourSimulationResult(null);
+    setPillarFiveSimulationResult(null);
+    setHasDraftChanges(false);
+  }
 
   function selectPillar(item: ScorePillarRoadmapDto, pillar: ScorePillarDto | null) {
     setSelectedPillarCode(item.code);
@@ -3081,49 +3586,215 @@ export function PolicyScorePage() {
     setSelectedIndicatorId(firstEnabled(subgroup.indicators)?.id ?? null);
   }
 
-  function openSelectedPolicy() {
-    if (!structure) return;
-    setSelectedPolicyId(structure.policy.id);
-    setNavigationNotice(null);
-    setActiveView("score");
+  async function openSelectedPolicy(policyId: number) {
+    try {
+      const response = await getScoreStructure(policyId);
+      setStructure(response);
+      selectInitialNodes(response);
+      setSelectedPolicyId(policyId);
+      setNavigationNotice(null);
+      setActiveView("score");
+    } catch (caught) {
+      setActionToast({
+        message: caught instanceof Error ? caught.message : "Não foi possível abrir a versão selecionada.",
+        tone: "error",
+      });
+    }
   }
 
-  function archiveSelectedPolicy() {
-    if (!structure) return;
-    const confirmed = window.confirm(`Arquivar a política "${structure.policy.name}"?`);
+  function archiveSelectedPolicy(policyToArchive: ScorePolicyDto) {
+    const confirmed = window.confirm(`Arquivar a política "${policyToArchive.name}"?`);
     if (!confirmed) return;
     setNavigationNotice("O arquivamento será habilitado quando a operação estiver disponível no backend.");
   }
 
-  function duplicateSelectedPolicy() {
-    setNavigationNotice("A duplicação será habilitada com o versionamento.");
+  async function deleteSelectedDraftPolicy(policyToDelete: ScorePolicyDto) {
+    if (isDeletingDraft) return;
+    if (policyToDelete.status !== "draft") {
+      setActionToast({ message: "Somente versões em rascunho podem ser excluídas.", tone: "blocked" });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Excluir versão em rascunho?\nEsta ação removerá a versão draft e suas configurações. A versão ativa anterior não será afetada.\n\nEsta ação não pode ser desfeita."
+    );
+    if (!confirmed) return;
+
+    setIsDeletingDraft(true);
+    setNavigationNotice(null);
+    setActionToast({ message: "Excluindo rascunho...", tone: "info" });
+    try {
+      await deletePolicyDraft(policyToDelete.id);
+      const policyList = await refreshPolicyList();
+      const nextPolicy =
+        policyList.find((item) => item.id === policyToDelete.base_policy_id) ??
+        policyList.find((item) => item.code === policyToDelete.code && item.status === "active") ??
+        policyList.find((item) => item.status === "active") ??
+        policyList[0] ??
+        null;
+
+      if (nextPolicy) {
+        const refreshed = await refreshStructure(nextPolicy.id);
+        setSelectedPolicyId(nextPolicy.id);
+        selectInitialNodes(refreshed);
+        await refreshGovernanceHistory(nextPolicy.id);
+      } else {
+        setSelectedPolicyId(null);
+        setStructure(null);
+        setHistoryItems([]);
+      }
+
+      setActiveView("monitor");
+      setActionToast({ message: "Versão em rascunho excluída.", tone: "success" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível excluir a versão em rascunho.";
+      setActionToast({ message, tone: error instanceof ApiError && error.status === 409 ? "blocked" : "error" });
+    } finally {
+      setIsDeletingDraft(false);
+    }
   }
 
-  function savePolicyDraft() {
-    if (!selectedPolicyId) {
+  async function createNewVersionFromPolicy(basePolicy: ScorePolicyDto) {
+    if (isCreatingVersion) return;
+    const confirmed = window.confirm(
+      "Criar nova versão desta política?\nA nova versão será criada como rascunho copiando todas as configurações da versão atual."
+    );
+    if (!confirmed) return;
+
+    setIsCreatingVersion(true);
+    setNavigationNotice(null);
+    setActionToast({ message: "Criando versão...", tone: "info" });
+    try {
+      const newPolicy = await createPolicyVersion(basePolicy.id, {
+        justification: "Criar nova versão para ajustes da política.",
+        metadata_json: {
+          source: "policy_monitor",
+          base_policy_id: basePolicy.id,
+          base_policy_version: basePolicy.version,
+        },
+      });
+      await refreshPolicyList();
+      const refreshed = await refreshStructure(newPolicy.id);
+      setSelectedPolicyId(newPolicy.id);
+      setActiveView("score");
+      selectInitialNodes(refreshed);
+      await refreshGovernanceHistory(newPolicy.id);
+      setActionToast({ message: "Nova versão criada como rascunho.", tone: "success" });
+    } catch (error) {
+      const message =
+        error instanceof ApiError && error.status === 409
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : "Não foi possível criar a nova versão.";
+      setActionToast({ message, tone: error instanceof ApiError && error.status === 409 ? "blocked" : "error" });
+    } finally {
+      setIsCreatingVersion(false);
+    }
+  }
+
+  async function savePolicyDraft() {
+    if (!selectedPolicyId || !structure) {
       setActionToast({ message: "Selecione uma política para salvar o rascunho.", tone: "info" });
       return;
     }
-    setActionToast({ message: "Nenhuma alteração pendente para salvar.", tone: "info" });
+    if (!canEditDraft) {
+      setActionToast({ message: "Para alterar esta política, crie uma nova versão.", tone: "info" });
+      return;
+    }
+    if (!hasDraftChanges || isSavingDraft) {
+      setActionToast({ message: "Nenhuma alteração pendente para salvar.", tone: "info" });
+      return;
+    }
+
+    setIsSavingDraft(true);
+    setActionToast({ message: "Salvando rascunho...", tone: "info" });
+    try {
+      const updated = await updateScoreStructure(selectedPolicyId, buildScoreStructurePatchPayload(structure));
+      setStructure(updated);
+      selectInitialNodes(updated);
+      await refreshPolicyList();
+      setActionToast({ message: "Rascunho salvo com sucesso.", tone: "success" });
+    } catch (caught) {
+      setActionToast({
+        message: caught instanceof Error ? caught.message : "Não foi possível salvar o rascunho.",
+        tone: "error",
+      });
+    } finally {
+      setIsSavingDraft(false);
+    }
   }
 
-  function publishSelectedPolicy() {
+  async function refreshStructure(policyId?: number | null) {
+    const response = policyId ? await getScoreStructure(policyId) : await getCurrentScoreStructure();
+    setStructure(response);
+    selectInitialNodes(response);
+    return response;
+  }
+
+  async function refreshPolicyList() {
+    const policyList = await listPolicies();
+    setPolicies(policyList);
+    return policyList;
+  }
+
+  async function refreshGovernanceHistory(policyId: number) {
+    const requests = await listPolicyGovernanceRequests();
+    const policyRequests = requests.filter((request) => request.policy_id === policyId);
+    const items = await Promise.all(
+      policyRequests.map(async (request) => {
+        try {
+          const summary = await getPolicyGovernanceExecutiveSummary(request.request_id);
+          return { request, summary };
+        } catch {
+          return { request, summary: null };
+        }
+      }),
+    );
+    setHistoryItems(items);
+  }
+
+  async function publishSelectedPolicy() {
     if (!selectedPolicyId || !structure) {
       setActionToast({ message: "Selecione uma política para publicar.", tone: "info" });
       return;
     }
+    if (isPublishing) return;
 
-    const blockers = [
-      policyManagementState(structure.policy.status, structure.validation_summary.configuration_status) === "in_construction"
-        ? "Política em construção"
-        : null,
-      "Solicitação de publicação não concluída pela governança"
-    ].filter(Boolean);
+    const payload: PolicyGovernanceActionRequest = {
+      justification: "Solicitação de publicação da política via governança.",
+      metadata_json: { source: "policy_governance_tab" },
+    };
 
-    setActionToast({
-      message: `Publicação aguardando governança. ${blockers.join(" · ")}.`,
-      tone: "blocked"
-    });
+    setIsPublishing(true);
+    try {
+      await requestPolicyPublication(selectedPolicyId, payload);
+      await Promise.all([refreshStructure(selectedPolicyId), refreshGovernanceHistory(selectedPolicyId), refreshPolicyList()]);
+      setActionToast({
+        message: "Solicitação de publicação enviada para aprovação.",
+        tone: "success",
+      });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Não foi possível solicitar a publicação via governança.";
+      const normalized = message.toLowerCase();
+
+      if (caught instanceof Error && "status" in caught && Number((caught as { status?: number }).status) === 403) {
+        setActionToast({
+          message: "Você não possui permissão para solicitar a publicação desta política.",
+          tone: "error",
+        });
+      } else if (normalized.includes("já") || normalized.includes("ja") || normalized.includes("exist")) {
+        await refreshGovernanceHistory(selectedPolicyId);
+        setActionToast({
+          message: "Já existe uma solicitação de publicação em aprovação para esta política.",
+          tone: "info",
+        });
+      } else {
+        setActionToast({ message, tone: "error" });
+      }
+    } finally {
+      setIsPublishing(false);
+    }
   }
 
   if (canViewPolicy === null) {
@@ -3167,8 +3838,12 @@ export function PolicyScorePage() {
         onRestrictedView={() => setNavigationNotice("Selecione uma política no Monitor para continuar.")}
         onSaveDraft={savePolicyDraft}
         onPublishPolicy={publishSelectedPolicy}
-        isSaving={false}
-        isPublishing={false}
+        isSaving={isSavingDraft}
+        canSaveDraft={canEditDraft && hasDraftChanges}
+        isPublishing={isPublishing}
+        publicationButtonDisabled={governanceToolbarButton.disabled}
+        publicationButtonLabel={governanceToolbarButton.label}
+        publicationButtonTitle={governanceToolbarButton.title}
       />
       {actionToast ? (
         <div
@@ -3195,16 +3870,41 @@ export function PolicyScorePage() {
           {navigationNotice}
         </div>
       ) : null}
+      {activeView === "score" && structure ? (
+        <div className={`mb-4 flex flex-col gap-2 rounded-lg border px-4 py-3 text-xs font-semibold sm:flex-row sm:items-center sm:justify-between ${
+          canEditDraft
+            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+            : "border-slate-200 bg-white text-slate-600"
+        }`}>
+          <span className="flex items-center gap-2">
+            {canEditDraft ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <Lock className="h-4 w-4 shrink-0" />}
+            {canEditDraft ? "Rascunho editável" : "Para alterar esta política, crie uma nova versão."}
+          </span>
+          {hasDraftChanges ? <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-amber-700">Alterações não salvas</span> : null}
+        </div>
+      ) : null}
       {activeView === "monitor" && structure ? (
         <PolicyMonitorView
           structure={structure}
+          policies={policies}
           selectedPolicyId={selectedPolicyId}
           onOpenPolicy={openSelectedPolicy}
-          onDuplicatePolicy={duplicateSelectedPolicy}
+          onCreateVersion={createNewVersionFromPolicy}
+          onDeleteDraftPolicy={deleteSelectedDraftPolicy}
           onArchivePolicy={archiveSelectedPolicy}
+          isCreatingVersion={isCreatingVersion}
+          isDeletingDraft={isDeletingDraft}
         />
       ) : activeView === "governance" && structure ? (
-        <PolicyGovernanceView structure={structure} onRequestPublication={publishSelectedPolicy} />
+        <PolicyGovernanceView
+          structure={structure}
+          onRequestPublication={publishSelectedPolicy}
+          historyItems={historyItems}
+          isHistoryLoading={isHistoryLoading}
+          historyError={historyError}
+          isPublishing={isPublishing}
+          canManagePolicy={canManagePolicy}
+        />
       ) : (
         <section className="grid gap-4 xl:grid-cols-[310px_minmax(0,1fr)_350px]">
         <PillarSidebar
@@ -3225,6 +3925,24 @@ export function PolicyScorePage() {
               <PillarTwoSubgroups activeSubgroup={selectedSubgroup} />
               <PillarTwoIndicator indicator={selectedIndicator} />
               <PillarTwoRanges indicator={selectedIndicator} />
+              {canEditDraft ? (
+                <DraftStructureEditor
+                  pillar={selectedPillar}
+                  validationStatus={structure?.validation_summary.configuration_status ?? "incomplete"}
+                  selectedSubgroupId={selectedSubgroupId}
+                  selectedIndicatorId={selectedIndicatorId}
+                  selectedSubgroup={selectedSubgroup}
+                  selectedIndicator={selectedIndicator}
+                  isEditable={canEditDraft}
+                  onPillarWeightChange={updatePillarWeight}
+                  onSelectSubgroup={selectSubgroup}
+                  onSubgroupWeightChange={updateSubgroupWeight}
+                  onSelectIndicator={(indicator) => setSelectedIndicatorId(indicator.id)}
+                  onIndicatorWeightChange={updateIndicatorWeight}
+                  onIndicatorEnabledChange={updateIndicatorEnabled}
+                  onRangeChange={updateScoreRange}
+                />
+              ) : null}
             </section>
             <PillarTwoRightRail
               policyId={structure?.policy.id ?? null}
@@ -3234,7 +3952,27 @@ export function PolicyScorePage() {
           </>
         ) : isPillarFour && selectedPillar ? (
           <>
-            <PillarFourContent pillar={selectedPillar} status={selectedRoadmapItem?.status ?? "partial"} />
+            <section className="grid min-w-0 gap-4">
+              <PillarFourContent pillar={selectedPillar} status={selectedRoadmapItem?.status ?? "partial"} />
+              {canEditDraft ? (
+                <DraftStructureEditor
+                  pillar={selectedPillar}
+                  validationStatus={structure?.validation_summary.configuration_status ?? "incomplete"}
+                  selectedSubgroupId={selectedSubgroupId}
+                  selectedIndicatorId={selectedIndicatorId}
+                  selectedSubgroup={selectedSubgroup}
+                  selectedIndicator={selectedIndicator}
+                  isEditable={canEditDraft}
+                  onPillarWeightChange={updatePillarWeight}
+                  onSelectSubgroup={selectSubgroup}
+                  onSubgroupWeightChange={updateSubgroupWeight}
+                  onSelectIndicator={(indicator) => setSelectedIndicatorId(indicator.id)}
+                  onIndicatorWeightChange={updateIndicatorWeight}
+                  onIndicatorEnabledChange={updateIndicatorEnabled}
+                  onRangeChange={updateScoreRange}
+                />
+              ) : null}
+            </section>
             <PillarFourRightRail
               policyId={structure?.policy.id ?? null}
               result={pillarFourSimulationResult}
@@ -3243,7 +3981,27 @@ export function PolicyScorePage() {
           </>
         ) : isPillarFive && selectedPillar ? (
           <>
-            <PillarFiveContent pillar={selectedPillar} status={selectedRoadmapItem?.status ?? "partial"} />
+            <section className="grid min-w-0 gap-4">
+              <PillarFiveContent pillar={selectedPillar} status={selectedRoadmapItem?.status ?? "partial"} />
+              {canEditDraft ? (
+                <DraftStructureEditor
+                  pillar={selectedPillar}
+                  validationStatus={structure?.validation_summary.configuration_status ?? "incomplete"}
+                  selectedSubgroupId={selectedSubgroupId}
+                  selectedIndicatorId={selectedIndicatorId}
+                  selectedSubgroup={selectedSubgroup}
+                  selectedIndicator={selectedIndicator}
+                  isEditable={canEditDraft}
+                  onPillarWeightChange={updatePillarWeight}
+                  onSelectSubgroup={selectSubgroup}
+                  onSubgroupWeightChange={updateSubgroupWeight}
+                  onSelectIndicator={(indicator) => setSelectedIndicatorId(indicator.id)}
+                  onIndicatorWeightChange={updateIndicatorWeight}
+                  onIndicatorEnabledChange={updateIndicatorEnabled}
+                  onRangeChange={updateScoreRange}
+                />
+              ) : null}
+            </section>
             <PillarFiveRightRail
               policyId={structure?.policy.id ?? null}
               result={pillarFiveSimulationResult}
@@ -3254,10 +4012,22 @@ export function PolicyScorePage() {
           <>
             <section className="grid min-w-0 gap-4">
               <PolicyProgress progress={structure?.policy_progress ?? null} />
-              <PillarSummary pillar={selectedPillar} validationStatus={structure?.validation_summary.configuration_status ?? "incomplete"} />
-              <SubgroupList pillar={selectedPillar} selectedSubgroupId={selectedSubgroupId} onSelect={selectSubgroup} />
-              <IndicatorList subgroup={selectedSubgroup} selectedIndicatorId={selectedIndicatorId} onSelect={(indicator) => setSelectedIndicatorId(indicator.id)} />
-              <ScoreRangeTable indicator={selectedIndicator} />
+              <DraftStructureEditor
+                pillar={selectedPillar}
+                validationStatus={structure?.validation_summary.configuration_status ?? "incomplete"}
+                selectedSubgroupId={selectedSubgroupId}
+                selectedIndicatorId={selectedIndicatorId}
+                selectedSubgroup={selectedSubgroup}
+                selectedIndicator={selectedIndicator}
+                isEditable={canEditDraft}
+                onPillarWeightChange={updatePillarWeight}
+                onSelectSubgroup={selectSubgroup}
+                onSubgroupWeightChange={updateSubgroupWeight}
+                onSelectIndicator={(indicator) => setSelectedIndicatorId(indicator.id)}
+                onIndicatorWeightChange={updateIndicatorWeight}
+                onIndicatorEnabledChange={updateIndicatorEnabled}
+                onRangeChange={updateScoreRange}
+              />
             </section>
             <RightRail
               structure={structure}

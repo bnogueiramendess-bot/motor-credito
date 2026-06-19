@@ -51,6 +51,22 @@ class CompanyRead(BaseModel):
     allowed_domains: list[str]
 
 
+class CompanyPolicyGovernanceRoleRead(BaseModel):
+    role_id: int
+    role_code: str
+    role_name: str
+
+
+class CompanyPolicyGovernanceRead(BaseModel):
+    company_id: int
+    approval_roles: dict[str, list[CompanyPolicyGovernanceRoleRead]]
+    fallback_used: dict[str, bool] = {}
+
+
+class CompanyPolicyGovernanceUpdate(BaseModel):
+    approval_roles: dict[str, list[int]]
+
+
 class BusinessUnitCreate(BaseModel):
     name: str
     head_name: str

@@ -13,6 +13,10 @@ from app.models.credit_decision_policy import CreditDecisionPolicy
 from app.models.user import User
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
+from app.services.company_policy_governance_roles import (
+    get_fallback_governance_workflow_roles_for_policy_action,
+    get_governance_workflow_roles_for_policy_action,
+)
 
 POLICY_GOVERNANCE_ACTION_TYPES = (
     "policy_create",
@@ -121,7 +125,14 @@ def validate_policy_action_governance(
     if policy_id is not None and db.get(CreditDecisionPolicy, policy_id) is None:
         raise PolicyGovernanceValidationError("Política de decisão não encontrada.")
 
-    settings = list(
+    configured_roles = get_governance_workflow_roles_for_policy_action(
+        db,
+        company_id=company_id,
+        action_type=normalized_action,
+    )
+    settings = []
+    if not configured_roles:
+        settings = list(
         db.execute(
             select(WorkflowRole.code, CompanyPolicyGovernanceSetting.is_required)
             .join(
@@ -135,8 +146,12 @@ def validate_policy_action_governance(
             )
             .order_by(WorkflowRole.code.asc())
         ).all()
-    )
-    required_roles = [code for code, is_required in settings if is_required]
+        )
+    required_roles = [role.code for role in configured_roles] or [code for code, is_required in settings if is_required]
+    if not required_roles:
+        required_roles = [
+            role.code for role in get_fallback_governance_workflow_roles_for_policy_action(db, action_type=normalized_action)
+        ]
     user_roles = list(
         db.scalars(
             select(WorkflowRole.code)

@@ -26,7 +26,7 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "requires_committee": False,
         "requires_unanimous": False,
         "priority": 10,
-        "workflow_role_codes": ["CREDIT_FINANCE_HEAD"],
+        "workflow_role_codes": ["HEAD_FINANCE"],
     },
     {
         "legacy_code": "APPROVAL_BRL_1_5MM",
@@ -40,7 +40,7 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "requires_committee": False,
         "requires_unanimous": False,
         "priority": 20,
-        "workflow_role_codes": ["CREDIT_FINANCE_DIRECTOR"],
+        "workflow_role_codes": ["CFO"],
     },
     {
         "legacy_code": "APPROVAL_BRL_5_10MM",
@@ -54,7 +54,7 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "requires_committee": False,
         "requires_unanimous": False,
         "priority": 30,
-        "workflow_role_codes": ["CREDIT_GROUP_CFO"],
+        "workflow_role_codes": ["CFO"],
     },
     {
         "legacy_code": "APPROVAL_BRL_GT_10MM",
@@ -68,7 +68,7 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
         "requires_committee": False,
         "requires_unanimous": False,
         "priority": 40,
-        "workflow_role_codes": ["CREDIT_CEO"],
+        "workflow_role_codes": ["CEO"],
     },
     {
         "legacy_code": "APPROVAL_EXCEPTIONS_COMMITTEE",
@@ -117,6 +117,7 @@ def _get_workflow_roles_by_codes(db: Session, codes: Iterable[str]) -> dict[str,
         db.scalars(
             select(WorkflowRole).where(
                 WorkflowRole.code.in_(code_list),
+                WorkflowRole.type == "governance",
                 WorkflowRole.is_active.is_(True),
             )
         ).all()
