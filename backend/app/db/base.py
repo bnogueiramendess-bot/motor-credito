@@ -39,6 +39,8 @@ from app.models import (
     UserInvitation,
     WorkflowRole,
     UserWorkflowRole,
+    WorkflowApprovalStep,
+    WorkflowApprovalDecision,
 )
 
 __all__ = [
@@ -82,4 +84,6 @@ __all__ = [
     "ApprovalMatrixRuleRole",
     "WorkflowRole",
     "UserWorkflowRole",
+    "WorkflowApprovalStep",
+    "WorkflowApprovalDecision",
 ]

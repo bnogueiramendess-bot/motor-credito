@@ -22,7 +22,7 @@ class CreditAnalysis(Base):
     annual_revenue_estimated: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
 
     analysis_status: Mapped[AnalysisStatus] = mapped_column(
-        Enum(AnalysisStatus, name="analysis_status_enum", native_enum=False),
+        Enum(AnalysisStatus, name="analysis_status_enum", native_enum=False, length=32),
         default=AnalysisStatus.CREATED,
         nullable=False,
     )

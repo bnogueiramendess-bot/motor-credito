@@ -1,3 +1,7 @@
+"use client";
+
+import Link from "next/link";
+
 import { CreditAnalysisDetailApiResponse } from "@/features/credit-analyses/api/contracts";
 import {
   buildExplainabilityRuleRows,
@@ -64,10 +68,6 @@ function noInfo(value: string | null | undefined, fallback = "Dados não dispon�
 
 export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   const { analysis, customer, score, decision, final_decision: finalDecision, events } = data;
-  const availableActions = analysis.available_actions ?? [];
-  const canApprove = availableActions.includes("approve");
-  const canReject = availableActions.includes("reject");
-  const canRequestChanges = availableActions.includes("request_changes");
 
   const resolvedDecision = decisionPill(
     resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result)
@@ -365,6 +365,19 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
             </div>
           </div>
 
+          <div className="rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5 shadow-sm">
+            <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4F647A]">Consulta administrativa</div>
+                <p className="text-sm font-medium text-[#102033]">As decisões de aprovação ficam centralizadas no Dossiê Executivo da Etapa 4.</p>
+                <p className="mt-1 text-xs text-[#4F647A]">Use esta tela para consulta, histórico e leitura dos dados consolidados da análise.</p>
+              </div>
+              <Link href={`/analises/${analysis.id}/workspace`} className="inline-flex h-10 items-center justify-center rounded-[10px] bg-[#102033] px-4 text-[12px] font-semibold text-white hover:bg-[#1f344d]">
+                Abrir Dossiê Executivo
+              </Link>
+            </div>
+          </div>
+
           <AccordionRules rules={rules} />
 
           <div className="flex flex-col items-start justify-between gap-4 rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px] lg:flex-row lg:items-center">
@@ -385,30 +398,6 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
               <Button variant="outline" className="h-auto rounded-lg border-[#D7E1EC] px-5 py-2.5 text-[13px] font-medium text-[#102033]">
                 Solicitar exceção
               </Button>
-              {canRequestChanges ? (
-                <button
-                  type="button"
-                  className="rounded-lg bg-[#6B7280] px-5 py-2.5 text-[13px] font-medium text-white transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
-                >
-                  Devolver para ajustes
-                </button>
-              ) : null}
-              {canReject ? (
-                <button
-                  type="button"
-                  className="rounded-lg bg-[#C0392B] px-5 py-2.5 text-[13px] font-medium text-white transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
-                >
-                  Reprovar
-                </button>
-              ) : null}
-              {canApprove ? (
-                <button
-                  type="button"
-                  className="rounded-lg bg-[#E8B83A] px-5 py-2.5 text-[13px] font-medium text-[#102033] transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]"
-                >
-                  Aprovar
-                </button>
-              ) : null}
             </div>
           </div>
         </div>

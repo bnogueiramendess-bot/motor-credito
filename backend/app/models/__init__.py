@@ -54,6 +54,8 @@ from app.models.approval_matrix_rule import ApprovalMatrixRule
 from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
 from app.models.workflow_role import WorkflowRole
 from app.models.user_workflow_role import UserWorkflowRole
+from app.models.workflow_approval_step import WorkflowApprovalStep
+from app.models.workflow_approval_decision import WorkflowApprovalDecision
 
 __all__ = [
     "ActorType",
@@ -105,4 +107,6 @@ __all__ = [
     "ApprovalMatrixRuleRole",
     "WorkflowRole",
     "UserWorkflowRole",
+    "WorkflowApprovalStep",
+    "WorkflowApprovalDecision",
 ]

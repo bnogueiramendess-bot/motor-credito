@@ -10,6 +10,7 @@ import { checkExistingCreditAnalysis, createCommercialReference, createCreditAna
 import { AgriskImportStatus, AgriskReportReadResponse, AgriskReportType, AnalysisDocumentDto, AnalysisJourneySubmitRequest, AnalysisReportReadSummaryDto, CofaceReportReadResponse, CommercialReference, CreditAnalysisDraftRecoveryResponse, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageSubmitRequest, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
 import { InstitutionalScoreCard } from "@/features/analysis-journey/components/institutional-score-card";
 import { RecommendationInsightsCard } from "@/features/analysis-journey/components/recommendation-insights-card";
+import { ApprovalWorkflowCard } from "@/features/credit-analyses/components/approval-workflow-card";
 import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
 import { createExternalDataEntry, getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
 import { getPortfolioCustomers } from "@/features/portfolio/api/portfolio.api";
@@ -2810,10 +2811,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     residualExposure: executiveNetInternalExposure,
   });
   const approvalFlowSummary = workspaceDetailQuery.data?.approval_flow_summary ?? null;
-  const predictedApprovers = approvalFlowSummary?.predicted_approvers ?? [];
   const approvalFlowState = approvalFlowSummary?.flow_state ?? approvalFlowSummary?.approval_flow_state ?? "not_submitted";
-  const approvalFlowSteps = approvalFlowSummary?.steps ?? [];
-  const approvalFlowEvents = approvalFlowSummary?.events ?? [];
+  const dossierApprovalActions = Array.from(new Set([...(workspaceDetailQuery.data?.analysis?.available_actions ?? []), ...(approvalFlowSummary?.available_actions ?? [])]));
   const executiveExposureFullyCovered = executiveNetInternalExposure !== null && executiveNetInternalExposure === 0;
   const executiveExposureHasResidual = executiveNetInternalExposure !== null && executiveNetInternalExposure > 0;
   const executiveInternalSuggestedLimit = (() => {
@@ -4943,19 +4942,19 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                     const step5Active = approvalFlowState === "in_approval" || step5Completed;
                     const step4Completed = step5Active;
                     const trailItems = [
-                      { key: "1", mark: "✓", title: "Solicitação criada", description: "Cliente identificado e limite comercial informado.", tone: "done" as const },
-                      { key: "2", mark: "✓", title: "Coleta de informações", description: "Dados internos, documentos e bureaus consolidados.", tone: "done" as const },
-                      { key: "3", mark: "✓", title: "Mesa de análise", description: "Score, explicabilidade e parecer técnico consolidados.", tone: "done" as const },
+                      { key: "1", mark: "?", title: "Solicitação criada", description: "Cliente identificado e limite comercial informado.", tone: "done" as const },
+                      { key: "2", mark: "?", title: "Coleta de informações", description: "Dados internos, documentos e bureaus consolidados.", tone: "done" as const },
+                      { key: "3", mark: "?", title: "Mesa de análise", description: "Score, explicabilidade e parecer técnico consolidados.", tone: "done" as const },
                       {
                         key: "4",
-                        mark: step4Completed ? "✓" : "›",
+                        mark: step4Completed ? "?" : "›",
                         title: "Revisão e envio",
                         description: "Perfil corporativo revisado e encaminhado para aprovação.",
                         tone: step4Completed ? ("done" as const) : ("active" as const),
                       },
                       {
                         key: "5",
-                        mark: step5Completed ? "✓" : "5",
+                        mark: step5Completed ? "?" : "5",
                         title: "Aprovação",
                         description: "Decisão da alçada aprovadora e conclusão institucional.",
                         tone: step5Completed ? ("done" as const) : step5Active ? ("active" as const) : ("pending" as const),
@@ -4985,102 +4984,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                   })()}
                 </div>
               </article>
-              {approvalFlowSummary ? (
-                <article className="rounded-[18px] border border-[#e5edf6] bg-white px-4 py-4 shadow-[0_6px_14px_rgba(10,29,64,.04)]">
-                  <p className="text-[15px] font-semibold tracking-[-0.01em] text-[#0f172a]">Fluxo de Aprovação</p>
-                  {approvalFlowState === "not_submitted" ? (
-                    <div className="mt-2.5 rounded-[10px] border border-[#e2eaf4] bg-[#f8fbff] px-3 py-2">
-                      <p className="text-[10px] uppercase tracking-[0.08em] text-[#6a7d93]">{approvalFlowSummary.display_title || "Prévia da alçada"}</p>
-                      {approvalFlowSummary.predicted_doa_code && approvalFlowSummary.predicted_doa_range ? (
-                        <p className="mt-1 text-[12px] font-semibold text-[#1f344d]">
-                          {approvalFlowSummary.predicted_doa_code} · {formatDoaRangeExecutive(approvalFlowSummary.predicted_doa_range)}
-                        </p>
-                      ) : (
-                        <p className="mt-1 text-[12px] font-semibold text-[#1f344d]">Alçada ainda não definida</p>
-                      )}
-                      <p className="mt-1 text-[10px] text-[#6a7d93]">
-                        {approvalFlowSummary.decision_basis ? `Base: ${approvalFlowSummary.decision_basis}` : approvalFlowSummary.display_message || "Aguardando envio para aprovação."}
-                      </p>
-                      <div className="mt-2">
-                        {predictedApprovers.length > 0 ? (
-                          <>
-                            <p className="text-[10px] uppercase tracking-[0.08em] text-[#6a7d93]">
-                              {predictedApprovers.some((item) => item.user_name) ? "Aprovadores previstos" : "Papel aprovador previsto"}
-                            </p>
-                            <div className="mt-1.5 flex flex-wrap gap-1.5">
-                              {predictedApprovers.slice(0, 4).map((item, index) => (
-                                <span key={`${item.role}-${item.user_id ?? "role"}-${index}`} className="rounded-full border border-[#d6e0ec] bg-white px-2 py-0.5 text-[10px] font-medium text-[#3b536e]">
-                                  {item.role_label}{item.user_name ? ` · ${item.user_name}` : ""}
-                                </span>
-                              ))}
-                              {predictedApprovers.length > 4 ? (
-                                <span className="rounded-full border border-[#d6e0ec] bg-white px-2 py-0.5 text-[10px] font-medium text-[#3b536e]">
-                                  +{predictedApprovers.length - 4}
-                                </span>
-                              ) : null}
-                            </div>
-                          </>
-                        ) : (
-                          <p className="text-[10px] text-[#6a7d93]">Aprovador será definido pela matriz no envio para aprovação.</p>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-2.5 flex items-center justify-between gap-2 rounded-[10px] border border-[#e2eaf4] bg-[#f8fbff] px-3 py-2">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-[0.08em] text-[#6a7d93]">DOA aplicada</p>
-                        <p className="text-[12px] font-semibold text-[#1f344d]">{approvalFlowSummary.applicable_doa_code || "—"}</p>
-                      </div>
-                      <p className="text-[11px] font-medium text-[#3b536e]">{formatDoaRangeExecutive(approvalFlowSummary.applicable_doa_range)}</p>
-                    </div>
-                  )}
-                  {approvalFlowState !== "not_submitted" ? (
-                    <p className="mt-2 text-[10px] text-[#5c7188]">{approvalFlowSummary.display_status} · {approvalFlowSummary.display_stage}</p>
-                  ) : null}
-                  {approvalFlowState !== "not_submitted" && predictedApprovers.length > 0 ? (
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {predictedApprovers.slice(0, 3).map((item, index) => (
-                        <span key={`${item.role}-${item.user_id ?? "role"}-${index}`} className="rounded-full border border-[#d6e0ec] bg-white px-2 py-0.5 text-[10px] font-medium text-[#3b536e]">
-                          {item.role_label}{item.user_name ? ` · ${item.user_name}` : ""}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                  {approvalFlowSummary.decision_actor_name ? (
-                    <p className="mt-2 text-[10px] text-[#5c7188]">
-                      Decisão: {approvalFlowSummary.decision_actor_name}
-                      {approvalFlowSummary.decision_actor_role ? ` · ${approvalFlowSummary.decision_actor_role}` : ""}
-                    </p>
-                  ) : null}
-                  {approvalFlowSummary.completed_steps.length > 0 ? (
-                    <p className="mt-2 text-[10px] text-[#5c7188]">Concluídas: {approvalFlowSummary.completed_steps.join(" · ")}</p>
-                  ) : null}
-                  {approvalFlowSummary.pending_steps.length > 0 && approvalFlowState !== "not_submitted" ? (
-                    <p className="mt-1 text-[10px] text-[#5c7188]">Pendentes: {approvalFlowSummary.pending_steps.join(" · ")}</p>
-                  ) : null}
-                  {approvalFlowSteps.length > 0 ? (
-                    <div className="mt-2 space-y-1">
-                      {approvalFlowSteps.slice(0, 4).map((stepItem, index) => (
-                        <p key={`${stepItem.status}-${index}`} className="text-[10px] text-[#5c7188]">
-                          {stepItem.label}
-                          {stepItem.actor_name ? ` · ${stepItem.actor_name}` : ""}
-                          {stepItem.timestamp ? ` · ${formatImportedAt(stepItem.timestamp)}` : ""}
-                        </p>
-                      ))}
-                    </div>
-                  ) : null}
-                  {approvalFlowEvents.some((eventItem) => eventItem.event_type === "request_changes" && eventItem.comment) ? (
-                    <p className="mt-1 text-[10px] text-[#5c7188]">
-                      Comentário: {approvalFlowEvents.find((eventItem) => eventItem.event_type === "request_changes" && eventItem.comment)?.comment}
-                    </p>
-                  ) : null}
-                  {approvalFlowSummary.last_decision_event_at ? (
-                    <p className="mt-1 text-[10px] text-[#5c7188]">Último evento: {formatImportedAt(approvalFlowSummary.last_decision_event_at)}</p>
-                  ) : null}
-                  {approvalFlowSummary.sequential_approval_note && approvalFlowState !== "not_submitted" ? (
-                    <p className="mt-1 text-[10px] text-[#73879d]">{approvalFlowSummary.sequential_approval_note}</p>
-                  ) : null}
-                </article>
+              {approvalFlowSummary && activeAnalysisId ? (
+                <ApprovalWorkflowCard analysisId={activeAnalysisId} summary={approvalFlowSummary} availableActions={dossierApprovalActions} />
               ) : null}
               <article className="flex min-h-[214px] self-start flex-col rounded-[22px] border border-[#e5edf6] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] px-5 py-5 shadow-[0_6px_14px_rgba(10,29,64,.04)]">
                 <div>

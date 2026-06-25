@@ -245,6 +245,17 @@ class CreditAnalysisPolicyReference(BaseModel):
     status_label: str
 
 
+class CreditAnalysisApprovalProgressItem(BaseModel):
+    role_code: str | None = None
+    role_label: str
+    status: str
+    sequence_order: int | None = None
+    round_number: int | None = None
+    actor_name: str | None = None
+    decided_at: datetime | None = None
+    comment: str | None = None
+
+
 class CreditAnalysisMonitorItem(BaseModel):
     item_type: str = "CREDIT_ANALYSIS"
     analysis_id: int
@@ -278,6 +289,13 @@ class CreditAnalysisMonitorItem(BaseModel):
     next_responsible_role: str
     applicable_doa_code: str | None = None
     applicable_doa_range: str | None = None
+    current_approval_step: str | None = None
+    current_approval_step_code: str | None = None
+    approval_round: int | None = None
+    approval_progress: list[CreditAnalysisApprovalProgressItem] = Field(default_factory=list)
+    approval_escalated_to_committee: bool = False
+    approval_sla_label: str | None = None
+    approval_started_at: datetime | None = None
     policy_reference: CreditAnalysisPolicyReference
     available_actions: list[str]
 
@@ -332,6 +350,16 @@ class CreditAnalysisApprovalFlowSummary(BaseModel):
     returned_approvers: list[dict] = Field(default_factory=list)
     events: list[dict] = Field(default_factory=list)
     steps: list[dict] = Field(default_factory=list)
+    current_approval_step: str | None = None
+    current_approval_step_code: str | None = None
+    approval_round: int | None = None
+    approval_progress: list[CreditAnalysisApprovalProgressItem] = Field(default_factory=list)
+    approval_rounds: list[dict] = Field(default_factory=list)
+    approval_escalated_to_committee: bool = False
+    approval_sla_label: str | None = None
+    approval_started_at: datetime | None = None
+    committee_escalation: dict | None = None
+    decision_comments: list[dict] = Field(default_factory=list)
     display_title: str = ""
     display_message: str = ""
 
@@ -359,6 +387,10 @@ class CreditAnalysisApprovalQueueKpis(BaseModel):
     awaiting_approval: int = 0
     overdue_sla: int = 0
     high_value: int = 0
+    pending_my_action: int = 0
+    in_approval: int = 0
+    returned_for_adjustment: int = 0
+    rejected_today: int = 0
 
 
 class CreditAnalysisApprovalQueueResponse(BaseModel):

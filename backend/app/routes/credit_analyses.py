@@ -33,6 +33,8 @@ from app.models.user import User
 from app.models.role import Role
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
+from app.models.workflow_approval_decision import WorkflowApprovalDecision
+from app.models.workflow_approval_step import WorkflowApprovalStep
 from app.models.user_business_unit_scope import UserBusinessUnitScope
 from app.schemas.credit_analysis import (
     CreditAnalysisCreate,
@@ -109,6 +111,7 @@ from app.services.workflow_authorization import (
 )
 from app.services.approval_matrix import resolve_required_approval_roles
 from app.services.workflow_transition_engine import resolve_credit_workflow_transition
+from app.services.workflow_approval import list_latest_approval_steps
 from app.services.credit_decision_policy_publication import list_policy_approval_queue_items
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
@@ -361,6 +364,10 @@ def _find_recent_analysis(db: Session, *, customer_id: int) -> CreditAnalysis | 
 def _resolve_operational_status(analysis: CreditAnalysis, external_entries: list[ExternalDataEntry]) -> str:
     if analysis.final_decision is not None:
         return "approved" if analysis.final_decision.value == "approved" else "rejected"
+    if analysis.analysis_status == AnalysisStatus.IN_APPROVAL:
+        return "in_approval"
+    if analysis.analysis_status == AnalysisStatus.CHANGES_REQUESTED:
+        return "changes_requested"
     if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
         return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CREATED:
@@ -424,6 +431,8 @@ def _resolve_workflow_stage(status_value: str) -> str:
         return "financial_review"
     if status_value in {"in_approval"}:
         return "pending_approval"
+    if status_value in {"changes_requested"}:
+        return "returned"
     if status_value in {"approved", "rejected"}:
         return "decided"
     return "returned"
@@ -436,6 +445,7 @@ TECHNICAL_MONITOR_VISIBILITY_ACTIONS = {
     "approve",
     "reject",
     "request_changes",
+    "escalate_to_committee",
     "view_dossier",
     "view_result",
 }
@@ -448,8 +458,120 @@ def _status_label(status_value: str) -> str:
         "in_approval": "Em aprovacao",
         "approved": "Aprovado",
         "rejected": "Recusado",
+        "changes_requested": "Devolvido para Ajustes",
     }
     return mapping.get(status_value, status_value)
+
+
+def _approval_elapsed_label(started_at: datetime | None, *, now: datetime | None = None) -> str | None:
+    if started_at is None:
+        return None
+    reference = now or datetime.now(timezone.utc)
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    elapsed = max(reference - started_at, timedelta(0))
+    days = elapsed.days
+    if days >= 1:
+        return f"{days} dia" if days == 1 else f"{days} dias"
+    hours = max(int(elapsed.total_seconds() // 3600), 0)
+    if hours >= 1:
+        return f"{hours} hora" if hours == 1 else f"{hours} horas"
+    minutes = max(int(elapsed.total_seconds() // 60), 1)
+    return f"{minutes} min"
+
+
+def _build_approval_workflow_snapshot(db: Session, analysis: CreditAnalysis) -> dict:
+    steps = list(
+        db.scalars(
+            select(WorkflowApprovalStep)
+            .where(WorkflowApprovalStep.credit_analysis_id == analysis.id)
+            .order_by(WorkflowApprovalStep.round_number.asc(), WorkflowApprovalStep.sequence_order.asc(), WorkflowApprovalStep.id.asc())
+        ).all()
+    )
+    decisions = list(
+        db.scalars(
+            select(WorkflowApprovalDecision)
+            .where(WorkflowApprovalDecision.credit_analysis_id == analysis.id)
+            .order_by(WorkflowApprovalDecision.round_number.asc(), WorkflowApprovalDecision.sequence_order.asc(), WorkflowApprovalDecision.created_at.asc(), WorkflowApprovalDecision.id.asc())
+        ).all()
+    )
+    role_ids = {step.workflow_role_id for step in steps} | {decision.workflow_role_id for decision in decisions}
+    user_ids = {step.decided_by_user_id for step in steps if step.decided_by_user_id is not None} | {decision.user_id for decision in decisions}
+    roles = {
+        role.id: role
+        for role in db.scalars(select(WorkflowRole).where(WorkflowRole.id.in_(role_ids))).all()
+    } if role_ids else {}
+    users = {
+        user.id: user
+        for user in db.scalars(select(User).where(User.id.in_(user_ids))).all()
+    } if user_ids else {}
+
+    latest_round = max((step.round_number for step in steps), default=None)
+    latest_steps = [step for step in steps if latest_round is not None and step.round_number == latest_round]
+    active_step = next((step for step in latest_steps if step.status == "ACTIVE"), None)
+
+    def step_item(step: WorkflowApprovalStep) -> dict:
+        role = roles.get(step.workflow_role_id)
+        actor = users.get(step.decided_by_user_id) if step.decided_by_user_id is not None else None
+        return {
+            "role_code": role.code if role else None,
+            "role_label": role.name if role and role.name else (role.code if role else "Alcada"),
+            "status": step.status.lower(),
+            "sequence_order": step.sequence_order,
+            "round_number": step.round_number,
+            "actor_name": actor.full_name if actor else None,
+            "decided_at": step.decided_at,
+            "comment": step.decision_comment,
+        }
+
+    def decision_item(decision: WorkflowApprovalDecision) -> dict:
+        role = roles.get(decision.workflow_role_id)
+        actor = users.get(decision.user_id)
+        return {
+            "decision": decision.decision,
+            "role_code": role.code if role else None,
+            "role_label": role.name if role and role.name else (role.code if role else "Alcada"),
+            "actor_name": actor.full_name if actor else None,
+            "comment": decision.comment,
+            "created_at": decision.created_at,
+            "round_number": decision.round_number,
+            "sequence_order": decision.sequence_order,
+        }
+
+    round_numbers = sorted({step.round_number for step in steps} | {decision.round_number for decision in decisions})
+    approval_rounds = [
+        {
+            "round_number": round_number,
+            "steps": [step_item(step) for step in steps if step.round_number == round_number],
+            "decisions": [decision_item(decision) for decision in decisions if decision.round_number == round_number],
+        }
+        for round_number in round_numbers
+    ]
+    decision_comments = [
+        decision_item(decision)
+        for decision in decisions
+        if decision.decision in {"REQUEST_CHANGES", "REJECTED", "ESCALATED_TO_COMMITTEE"} and (decision.comment or "").strip()
+    ]
+    committee_decisions = [decision for decision in decisions if decision.decision == "ESCALATED_TO_COMMITTEE"]
+    committee_escalation = decision_item(committee_decisions[-1]) if committee_decisions else None
+    active_role = roles.get(active_step.workflow_role_id) if active_step else None
+    approval_started_at = analysis.submitted_for_approval_at
+    if approval_started_at is None and steps:
+        approval_started_at = min(step.created_at for step in steps)
+
+    return {
+        "current_approval_step": active_role.name if active_role and active_role.name else (active_role.code if active_role else None),
+        "current_approval_step_code": active_role.code if active_role else None,
+        "approval_round": latest_round,
+        "approval_progress": [step_item(step) for step in latest_steps],
+        "approval_rounds": approval_rounds,
+        "approval_escalated_to_committee": committee_escalation is not None,
+        "approval_sla_label": _approval_elapsed_label(approval_started_at),
+        "approval_started_at": approval_started_at,
+        "committee_escalation": committee_escalation,
+        "decision_comments": decision_comments,
+    }
+
 
 def _build_approval_flow_summary(
     db: Session,
@@ -463,6 +585,8 @@ def _build_approval_flow_summary(
         "analysis_approved": "approved",
         "analysis_rejected": "rejected",
         "returned_for_revision": "request_changes",
+        "analysis_escalated_to_committee": "escalated_to_committee",
+        "analysis_approval_step_approved": "approved",
     }
     def role_label_from_code(code: str) -> str:
         role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == code, WorkflowRole.is_active.is_(True)))
@@ -549,9 +673,22 @@ def _build_approval_flow_summary(
         if event.event_type in {"analysis_submitted_for_approval", "analysis_approved", "analysis_rejected", "returned_for_revision"}
     ]
     required_roles: list[str] = []
+    persisted_steps = list_latest_approval_steps(db, analysis.id)
+    step_roles_by_id = {
+        role.id: role
+        for role in db.scalars(
+            select(WorkflowRole).where(WorkflowRole.id.in_([step.workflow_role_id for step in persisted_steps]))
+        ).all()
+    } if persisted_steps else {}
+    if persisted_steps:
+        required_roles = [
+            step_roles_by_id[step.workflow_role_id].code
+            for step in persisted_steps
+            if step.workflow_role_id in step_roles_by_id
+        ]
     if isinstance(analysis.decision_memory_json, dict):
         preview = analysis.decision_memory_json.get("approval_matrix_preview")
-        if isinstance(preview, dict) and isinstance(preview.get("required_roles"), list):
+        if not required_roles and isinstance(preview, dict) and isinstance(preview.get("required_roles"), list):
             required_roles = [str(role) for role in preview["required_roles"] if str(role).strip()]
 
     completed_steps: list[str] = []
@@ -566,15 +703,17 @@ def _build_approval_flow_summary(
 
     pending_steps: list[str] = []
     if status_value == "in_approval":
-        pending_steps.append("Aguardando decisão da alçada")
+        active_step = next((step for step in persisted_steps if step.status == "ACTIVE"), None)
+        active_role = step_roles_by_id.get(active_step.workflow_role_id) if active_step else None
+        pending_steps.append(f"Aguardando {active_role.name}" if active_role else "Aguardando decisão da alçada")
     elif status_value == "pending":
         pending_steps.append("Pendente de submissão")
     elif status_value == "in_progress":
         pending_steps.append("Em análise técnica")
 
     sequential_note = (
-        "A aprovação sequencial multi-etapas ainda não está modelada explicitamente; o resumo reflete a alçada aplicável, ações disponíveis e eventos registrados."
-        if len(required_roles) <= 1
+        "Aprovação sequencial controlada pela rodada ativa."
+        if persisted_steps and len(persisted_steps) > 1
         else None
     )
 
@@ -678,8 +817,23 @@ def _build_approval_flow_summary(
         else "rejected"
     )
     predicted_approvers: list[dict] = []
+    step_status_by_role: dict[str, str] = {}
+    for step in persisted_steps:
+        role = step_roles_by_id.get(step.workflow_role_id)
+        if role is None:
+            continue
+        mapped_status = {
+            "ACTIVE": "pending",
+            "PENDING": "pending",
+            "APPROVED": "approved",
+            "REJECTED": "rejected",
+            "CHANGES_REQUESTED": "request_changes",
+            "SKIPPED": "skipped",
+        }.get(step.status, step.status.lower())
+        step_status_by_role[role.code] = mapped_status
     for index, role_code in enumerate(required_roles, start=1):
         role_users = resolve_users_for_role(role_code)
+        resolved_status = step_status_by_role.get(role_code, approver_status)
         if role_users:
             for user_item in role_users:
                 predicted_approvers.append(
@@ -690,7 +844,7 @@ def _build_approval_flow_summary(
                         "user_name": user_item["user_name"],
                         "user_email": user_item["user_email"],
                         "sequence": index,
-                        "status": approver_status,
+                        "status": resolved_status,
                     }
                 )
         else:
@@ -702,7 +856,7 @@ def _build_approval_flow_summary(
                     "user_name": None,
                     "user_email": None,
                     "sequence": index,
-                    "status": approver_status,
+                    "status": resolved_status,
                 }
             )
 
@@ -803,6 +957,8 @@ def _build_approval_flow_summary(
                 }
             )
 
+    approval_snapshot = _build_approval_workflow_snapshot(db, analysis)
+
     return CreditAnalysisApprovalFlowSummary(
         analysis_id=analysis.id,
         current_status=status_value,
@@ -841,6 +997,16 @@ def _build_approval_flow_summary(
         returned_approvers=returned_approvers,
         events=flow_events,
         steps=flow_steps,
+        current_approval_step=approval_snapshot["current_approval_step"],
+        current_approval_step_code=approval_snapshot["current_approval_step_code"],
+        approval_round=approval_snapshot["approval_round"],
+        approval_progress=approval_snapshot["approval_progress"],
+        approval_rounds=approval_snapshot["approval_rounds"],
+        approval_escalated_to_committee=approval_snapshot["approval_escalated_to_committee"],
+        approval_sla_label=approval_snapshot["approval_sla_label"],
+        approval_started_at=approval_snapshot["approval_started_at"],
+        committee_escalation=approval_snapshot["committee_escalation"],
+        decision_comments=approval_snapshot["decision_comments"],
         display_title=display_title,
         display_message=display_message,
     )
@@ -849,6 +1015,10 @@ def _build_approval_flow_summary(
 def _current_status_value(analysis: CreditAnalysis) -> str:
     if analysis.final_decision is not None:
         return "approved" if analysis.final_decision.value == "approved" else "rejected"
+    if analysis.analysis_status == AnalysisStatus.IN_APPROVAL:
+        return "in_approval"
+    if analysis.analysis_status == AnalysisStatus.CHANGES_REQUESTED:
+        return "changes_requested"
     if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
         return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CREATED:
@@ -2893,7 +3063,7 @@ def list_credit_analyses_monitor(
         awaiting_financial_review=sum(1 for item in filtered if item.workflow_stage == "financial_review"),
         in_analysis=sum(1 for item in filtered if item.current_status == "in_progress"),
         awaiting_approval=sum(1 for item in filtered if item.workflow_stage == "pending_approval"),
-        returned_for_adjustment=0,
+        returned_for_adjustment=sum(1 for item in filtered if item.current_status == "changes_requested"),
         completed=sum(1 for item in filtered if item.workflow_stage == "decided"),
         early_reviews=sum(1 for item in filtered if item.is_early_review_request),
     )
@@ -2918,6 +3088,8 @@ def list_credit_analyses_approval_queue(
     status_filter: str | None = None,
     bu: str | None = None,
     business_unit_context: str | None = None,
+    doa: str | None = None,
+    current_step: str | None = None,
     aging: str | None = None,
     assigned_analyst: str | None = None,
     page: int = 1,
@@ -2944,10 +3116,17 @@ def list_credit_analyses_approval_queue(
     now = datetime.now(timezone.utc)
     requester_name_cache: dict[str, str | None] = {}
     analyst_name_cache: dict[int, str | None] = {}
+    status_counters = {"in_approval": 0, "changes_requested": 0, "rejected_today": 0}
     for analysis, customer in rows:
         if _is_step1_draft(analysis):
             continue
         status_value = _current_status_value(analysis)
+        if status_value == "in_approval":
+            status_counters["in_approval"] += 1
+        if status_value == "changes_requested":
+            status_counters["changes_requested"] += 1
+        if status_value == "rejected" and analysis.rejected_at and analysis.rejected_at.date() == now.date():
+            status_counters["rejected_today"] += 1
         if status_value != "in_approval":
             continue
 
@@ -3054,14 +3233,15 @@ def list_credit_analyses_approval_queue(
             business_unit=bu_name,
         )
         available_actions = approval_summary.available_actions
-        can_decide = any(action in {"approve", "reject", "request_changes"} for action in available_actions)
+        can_decide = any(action in {"approve", "reject", "request_changes", "escalate_to_committee"} for action in available_actions)
+        has_persisted_approval_steps = bool(list_latest_approval_steps(db, analysis.id))
         technical_linked_to_user = (
             analysis.last_owner_user_id == current.user.id
             or analysis.current_owner_user_id == current.user.id
             or (analysis.assigned_analyst_name or "").strip().lower()
             in {(current.user.full_name or "").strip().lower(), current.user.email.strip().lower()}
         )
-        if not can_decide and not technical_linked_to_user:
+        if not can_decide and (has_persisted_approval_steps or not technical_linked_to_user):
             continue
 
         stage = _resolve_workflow_stage(status_value)
@@ -3101,6 +3281,13 @@ def list_credit_analyses_approval_queue(
             next_responsible_role="aprovador",
             applicable_doa_code=approval_summary.applicable_doa_code,
             applicable_doa_range=approval_summary.applicable_doa_range,
+            current_approval_step=approval_summary.current_approval_step,
+            current_approval_step_code=approval_summary.current_approval_step_code,
+            approval_round=approval_summary.approval_round,
+            approval_progress=approval_summary.approval_progress,
+            approval_escalated_to_committee=approval_summary.approval_escalated_to_committee,
+            approval_sla_label=approval_summary.approval_sla_label,
+            approval_started_at=approval_summary.approval_started_at,
             policy_reference=_resolve_policy_reference(analysis),
             available_actions=available_actions,
         )
@@ -3115,6 +3302,12 @@ def list_credit_analyses_approval_queue(
             return False
         if bu and (item.business_unit or "") != bu:
             return False
+        if doa and (item.applicable_doa_code or "") != doa:
+            return False
+        if current_step:
+            step_text = f"{item.current_approval_step or ''} {item.current_approval_step_code or ''}".lower()
+            if current_step.lower() not in step_text:
+                return False
         if assigned_analyst and assigned_analyst.lower() not in (item.assigned_analyst_name or "").lower():
             return False
         if aging:
@@ -3145,6 +3338,10 @@ def list_credit_analyses_approval_queue(
             for item in filtered
             if (getattr(item, "suggested_limit", None) or Decimal("0")) >= Decimal("1000000")
         ),
+        pending_my_action=sum(1 for item in filtered if getattr(item, "item_type", "") == "CREDIT_ANALYSIS"),
+        in_approval=status_counters["in_approval"],
+        returned_for_adjustment=status_counters["changes_requested"],
+        rejected_today=status_counters["rejected_today"],
     )
     total = len(filtered)
     start = (page - 1) * page_size
@@ -3316,6 +3513,8 @@ def list_credit_analysis_events(
         "analysis_submitted_for_approval",
         "analysis_approved",
         "analysis_rejected",
+        "analysis_approval_step_approved",
+        "analysis_escalated_to_committee",
         "reassigned",
         "returned_for_revision",
         "comments_added",
@@ -3785,7 +3984,7 @@ def execute_workflow_action(
     _enforce_technical_access_or_403(db, current, analysis)
 
     action = (payload.action or "").strip().lower()
-    if action not in {"submit_approval", "submit_for_approval", "request_changes", "request_maintenance", "return_to_analysis", "finalize"}:
+    if action not in {"submit_approval", "submit_for_approval", "request_changes", "request_maintenance", "return_to_analysis", "finalize", "escalate_to_committee", "approve", "reject"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="AÃ§Ã£o de workflow invÃ¡lida para este endpoint.")
 
     action_aliases = {

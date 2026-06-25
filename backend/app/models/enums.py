@@ -4,6 +4,8 @@ from enum import StrEnum
 class AnalysisStatus(StrEnum):
     CREATED = "created"
     IN_PROGRESS = "in_progress"
+    IN_APPROVAL = "in_approval"
+    CHANGES_REQUESTED = "changes_requested"
     COMPLETED = "completed"
 
 

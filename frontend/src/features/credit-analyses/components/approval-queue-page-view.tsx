@@ -3,11 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, Check, ChevronDown, ChevronsLeft, ChevronsRight, Filter, Landmark, Search, ShieldAlert, UserRoundCheck } from "lucide-react";
 
-import { executeCreditAnalysisWorkflowAction } from "@/features/credit-analyses/api/credit-analyses.api";
-import { CreditAnalysisMonitorItemDto, CreditPolicyApprovalQueueItemDto, WorkflowActionRequest } from "@/features/credit-analyses/api/contracts";
+import { CreditAnalysisApprovalProgressItemDto, CreditAnalysisMonitorItemDto, CreditPolicyApprovalQueueItemDto } from "@/features/credit-analyses/api/contracts";
 import { useCreditAnalysesApprovalQueueQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-approval-queue-query";
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
 import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
@@ -16,17 +14,13 @@ import { OperationalContextBar } from "@/shared/components/layout/operational-co
 import { EmptyState } from "@/shared/components/states/empty-state";
 import { ErrorState } from "@/shared/components/states/error-state";
 
-type DecisionAction = "approve" | "reject" | "request_changes";
-
-type ReturnModalState = {
-  analysisId: number;
-  customerName: string;
-} | null;
+type DecisionAction = "approve" | "reject" | "request_changes" | "escalate_to_committee";
 
 const DECISION_ACTIONS: Array<{ value: DecisionAction; label: string }> = [
   { value: "approve", label: "Aprovar" },
   { value: "reject", label: "Rejeitar" },
   { value: "request_changes", label: "Devolver para ajustes" },
+  { value: "escalate_to_committee", label: "Direcionar para Comitê" },
 ];
 
 function formatCompactCurrency(value: number | string | null | undefined): string | null {
@@ -91,6 +85,7 @@ function statusBadgeClass(status: string) {
 
 function statusLabel(status: string) {
   if (status === "in_approval") return "Em aprovação";
+  if (status === "changes_requested") return "Devolvido para Ajustes";
   if (status === "approved") return "Aprovado";
   if (status === "rejected") return "Recusado";
   return status;
@@ -106,6 +101,40 @@ function impactValueClass(label: string) {
   if (label.includes("Aumento")) return "text-[#059669]";
   if (label.includes("Redução")) return "text-[#B45309]";
   return "text-[#0F766E]";
+}
+
+function approvalProgressClass(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === "approved") return "border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]";
+  if (normalized === "active") return "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]";
+  if (normalized === "rejected" || normalized === "changes_requested") return "border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]";
+  if (normalized === "skipped") return "border-[#CBD5E1] bg-[#F8FAFC] text-[#64748B]";
+  return "border-[#E2E8F0] bg-white text-[#64748B]";
+}
+
+function approvalProgressMarker(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === "approved") return "?";
+  if (normalized === "active") return "?";
+  if (normalized === "rejected") return "×";
+  if (normalized === "changes_requested") return "?";
+  return "?";
+}
+
+function compactApprovalProgress(progress: CreditAnalysisApprovalProgressItemDto[] | undefined) {
+  const items = progress ?? [];
+  if (!items.length) return <span className="text-[12px] text-[#94A3B8]">Etapas serão exibidas após o envio.</span>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.slice(0, 4).map((step, index) => (
+        <span key={`${step.role_code ?? step.role_label}-${index}`} className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-semibold ${approvalProgressClass(step.status)}`}>
+          <span aria-hidden>{approvalProgressMarker(step.status)}</span>
+          {step.role_label}
+        </span>
+      ))}
+      {items.length > 4 ? <span className="rounded-full border border-[#E2E8F0] px-2 py-1 text-[11px] font-semibold text-[#64748B]">+{items.length - 4}</span> : null}
+    </div>
+  );
 }
 
 function resolveUserName(value: string | null | undefined): string {
@@ -303,17 +332,14 @@ function ApprovalQueuePolicyCard({
 }
 
 export function ApprovalQueuePageView() {
-  const queryClient = useQueryClient();
   const router = useRouter();
   const searchParams = useSearchParams();
   const businessUnitContext = searchParams.get("business_unit_context") ?? "";
   const buContextQuery = useBusinessUnitContextQuery();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [filters, setFilters] = useState({ q: "", status_filter: "", bu: "", aging: "", assigned_analyst: "" });
+  const [filters, setFilters] = useState({ q: "", status_filter: "", bu: "", doa: "", current_step: "", aging: "", assigned_analyst: "" });
   const [menuOpenFor, setMenuOpenFor] = useState<number | null>(null);
-  const [returnModal, setReturnModal] = useState<ReturnModalState>(null);
-  const [returnComment, setReturnComment] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const params = useMemo(
@@ -322,22 +348,6 @@ export function ApprovalQueuePageView() {
   );
 
   const queueQuery = useCreditAnalysesApprovalQueueQuery(params);
-  const workflowActionMutation = useMutation({
-    mutationFn: ({ analysisId, payload }: { analysisId: number; payload: WorkflowActionRequest }) =>
-      executeCreditAnalysisWorkflowAction(analysisId, payload),
-    onSuccess: async (_, variables) => {
-      setFeedback("Decisão registrada com sucesso.");
-      setMenuOpenFor(null);
-      setReturnModal(null);
-      setReturnComment("");
-      await queryClient.invalidateQueries({ queryKey: ["credit-analysis-detail", variables.analysisId] });
-      await queryClient.invalidateQueries({ queryKey: ["workspace-analysis-detail", variables.analysisId] });
-      await queueQuery.refetch();
-    },
-    onError: (error: Error) => {
-      setFeedback(error.message || "Não foi possível executar a ação.");
-    },
-  });
 
   if (queueQuery.isLoading) {
     return <div className="rounded-[12px] border border-[#D7E1EC] bg-white p-6 text-[13px] text-[#4F647A]">Carregando fila de aprovação...</div>;
@@ -357,39 +367,16 @@ export function ApprovalQueuePageView() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const end = Math.min(total, page * pageSize);
-
-  function handleDecision(item: CreditAnalysisMonitorItemDto, action: DecisionAction) {
-    if (action === "request_changes") {
-      setReturnModal({ analysisId: item.analysis_id, customerName: item.customer_name });
-      setMenuOpenFor(null);
-      return;
-    }
-
-    workflowActionMutation.mutate({
-      analysisId: item.analysis_id,
-      payload: { action, justification: null },
-    });
-  }
-
-  function submitReturnAction() {
-    if (!returnModal) return;
-    const trimmed = returnComment.trim();
-    if (trimmed.length < 10) {
-      setFeedback("A consideração deve ter ao menos 10 caracteres para devolução.");
-      return;
-    }
-
-    workflowActionMutation.mutate({
-      analysisId: returnModal.analysisId,
-      payload: { action: "request_changes", justification: trimmed },
-    });
-  }
+  const analysisItems = items.filter((item): item is CreditAnalysisMonitorItemDto => item.item_type === "CREDIT_ANALYSIS");
+  const doaOptions = [...new Set(analysisItems.map((item) => item.applicable_doa_code).filter(Boolean))] as string[];
+  const currentStepOptions = [...new Set(analysisItems.map((item) => item.current_approval_step).filter(Boolean))] as string[];
+  const buOptions = [...new Set(analysisItems.map((item) => item.business_unit).filter(Boolean))] as string[];
 
   return (
     <section className="readability-standard rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] p-4">
       <div className="mb-3">
         <p className="text-[30px] font-semibold tracking-[-0.02em] text-[#0F172A]">Fila de Aprovação</p>
-        <p className="text-[14px] text-[#64748B]">Priorize decisões pendentes com visão de alçada, BU e SLA em tempo real.</p>
+        <p className="text-[14px] text-[#64748B]">Caixa de entrada do aprovador: priorize pendências e abra o Dossiê Executivo para decidir.</p>
       </div>
       {buContextQuery.data ? (
         <OperationalContextBar className="mb-3">
@@ -411,20 +398,25 @@ export function ApprovalQueuePageView() {
       ) : null}
 
       <div className="mb-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">Total em aprovação</p><p className="text-[24px] font-semibold text-[#0F172A]">{payload?.kpis.total ?? 0}</p></article>
-        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">SLA &gt; 5 dias</p><p className="text-[24px] font-semibold text-[#B91C1C]">{payload?.kpis.overdue_sla ?? 0}</p></article>
-        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">Alto valor ({">="} R$ 1MM)</p><p className="text-[24px] font-semibold text-[#7C3AED]">{payload?.kpis.high_value ?? 0}</p></article>
-        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">Aguardando decisão</p><p className="text-[24px] font-semibold text-[#1D4ED8]">{payload?.kpis.awaiting_approval ?? 0}</p></article>
+        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">Pendentes de Minha Ação</p><p className="text-[24px] font-semibold text-[#0F172A]">{payload?.kpis.pending_my_action ?? payload?.kpis.awaiting_approval ?? 0}</p></article>
+        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">Em Aprovação</p><p className="text-[24px] font-semibold text-[#1D4ED8]">{payload?.kpis.in_approval ?? payload?.kpis.awaiting_approval ?? 0}</p></article>
+        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">Devolvidos para Ajustes</p><p className="text-[24px] font-semibold text-[#B45309]">{payload?.kpis.returned_for_adjustment ?? 0}</p></article>
+        <article className="rounded-[12px] border border-[#E2E8F0] bg-white px-3 py-2.5"><p className="text-[11px] text-[#64748B]">Rejeitados Hoje</p><p className="text-[24px] font-semibold text-[#B91C1C]">{payload?.kpis.rejected_today ?? 0}</p></article>
       </div>
 
       <div className="mb-3 rounded-[12px] border border-[#E2E8F0] bg-white p-2.5">
-        <div className="grid gap-2 xl:grid-cols-[2fr_1.1fr_1.1fr_1.1fr_1.2fr_auto]">
-          <label className="flex h-10 items-center rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#64748B]"><Search className="mr-2 h-4 w-4 text-[#94A3B8]" /><input value={filters.q} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, q: e.target.value })); }} placeholder="Buscar por cliente, CNPJ ou protocolo" className="w-full bg-transparent outline-none" /></label>
+        <div className="grid gap-2 xl:grid-cols-[2fr_1fr_1fr_1fr_1.1fr_1.2fr_auto]">
+          <label className="flex h-10 items-center rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#64748B]"><Search className="mr-2 h-4 w-4 text-[#94A3B8]" /><input value={filters.q} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, q: e.target.value })); }} placeholder="Cliente, CNPJ ou protocolo" className="w-full bg-transparent outline-none" /></label>
           <select value={filters.status_filter} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, status_filter: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px]"><option value="">Status</option><option value="in_approval">Em aprovação</option></select>
-          <select value={filters.bu} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, bu: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px]"><option value="">BU</option>{[...new Set(items.map((item) => item.business_unit).filter(Boolean))].map((option) => <option key={option as string} value={option as string}>{option}</option>)}</select>
-          <select value={filters.aging} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, aging: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px]"><option value="">Aging</option><option value="over_5">Acima de 5 dias</option><option value="over_10">Acima de 10 dias</option></select>
+          <select value={filters.bu} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, bu: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px]"><option value="">BU</option>{buOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
+          <select value={filters.doa} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, doa: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px]"><option value="">DOA</option>{doaOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
+          <select value={filters.current_step} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, current_step: e.target.value })); }} className="h-10 rounded-[10px] border border-[#E2E8F0] px-3 text-[12px]"><option value="">Etapa Atual</option>{currentStepOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
           <label className="flex h-10 items-center rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#64748B]"><UserRoundCheck className="mr-2 h-4 w-4 text-[#94A3B8]" /><input value={filters.assigned_analyst} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, assigned_analyst: e.target.value })); }} placeholder="Analista" className="w-full bg-transparent outline-none" /></label>
           <button type="button" className="flex h-10 items-center justify-center rounded-[10px] border border-[#E2E8F0] px-3 text-[12px] text-[#64748B]"><Filter className="mr-2 h-4 w-4" /> Filtros</button>
+        </div>
+        <div className="mt-2 flex gap-2 text-[11px] text-[#64748B]">
+          <select value={filters.aging} onChange={(e) => { setPage(1); setFilters((p) => ({ ...p, aging: e.target.value })); }} className="h-8 rounded-[9px] border border-[#E2E8F0] px-2 text-[11px]"><option value="">Tempo em aprovação</option><option value="over_5">Acima de 5 dias</option><option value="over_10">Acima de 10 dias</option></select>
+          <span className="inline-flex items-center">As ações de decisão ficam disponíveis no Dossiê Executivo.</span>
         </div>
       </div>
 
@@ -443,7 +435,7 @@ export function ApprovalQueuePageView() {
                 item={item}
                 decisionActions={decisionActions}
                 isMenuOpen={menuOpenFor === item.request_id}
-                isPending={workflowActionMutation.isPending}
+                isPending={false}
                 onToggleMenu={() => setMenuOpenFor((current) => (current === item.request_id ? null : item.request_id))}
                 onDecision={() => {
                   setFeedback("Abra o dossiê da política para concluir esta decisão.");
@@ -494,9 +486,23 @@ export function ApprovalQueuePageView() {
                   <p className="text-[13px] font-semibold text-[#334155]">{formatDoaRange(item.applicable_doa_range)}</p>
                 </div>
                 <div className={`rounded-[16px] border px-4 py-3 ${slaClass(item.stage_aging_days)}`}>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.04em]">Aging SLA</p>
-                  <p className="mt-1 text-[16px] font-bold">{item.stage_aging_days} dia(s)</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.04em]">Tempo em Aprovação</p>
+                  <p className="mt-1 text-[16px] font-bold">{item.approval_sla_label ?? `${item.stage_aging_days} dia(s)`}</p>
                 </div>
+              </div>
+
+              <div className="mb-4 rounded-[16px] border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[#64748B]">Etapa Atual</p>
+                    <p className="text-[14px] font-bold text-[#0F2748]">{item.current_approval_step ?? "Alçada em definição"}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full border border-[#C7D2FE] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4338CA]">Rodada {item.approval_round ?? 1}</span>
+                    {item.approval_escalated_to_committee ? <span className="rounded-full border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-1 text-[11px] font-semibold text-[#92400E]">Comitê Obrigatório</span> : null}
+                  </div>
+                </div>
+                {compactApprovalProgress(item.approval_progress)}
               </div>
 
               <div className="mb-4 border-t border-[#E2E8F0] pt-3">
@@ -512,39 +518,14 @@ export function ApprovalQueuePageView() {
 
               <div className="mt-auto flex items-center justify-end gap-3">
                 {item.available_actions.includes("view_dossier") || decisionActions.length > 0 ? (
-                  <Link href={`/analises/${item.analysis_id}`} className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
-                    Abrir Dossiê
+                  <Link href={`/analises/${item.analysis_id}/workspace`} className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
+                    Abrir Dossiê para Decidir
                   </Link>
                 ) : (
                   <button type="button" disabled className="inline-flex h-11 min-w-[150px] cursor-not-allowed items-center justify-center rounded-[14px] border border-[#D7E1EC] bg-[#F8FAFC] px-5 text-[14px] font-semibold text-[#94A3B8]">
                     Abrir Dossiê
                   </button>
                 )}
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setMenuOpenFor((current) => (current === item.analysis_id ? null : item.analysis_id))}
-                    disabled={decisionActions.length === 0 || workflowActionMutation.isPending}
-                    className="inline-flex h-11 min-w-[132px] items-center justify-center rounded-[14px] border border-[#D7E1EC] bg-white px-4 text-[14px] font-semibold text-[#334155] disabled:cursor-not-allowed disabled:text-[#94A3B8]"
-                  >
-                    Decidir <ChevronDown className="ml-1 h-4 w-4" />
-                  </button>
-                  {menuOpenFor === item.analysis_id && decisionActions.length > 0 ? (
-                    <div className="absolute right-0 z-20 mt-1 min-w-[200px] rounded-[10px] border border-[#D7E1EC] bg-white p-1 shadow-lg">
-                      {decisionActions.map((action) => (
-                        <button
-                          key={action.value}
-                          type="button"
-                          onClick={() => handleDecision(item, action.value)}
-                          className="flex w-full items-center gap-2 rounded-[8px] px-2 py-2 text-left text-[12px] text-[#334155] hover:bg-[#F8FAFC]"
-                        >
-                          <Check className="h-3.5 w-3.5 text-[#94A3B8]" />
-                          {action.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
               </div>
             </article>
           );
@@ -564,36 +545,6 @@ export function ApprovalQueuePageView() {
       </div>
 
       <div className="mt-2 text-[11px] text-[#64748B]"><CalendarDays className="mr-1 inline h-3.5 w-3.5" /> A fila exibe apenas análises em aprovação no seu escopo operacional.</div>
-
-      {returnModal ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#0D1B2A]/55 p-4" onClick={() => setReturnModal(null)}>
-          <div className="w-full max-w-[560px] rounded-[14px] border border-[#D7E1EC] bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
-            <h3 className="text-[20px] font-semibold text-[#0F172A]">Devolver para ajustes</h3>
-            <p className="mt-2 text-[13px] text-[#64748B]">Informe a consideração do aprovador para que o time financeiro ajuste a análise de {returnModal.customerName}.</p>
-            <label className="mt-4 block text-[12px] font-medium text-[#334155]">
-              Consideração do aprovador
-              <textarea
-                value={returnComment}
-                onChange={(event) => setReturnComment(event.target.value)}
-                rows={5}
-                className="mt-1 w-full rounded-[10px] border border-[#D7E1EC] px-3 py-2 text-[12px] text-[#0F172A] outline-none focus:border-[#94A3B8]"
-                placeholder="Descreva os ajustes necessários..."
-              />
-            </label>
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setReturnModal(null)} className="h-9 rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#475569]">Cancelar</button>
-              <button
-                type="button"
-                onClick={submitReturnAction}
-                disabled={workflowActionMutation.isPending}
-                className="h-9 rounded-[10px] bg-[#334155] px-3 text-[12px] font-medium text-white disabled:opacity-50"
-              >
-                Devolver para ajustes
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {items.some((item) => item.item_type === "CREDIT_ANALYSIS" && item.available_actions.length === 0) ? (
         <div className="mt-3 flex items-center gap-1 text-[11px] text-[#64748B]"><ShieldAlert className="h-3.5 w-3.5" /> Algumas análises podem não ter ações disponíveis no momento.</div>

@@ -6,6 +6,10 @@ export function analysisStatusLabel(status: AnalysisStatus): string {
       return "Pendente";
     case "in_progress":
       return "Em andamento";
+    case "in_approval":
+      return "Em aprovação";
+    case "changes_requested":
+      return "Devolvido para Ajustes";
     case "completed":
       return "Finalizada";
     default:

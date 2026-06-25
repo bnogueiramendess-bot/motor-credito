@@ -1,4 +1,4 @@
-export type AnalysisStatus = "created" | "in_progress" | "completed";
+export type AnalysisStatus = "created" | "in_progress" | "in_approval" | "changes_requested" | "completed";
 export type MotorResult = "approved" | "rejected" | "manual_review";
 export type FinalDecision = "approved" | "rejected" | "manual_review";
 export type ActorType = "system" | "user";
@@ -265,6 +265,17 @@ export type CreditAnalysisPolicyReferenceDto = {
   status_label: string;
 };
 
+export type CreditAnalysisApprovalProgressItemDto = {
+  role_code?: string | null;
+  role_label: string;
+  status: string;
+  sequence_order?: number | null;
+  round_number?: number | null;
+  actor_name?: string | null;
+  decided_at?: string | null;
+  comment?: string | null;
+};
+
 export type CreditAnalysisMonitorItemDto = {
   item_type: "CREDIT_ANALYSIS";
   analysis_id: number;
@@ -298,6 +309,13 @@ export type CreditAnalysisMonitorItemDto = {
   next_responsible_role: "comercial" | "analista_financeiro" | "aprovador" | string;
   applicable_doa_code?: string | null;
   applicable_doa_range?: string | null;
+  current_approval_step?: string | null;
+  current_approval_step_code?: string | null;
+  approval_round?: number | null;
+  approval_progress?: CreditAnalysisApprovalProgressItemDto[];
+  approval_escalated_to_committee?: boolean;
+  approval_sla_label?: string | null;
+  approval_started_at?: string | null;
   policy_reference: CreditAnalysisPolicyReferenceDto;
   available_actions: string[];
 };
@@ -358,6 +376,10 @@ export type CreditAnalysisApprovalQueueKpisDto = {
   awaiting_approval: number;
   overdue_sla: number;
   high_value: number;
+  pending_my_action?: number;
+  in_approval?: number;
+  returned_for_adjustment?: number;
+  rejected_today?: number;
 };
 
 export type CreditAnalysisApprovalQueueResponse = {
@@ -427,6 +449,47 @@ export type CreditAnalysisApprovalFlowSummaryDto = {
     actor_role?: string | null;
     comment?: string | null;
   }>;
+  current_approval_step?: string | null;
+  current_approval_step_code?: string | null;
+  approval_round?: number | null;
+  approval_progress?: CreditAnalysisApprovalProgressItemDto[];
+  approval_rounds?: Array<{
+    round_number: number;
+    steps: CreditAnalysisApprovalProgressItemDto[];
+    decisions: Array<{
+      decision: string;
+      role_code?: string | null;
+      role_label: string;
+      actor_name?: string | null;
+      comment?: string | null;
+      created_at?: string | null;
+      round_number: number;
+      sequence_order: number;
+    }>;
+  }>;
+  approval_escalated_to_committee?: boolean;
+  approval_sla_label?: string | null;
+  approval_started_at?: string | null;
+  committee_escalation?: {
+    decision: string;
+    role_code?: string | null;
+    role_label: string;
+    actor_name?: string | null;
+    comment?: string | null;
+    created_at?: string | null;
+    round_number: number;
+    sequence_order: number;
+  } | null;
+  decision_comments?: Array<{
+    decision: string;
+    role_code?: string | null;
+    role_label: string;
+    actor_name?: string | null;
+    comment?: string | null;
+    created_at?: string | null;
+    round_number: number;
+    sequence_order: number;
+  }>;
   display_title: string;
   display_message: string;
 };
@@ -435,6 +498,7 @@ export type WorkflowActionType =
   | "submit_approval"
   | "submit_for_approval"
   | "request_changes"
+  | "escalate_to_committee"
   | "request_maintenance"
   | "return_to_analysis"
   | "finalize"

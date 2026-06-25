@@ -14,8 +14,11 @@ function resolveVariant(value: StatusBadgeProps["value"]) {
   if (value === "rejected") {
     return "danger";
   }
-  if (value === "manual_review" || value === "in_progress") {
+  if (value === "manual_review" || value === "in_progress" || value === "in_approval") {
     return "warning";
+  }
+  if (value === "changes_requested") {
+    return "outline";
   }
   return "outline";
 }

@@ -19,6 +19,7 @@ from app.services.workflow_authorization import (
     resolve_credit_workflow_action,
     resolve_credit_workflow_available_actions,
 )
+from app.services.workflow_approval import create_workflow_approval_round, decide_active_approval_step
 
 DECIMAL_ZERO = Decimal("0.00")
 
@@ -42,6 +43,10 @@ class WorkflowTransitionResult:
 def _status_value(analysis: CreditAnalysis) -> str:
     if analysis.final_decision is not None:
         return "approved" if analysis.final_decision == FinalDecision.APPROVED else "rejected"
+    if analysis.analysis_status == AnalysisStatus.IN_APPROVAL:
+        return "in_approval"
+    if analysis.analysis_status == AnalysisStatus.CHANGES_REQUESTED:
+        return "changes_requested"
     if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
         return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CREATED:
@@ -56,6 +61,8 @@ def _stage_for_status(status_value: str) -> str:
         return "financial_review"
     if status_value == "in_approval":
         return "pending_approval"
+    if status_value == "changes_requested":
+        return "returned"
     if status_value in {"approved", "rejected"}:
         return "decided"
     return "returned"
@@ -70,6 +77,8 @@ def _owner_for_status(status_value: str) -> str:
         return "aprovador"
     if status_value in {"approved", "rejected"}:
         return "workflow_encerrado"
+    if status_value == "changes_requested":
+        return "analista_financeiro"
     return "analista_financeiro"
 
 
@@ -195,19 +204,56 @@ def resolve_credit_workflow_transition(
     elif action in {"generate_preliminary_decision", "submit_for_approval", "submit_approval"}:
         if analysis.motor_result is None or analysis.decision_calculated_at is None:
             raise ValueError("A submissao para aprovacao exige dossie tecnico concluido.")
+        approval_round = create_workflow_approval_round(db, analysis)
         next_status = "in_approval"
         next_owner_user_id = None
         next_owner_role = _owner_for_status(next_status)
         analysis.submitted_for_approval_at = analysis.submitted_for_approval_at or transition_at
+        analysis.analysis_status = AnalysisStatus.IN_APPROVAL
         timeline_event = "analysis_submitted_for_approval"
+        authorization.workflow_context.update(
+            {
+                "doa_rule_id": approval_round.rule_id,
+                "doa_rule_name": approval_round.rule_name,
+                "applicable_doa_code": approval_round.rule_code,
+                "applicable_doa_range": approval_round.rule_range,
+                "approval_round": approval_round.round_number,
+                "active_approval_step_id": approval_round.active_step.id,
+                "approval_steps": [
+                    {
+                        "step_id": step.id,
+                        "workflow_role_id": step.workflow_role_id,
+                        "sequence_order": step.sequence_order,
+                        "status": step.status,
+                    }
+                    for step in approval_round.steps
+                ],
+            }
+        )
     elif action == "request_changes":
         justification = str(payload.get("justification") or "").strip()
         if len(justification) < 10:
             raise ValueError("Devolucao para ajustes exige justificativa com pelo menos 10 caracteres.")
-        next_status = "in_progress"
+        approval_decision = decide_active_approval_step(
+            db,
+            current,
+            analysis,
+            decision="REQUEST_CHANGES",
+            comment=justification,
+            decided_at=transition_at,
+        )
+        next_status = "changes_requested"
         next_owner_user_id = None
         next_owner_role = _owner_for_status(next_status)
+        analysis.analysis_status = AnalysisStatus.CHANGES_REQUESTED
         timeline_event = "returned_for_revision"
+        authorization.workflow_context.update(
+            {
+                "approval_round": approval_decision.step.round_number,
+                "approval_step_id": approval_decision.step.id,
+                "approval_decision_id": approval_decision.decision.id,
+            }
+        )
     elif action == "return_to_analysis":
         next_status = "in_progress"
         next_owner_user_id = None
@@ -217,28 +263,78 @@ def resolve_credit_workflow_transition(
         score_exists = db.scalar(select(ScoreResult.id).where(ScoreResult.credit_analysis_id == analysis.id))
         if score_exists is None:
             raise ValueError("Score deve ser calculado antes da decisao final.")
-        final_decision = payload.get("final_decision")
-        if not isinstance(final_decision, FinalDecision):
-            final_decision = FinalDecision.APPROVED if action == "approve" else FinalDecision.REJECTED
-        explicit_limit = payload.get("final_limit")
-        if explicit_limit is not None and not isinstance(explicit_limit, Decimal):
-            explicit_limit = Decimal(str(explicit_limit))
-        analysis.final_decision = final_decision
-        analysis.final_limit = _resolve_final_limit(analysis, final_decision, explicit_limit)
-        analysis.assigned_analyst_name = str(payload.get("analyst_name") or current.user.full_name or current.user.email)
-        analysis.analyst_notes = payload.get("analyst_notes")
-        analysis.completed_at = transition_at
-        analysis.analysis_status = AnalysisStatus.COMPLETED
-        if final_decision == FinalDecision.APPROVED:
-            next_status = "approved"
+        comment = str(payload.get("justification") or payload.get("analyst_notes") or "").strip() or None
+        if action == "reject" and not comment:
+            raise ValueError("Rejeicao exige justificativa.")
+        approval_decision = decide_active_approval_step(
+            db,
+            current,
+            analysis,
+            decision="APPROVED" if action == "approve" else "REJECTED",
+            comment=comment,
+            decided_at=transition_at,
+        )
+        next_status = approval_decision.final_status
+        if next_status == "approved":
+            explicit_limit = payload.get("final_limit")
+            if explicit_limit is not None and not isinstance(explicit_limit, Decimal):
+                explicit_limit = Decimal(str(explicit_limit))
+            analysis.final_decision = FinalDecision.APPROVED
+            analysis.final_limit = _resolve_final_limit(analysis, FinalDecision.APPROVED, explicit_limit)
+            analysis.assigned_analyst_name = str(payload.get("analyst_name") or current.user.full_name or current.user.email)
+            analysis.analyst_notes = payload.get("analyst_notes")
+            analysis.completed_at = transition_at
+            analysis.analysis_status = AnalysisStatus.COMPLETED
             analysis.approved_at = analysis.approved_at or transition_at
             timeline_event = "analysis_approved"
-        else:
-            next_status = "rejected"
+        elif next_status == "rejected":
+            analysis.final_decision = FinalDecision.REJECTED
+            analysis.final_limit = _resolve_final_limit(analysis, FinalDecision.REJECTED, DECIMAL_ZERO)
+            analysis.assigned_analyst_name = str(payload.get("analyst_name") or current.user.full_name or current.user.email)
+            analysis.analyst_notes = comment
+            analysis.completed_at = transition_at
+            analysis.analysis_status = AnalysisStatus.COMPLETED
             analysis.rejected_at = analysis.rejected_at or transition_at
             timeline_event = "analysis_rejected"
+        else:
+            analysis.analysis_status = AnalysisStatus.IN_APPROVAL
+            timeline_event = "analysis_approval_step_approved"
         next_owner_user_id = current.user.id
         next_owner_role = _owner_for_status(next_status)
+        authorization.workflow_context.update(
+            {
+                "approval_round": approval_decision.step.round_number,
+                "approval_step_id": approval_decision.step.id,
+                "approval_decision_id": approval_decision.decision.id,
+                "next_active_approval_step_id": approval_decision.next_active_step.id if approval_decision.next_active_step else None,
+            }
+        )
+    elif action == "escalate_to_committee":
+        justification = str(payload.get("justification") or "").strip()
+        if len(justification) < 10:
+            raise ValueError("Direcionamento para Comite exige justificativa com pelo menos 10 caracteres.")
+        approval_decision = decide_active_approval_step(
+            db,
+            current,
+            analysis,
+            decision="ESCALATED_TO_COMMITTEE",
+            comment=justification,
+            decided_at=transition_at,
+        )
+        next_status = "in_approval"
+        next_owner_user_id = None
+        next_owner_role = _owner_for_status(next_status)
+        analysis.analysis_status = AnalysisStatus.IN_APPROVAL
+        timeline_event = "analysis_escalated_to_committee"
+        authorization.workflow_context.update(
+            {
+                "approval_round": approval_decision.step.round_number,
+                "approval_step_id": approval_decision.step.id,
+                "approval_decision_id": approval_decision.decision.id,
+                "next_active_approval_step_id": approval_decision.next_active_step.id if approval_decision.next_active_step else None,
+                "escalated_to_committee": True,
+            }
+        )
     elif action == "finalize":
         if previous_status not in {"approved", "rejected"}:
             raise ValueError("Finalizacao permitida apenas para analises com decisao final.")

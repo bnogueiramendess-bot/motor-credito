@@ -77,6 +77,8 @@ export type ApprovalQueueParams = {
   q?: string;
   status_filter?: string;
   bu?: string;
+  doa?: string;
+  current_step?: string;
   aging?: string;
   assigned_analyst?: string;
   page?: number;

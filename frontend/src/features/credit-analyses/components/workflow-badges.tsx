@@ -9,6 +9,7 @@ const statusMap: Record<string, { label: string; cls: string }> = {
   pending: { label: "Pendente", cls: "bg-[#EFF6FF] text-[#1D4ED8]" },
   in_progress: { label: "Em andamento", cls: "bg-[#EEF3F8] text-[#295B9A]" },
   in_approval: { label: "Em aprova??o", cls: "bg-[#FEF3C7] text-[#92400E]" },
+  changes_requested: { label: "Devolvido para Ajustes", cls: "bg-[#F1F5F9] text-[#475569]" },
   approved: { label: "Aprovado", cls: "bg-[#E6F4ED] text-[#166534]" },
   rejected: { label: "Recusado", cls: "bg-[#FEF2F2] text-[#B91C1C]" }
 };

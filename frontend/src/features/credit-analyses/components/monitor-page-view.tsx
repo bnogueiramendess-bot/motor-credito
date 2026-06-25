@@ -85,11 +85,12 @@ function statusAccent(status: string): string {
   return "bg-[#D97706]";
 }
 
-function summarizeStatus(status: string): "Aprovado" | "Recusado" | "Pendente" | "Em aprovação" | "Em andamento" {
+function summarizeStatus(status: string): "Aprovado" | "Recusado" | "Pendente" | "Em aprovação" | "Em andamento" | "Devolvido para Ajustes" {
   if (status === "approved") return "Aprovado";
   if (status === "rejected") return "Recusado";
   if (status === "pending") return "Pendente";
   if (status === "in_approval") return "Em aprovação";
+  if (status === "changes_requested") return "Devolvido para Ajustes";
   return "Em andamento";
 }
 
