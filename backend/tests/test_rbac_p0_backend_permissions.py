@@ -25,7 +25,13 @@ class P0BackendRbacEnforcementTestCase(unittest.TestCase):
             is_active=True,
             must_change_password=False,
         )
-        return CurrentUser(user=user, permissions=permissions, bu_ids=set())
+        return CurrentUser(
+            user=user,
+            permissions=permissions,
+            bu_ids=set(),
+            is_administrator={"company:manage", "bu:manage", "users:manage"}.issubset(permissions),
+            can_import_ar_aging="clients.aging.import" in permissions,
+        )
 
     def test_credit_policy_requires_view_and_manage(self) -> None:
         current_without_view = self._build_current_user({"credit.request.create"})
@@ -117,8 +123,13 @@ class P0BackendRbacEnforcementTestCase(unittest.TestCase):
             require_permissions(["users:view"])(current=current_without_users_view)
         self.assertEqual(blocked_users.exception.status_code, 403)
 
-        current_with_users_view = self._build_current_user({"users:view"})
-        require_permissions(["users:view"])(current=current_with_users_view)
+        current_with_users_view_without_admin = self._build_current_user({"users:view"})
+        with self.assertRaises(HTTPException) as blocked_non_admin:
+            require_permissions(["users:view"])(current=current_with_users_view_without_admin)
+        self.assertEqual(blocked_non_admin.exception.status_code, 403)
+
+        current_admin_with_users_view = self._build_current_user({"company:manage", "bu:manage", "users:manage", "users:view"})
+        require_permissions(["users:view"])(current=current_admin_with_users_view)
 
     def test_master_seed_role_matrix_matches_catalog(self) -> None:
         master_permissions = set(ROLE_MATRIX["administrador_master"])

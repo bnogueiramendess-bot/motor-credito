@@ -95,8 +95,8 @@ class PortfolioSnapshotSelectionTestCase(unittest.TestCase):
             return run.id
 
     def test_groups_without_snapshot_keeps_latest_behavior(self) -> None:
-        self._seed_run(base_date_value=date(2026, 4, 30), open_amount=Decimal("100"), snapshot_type="monthly_closing", closing_month=4, closing_year=2026)
-        latest_daily_id = self._seed_run(base_date_value=date(2026, 5, 6), open_amount=Decimal("200"), snapshot_type="daily")
+        self._seed_run(base_date_value=date(2097, 4, 30), open_amount=Decimal("100"), snapshot_type="monthly_closing", closing_month=4, closing_year=2097)
+        latest_daily_id = self._seed_run(base_date_value=date(2097, 5, 6), open_amount=Decimal("200"), snapshot_type="daily")
 
         with SessionLocal() as db:
             response = list_portfolio_groups(db=db)
@@ -105,32 +105,32 @@ class PortfolioSnapshotSelectionTestCase(unittest.TestCase):
         self.assertGreaterEqual(response.total_groups, 0)
 
     def test_groups_accept_current_and_closing_snapshot(self) -> None:
-        self._seed_run(base_date_value=date(2026, 4, 30), open_amount=Decimal("110"), snapshot_type="monthly_closing", closing_month=4, closing_year=2026)
-        latest_daily_id = self._seed_run(base_date_value=date(2026, 5, 6), open_amount=Decimal("210"), snapshot_type="daily")
+        self._seed_run(base_date_value=date(2097, 4, 30), open_amount=Decimal("110"), snapshot_type="monthly_closing", closing_month=4, closing_year=2097)
+        latest_daily_id = self._seed_run(base_date_value=date(2097, 5, 6), open_amount=Decimal("210"), snapshot_type="daily")
 
         with SessionLocal() as db:
             current_response = list_portfolio_groups(snapshot_id="current", db=db)
-            closing_response = list_portfolio_groups(snapshot_id="closing-2026-04", db=db)
+            closing_response = list_portfolio_groups(snapshot_id="closing-2097-04", db=db)
 
         self.assertEqual(current_response.import_meta.import_run_id, latest_daily_id)
         self.assertNotEqual(current_response.import_meta.import_run_id, closing_response.import_meta.import_run_id)
 
     def test_unknown_snapshot_returns_404(self) -> None:
-        self._seed_run(base_date_value=date(2026, 5, 6), open_amount=Decimal("210"), snapshot_type="daily")
+        self._seed_run(base_date_value=date(2097, 5, 6), open_amount=Decimal("210"), snapshot_type="daily")
         with SessionLocal() as db:
             with self.assertRaises(HTTPException) as ctx:
                 list_portfolio_groups(snapshot_id="closing-2025-01", db=db)
 
         self.assertEqual(ctx.exception.status_code, 404)
-        self.assertEqual(ctx.exception.detail, "Snapshot informado não foi encontrado.")
+        self.assertEqual(ctx.exception.detail, "Snapshot informado nao foi encontrado.")
 
     def test_group_open_invoices_respects_selected_snapshot(self) -> None:
-        self._seed_run(base_date_value=date(2026, 4, 30), open_amount=Decimal("120"), snapshot_type="monthly_closing", closing_month=4, closing_year=2026)
-        self._seed_run(base_date_value=date(2026, 5, 6), open_amount=Decimal("220"), snapshot_type="daily")
+        self._seed_run(base_date_value=date(2097, 4, 30), open_amount=Decimal("120"), snapshot_type="monthly_closing", closing_month=4, closing_year=2097)
+        self._seed_run(base_date_value=date(2097, 5, 6), open_amount=Decimal("220"), snapshot_type="daily")
 
         with SessionLocal() as db:
             current_response = list_group_open_invoices("GRUPO SNAP", snapshot_id="current", db=db)
-            closing_response = list_group_open_invoices("GRUPO SNAP", snapshot_id="closing-2026-04", db=db)
+            closing_response = list_group_open_invoices("GRUPO SNAP", snapshot_id="closing-2097-04", db=db)
 
         self.assertEqual(current_response.total_items, 1)
         self.assertEqual(closing_response.total_items, 1)

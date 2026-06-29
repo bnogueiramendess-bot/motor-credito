@@ -424,7 +424,7 @@ export function AppTopbar() {
                       onClick={() => void handleResetOperationalData()}
                       className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50"
                     >
-                      Reset da Base
+                      Reset Operacional
                     </button>
                   ) : null}
                 </div>

@@ -116,8 +116,8 @@ class ArAgingImportOperationalControlsTestCase(unittest.TestCase):
                 snapshot_type="monthly_closing",
                 is_month_end_closing=True,
                 closing_month=4,
-                closing_year=2026,
-                closing_label="Fechamento 04/2026",
+                closing_year=2096,
+                closing_label="Fechamento 04/2096",
                 closing_status="official",
             )
             db.add(run)
@@ -130,17 +130,17 @@ class ArAgingImportOperationalControlsTestCase(unittest.TestCase):
             mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             file_size=3,
             file_content_base64=base64.b64encode(b"abc").decode("ascii"),
-            overwrite=True,
+            overwrite=False,
             snapshot_type="monthly_closing",
             closing_month=4,
-            closing_year=2026,
+            closing_year=2096,
         )
         with SessionLocal() as db:
             with self.assertRaises(HTTPException) as context:
                 create_ar_aging_import_run(db, payload)
 
         self.assertEqual(context.exception.status_code, 409)
-        self.assertIn("04/2026", str(context.exception.detail))
+        self.assertIn("04/2096", str(context.exception.detail))
 
 
 if __name__ == "__main__":

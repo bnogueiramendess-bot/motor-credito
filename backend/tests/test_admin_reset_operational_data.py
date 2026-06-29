@@ -80,7 +80,7 @@ class AdminResetOperationalDataTestCase(unittest.TestCase):
             db.refresh(user)
             db.expunge(user)
 
-        return CurrentUser(user=user, permissions={"company:manage"}, bu_ids=set())
+        return CurrentUser(user=user, permissions={"company:manage"}, bu_ids=set(), is_administrator=True, can_import_ar_aging=False)
 
     def _seed_credit_policies(self) -> None:
         with SessionLocal() as db:
@@ -177,7 +177,41 @@ class AdminResetOperationalDataTestCase(unittest.TestCase):
         self.assertIn("credit_policy_rules", cleaned_tables)
         self.assertEqual(result["master_admin"]["status"], "recreated")
         self.assertEqual(result["reset_scope"], "total_operational")
+        self.assertIn("approval_workflow", result["domains"])
+        self.assertIn("workflow_roles", result["domains"])
+        self.assertIn("approval_matrix", result["domains"])
+        self.assertIn("configurable_policy", result["domains"])
+        self.assertIn("policy_governance", result["domains"])
+        self.assertIn("legacy_policies", result["domains"])
         self.assertFalse(result["coverage"]["unknown_in_registry"])
+
+    def test_preview_only_reports_business_impact_without_deleting(self) -> None:
+        document = f"{uuid.uuid4().int % (10**14):014d}"
+        self._seed_customer(document=document, company_name="Cliente Preview")
+        current = self._build_reset_operator()
+
+        with SessionLocal() as db:
+            result = reset_operational_data(
+                payload=ResetOperationalDataRequest(
+                    confirm="RESET_OPERATIONAL_DATA",
+                    domains=["customers"],
+                    preview_only=True,
+                ),
+                db=db,
+                _=current,
+            )
+
+        with SessionLocal() as db:
+            customer_count = db.scalar(select(func.count(Customer.id)))
+            self.assertGreater(customer_count or 0, 0)
+
+        self.assertEqual(result["status"], "preview")
+        self.assertTrue(result["preview_only"])
+        self.assertEqual(result["total_deleted"], 0)
+        self.assertEqual(result["tables"], [])
+        customer_preview = [item for item in result["impact_preview"] if item["table"] == "customers"]
+        self.assertEqual(len(customer_preview), 1)
+        self.assertGreaterEqual(customer_preview[0]["count"], 1)
 
     def test_partial_reset_only_external_reports(self) -> None:
         document = f"{uuid.uuid4().int % (10**14):014d}"
@@ -252,6 +286,8 @@ class AdminResetOperationalDataTestCase(unittest.TestCase):
             ),
             permissions={"credit.request.create", "scope:all_bu"},
             bu_ids=set(),
+            is_administrator=True,
+            can_import_ar_aging=False,
         )
         with SessionLocal() as db:
             triage = triage_credit_analysis(
@@ -303,7 +339,7 @@ class AdminResetOperationalDataTestCase(unittest.TestCase):
             db.commit()
             db.refresh(user)
             db.expunge(user)
-        non_master = CurrentUser(user=user, permissions={"company:manage"}, bu_ids=set())
+        non_master = CurrentUser(user=user, permissions={"company:manage"}, bu_ids=set(), is_administrator=False, can_import_ar_aging=False)
 
         with SessionLocal() as db:
             with self.assertRaises(HTTPException) as ctx:

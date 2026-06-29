@@ -174,7 +174,7 @@ class CreditDecisionPillarFourScoreTestCase(unittest.TestCase):
         self.assertEqual(result["score"], Decimal("0.00"))
 
     def test_zero_exposure_is_safe(self) -> None:
-        self._add_run(base_date=date(2026, 6, 10), overdue="0", exposure="0", monthly_closing=False)
+        self._add_run(base_date=date(2096, 6, 10), overdue="0", exposure="0", monthly_closing=False)
         result = self._calculate()
         self.assertEqual(result["status"], "not_available")
         self.assertEqual(result["score"], Decimal("0.00"))
@@ -182,7 +182,7 @@ class CreditDecisionPillarFourScoreTestCase(unittest.TestCase):
     def test_current_overdue_score_ranges(self) -> None:
         for overdue, expected in [("0", "10.00"), ("4", "8.00"), ("8", "6.00"), ("15", "4.00"), ("21", "0.00")]:
             with self.subTest(overdue=overdue):
-                run = self._add_run(base_date=date(2026, 6, 10), overdue=overdue, exposure="100", monthly_closing=False)
+                run = self._add_run(base_date=date(2096, 6, 10), overdue=overdue, exposure="100", monthly_closing=False)
                 result = self._calculate()
                 self.assertEqual(result["indicators"][0]["score"], Decimal(expected))
                 self.db.execute(delete(ArAgingDataTotalRow).where(ArAgingDataTotalRow.import_run_id == run.id))
@@ -191,7 +191,7 @@ class CreditDecisionPillarFourScoreTestCase(unittest.TestCase):
                 self.run_ids.remove(run.id)
 
     def test_negative_overdue_is_zero_for_risk_and_preserves_raw_trace(self) -> None:
-        self._add_run(base_date=date(2026, 6, 10), overdue="-29", exposure="165915.40", monthly_closing=False)
+        self._add_run(base_date=date(2096, 6, 10), overdue="-29", exposure="165915.40", monthly_closing=False)
 
         result = self._calculate()
 
@@ -205,7 +205,7 @@ class CreditDecisionPillarFourScoreTestCase(unittest.TestCase):
         self.assertEqual(trace["effective_overdue_amount"], Decimal("0"))
 
     def test_missing_historical_subgroup_is_not_available_and_does_not_reduce_score(self) -> None:
-        self._add_run(base_date=date(2026, 6, 10), overdue="4", exposure="100", monthly_closing=False)
+        self._add_run(base_date=date(2096, 6, 10), overdue="4", exposure="100", monthly_closing=False)
 
         result = self._calculate()
         current, historical = result["subgroups"]
@@ -220,7 +220,7 @@ class CreditDecisionPillarFourScoreTestCase(unittest.TestCase):
         self.assertEqual(result["weighted_score"], Decimal("0.4000"))
 
     def test_missing_historical_subgroup_rebalances_available_weight_with_traceability(self) -> None:
-        self._add_run(base_date=date(2026, 6, 10), overdue="0", exposure="100", monthly_closing=False)
+        self._add_run(base_date=date(2096, 6, 10), overdue="0", exposure="100", monthly_closing=False)
 
         result = self._calculate()
         current, historical = result["subgroups"]
@@ -237,9 +237,9 @@ class CreditDecisionPillarFourScoreTestCase(unittest.TestCase):
         self.assertEqual(rebalancing_trace["ignored_subgroups"], ["historical_payment_behavior"])
 
     def test_historical_average_and_weights_are_applied(self) -> None:
-        self._add_run(base_date=date(2026, 4, 30), overdue="2", exposure="100", monthly_closing=True)
-        self._add_run(base_date=date(2026, 5, 31), overdue="6", exposure="100", monthly_closing=True)
-        self._add_run(base_date=date(2026, 6, 10), overdue="0", exposure="100", monthly_closing=False)
+        self._add_run(base_date=date(2096, 4, 30), overdue="2", exposure="100", monthly_closing=True)
+        self._add_run(base_date=date(2096, 5, 31), overdue="6", exposure="100", monthly_closing=True)
+        self._add_run(base_date=date(2096, 6, 10), overdue="0", exposure="100", monthly_closing=False)
 
         result = self._calculate()
 
@@ -251,8 +251,8 @@ class CreditDecisionPillarFourScoreTestCase(unittest.TestCase):
         self.assertFalse(result["weight_rebalanced"])
 
     def test_ranges_and_weights_come_from_database(self) -> None:
-        self._add_run(base_date=date(2026, 5, 31), overdue="0", exposure="100", monthly_closing=True)
-        self._add_run(base_date=date(2026, 6, 10), overdue="0", exposure="100", monthly_closing=False)
+        self._add_run(base_date=date(2096, 5, 31), overdue="0", exposure="100", monthly_closing=True)
+        self._add_run(base_date=date(2096, 6, 10), overdue="0", exposure="100", monthly_closing=False)
         indicators = self.db.scalars(
             select(CreditDecisionPolicyIndicator).where(
                 CreditDecisionPolicyIndicator.policy_id == self.policy.id,

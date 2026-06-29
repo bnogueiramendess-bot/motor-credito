@@ -81,7 +81,7 @@ class PortfolioAgingLatestSelectionTestCase(unittest.TestCase):
                     insured_limit_amount=Decimal("0"),
                     approved_credit_amount=Decimal("0"),
                     exposure_amount=aging_amount,
-                    raw_payload_json={},
+                    raw_payload_json={"bu_original": bu_raw, "is_litigation": is_litigation, "overdue_bucket_91_120": str(aging_amount)},
                 )
             )
             db.commit()
@@ -89,8 +89,8 @@ class PortfolioAgingLatestSelectionTestCase(unittest.TestCase):
             return run.id
 
     def test_latest_endpoint_uses_most_recent_valid_import_only(self) -> None:
-        older_valid_id = self._create_import_run(status="valid", base_date_value=date(2025, 4, 27), aging_amount=Decimal("100"))
-        newer_valid_id = self._create_import_run(status="valid", base_date_value=date(2025, 4, 28), aging_amount=Decimal("200"))
+        older_valid_id = self._create_import_run(status="valid", base_date_value=date(2099, 4, 27), aging_amount=Decimal("100"))
+        newer_valid_id = self._create_import_run(status="valid", base_date_value=date(2099, 4, 28), aging_amount=Decimal("200"))
 
         with SessionLocal() as db:
             response = get_latest_aging_summary(db=db)
@@ -100,8 +100,8 @@ class PortfolioAgingLatestSelectionTestCase(unittest.TestCase):
         self.assertEqual(str(response.totals["total_open_amount"]), "200.00")
 
     def test_latest_endpoint_ignores_newer_error_import_and_keeps_last_valid(self) -> None:
-        valid_id = self._create_import_run(status="valid", base_date_value=date(2025, 4, 27), aging_amount=Decimal("150"))
-        _error_id = self._create_import_run(status="error", base_date_value=date(2025, 4, 28), aging_amount=Decimal("999"))
+        valid_id = self._create_import_run(status="valid", base_date_value=date(2099, 4, 27), aging_amount=Decimal("150"))
+        _error_id = self._create_import_run(status="error", base_date_value=date(2099, 4, 28), aging_amount=Decimal("999"))
 
         with SessionLocal() as db:
             response = get_latest_aging_summary(db=db)
@@ -112,7 +112,7 @@ class PortfolioAgingLatestSelectionTestCase(unittest.TestCase):
     def test_latest_endpoint_exposes_bu_breakdown_and_litigation_summary(self) -> None:
         self._create_import_run(
             status="valid",
-            base_date_value=date(2025, 4, 29),
+            base_date_value=date(2099, 4, 29),
             aging_amount=Decimal("90"),
             bu_raw="Fertilizer / Litigation",
             bu_normalized="Fertilizer",
@@ -120,7 +120,7 @@ class PortfolioAgingLatestSelectionTestCase(unittest.TestCase):
         )
         self._create_import_run(
             status="valid",
-            base_date_value=date(2025, 4, 30),
+            base_date_value=date(2099, 4, 30),
             aging_amount=Decimal("120"),
             bu_raw="Additive / Litigation",
             bu_normalized="Additive",
@@ -141,7 +141,7 @@ class PortfolioAgingLatestSelectionTestCase(unittest.TestCase):
     def test_latest_endpoint_uses_consolidated_as_dashboard_source(self) -> None:
         self._create_import_run(
             status="valid",
-            base_date_value=date(2025, 5, 1),
+            base_date_value=date(2099, 5, 1),
             aging_amount=Decimal("100"),
             data_total_amount=Decimal("9999"),
             bu_raw="Additive",

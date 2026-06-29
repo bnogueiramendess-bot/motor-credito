@@ -28,10 +28,12 @@ class CofaceReaderTestCase(unittest.TestCase):
         self.assertNotIn("report_url", result.technical_metadata)
 
     def test_read_quality_with_warnings(self) -> None:
-        text_without_notation = COFACE_TEXT.replace("Notaçao : R", "")
-        result = read_coface_report(text_without_notation)
+        text_without_amount = "\n".join(
+            line for line in COFACE_TEXT.splitlines() if "Montante" not in line
+        )
+        result = read_coface_report(text_without_amount)
         self.assertGreater(len(result.read_quality.warnings), 0)
-        self.assertIn("coface.notation", " ".join(result.read_quality.warnings))
+        self.assertIn("coface.decision_amount", " ".join(result.read_quality.warnings))
 
 
 if __name__ == "__main__":

@@ -84,7 +84,14 @@ class AuthBusinessUnitContextTestCase(unittest.TestCase):
             db.commit()
             db.refresh(user)
             db.expunge(user)
-            return CurrentUser(user=user, permissions=set(permissions), bu_ids={scope.business_unit_id for scope in db.query(UserBusinessUnitScope).filter(UserBusinessUnitScope.user_id == user.id).all()})
+            permission_set = set(permissions)
+            return CurrentUser(
+                user=user,
+                permissions=permission_set,
+                bu_ids={scope.business_unit_id for scope in db.query(UserBusinessUnitScope).filter(UserBusinessUnitScope.user_id == user.id).all()},
+                is_administrator="scope:all_bu" in permission_set,
+                can_import_ar_aging="clients.aging.import" in permission_set,
+            )
 
     def test_multi_bu_user_receives_only_scoped_units(self) -> None:
         current = self._make_user(["credit_request_view_bu"], ["Additive", "Fertilizer"])
@@ -93,14 +100,14 @@ class AuthBusinessUnitContextTestCase(unittest.TestCase):
         self.assertEqual({item.name for item in payload.allowed_business_units}, {"Additive", "Fertilizer"})
         self.assertTrue(payload.can_view_consolidated)
         self.assertFalse(payload.is_global_scope)
-        self.assertEqual(payload.consolidated_label, "Visao consolidada")
+        self.assertEqual(payload.consolidated_label, "Consolidada")
 
     def test_all_scope_user_receives_global_label(self) -> None:
         current = self._make_user(["credit_request_view_bu", "scope:all_bu"], ["Additive"])
         with SessionLocal() as db:
             payload = me_business_units_context(current=current, db=db)
         self.assertTrue(payload.is_global_scope)
-        self.assertEqual(payload.consolidated_label, "Visao consolidada global")
+        self.assertEqual(payload.consolidated_label, "Consolidada")
 
 
 if __name__ == "__main__":

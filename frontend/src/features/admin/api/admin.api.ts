@@ -118,13 +118,20 @@ export type UpdateAdminUserPayload = {
 
 export type ResetOperationalDataResponse = {
   status: string;
+  preview_only?: boolean;
   reset_scope?: "total_operational" | "partial_operational" | string;
   domains?: string[];
   domain_summary?: Array<{
     key: string;
     label: string;
+    group?: string | null;
     description: string;
     tables: string[];
+  }>;
+  impact_preview?: Array<{
+    label: string;
+    count: number;
+    table: string;
   }>;
   total_deleted: number;
   master_admin?: {
@@ -151,12 +158,17 @@ export type ResetOperationalDataResponse = {
 
 export type ResetDomainKey =
   | "credit_analysis"
+  | "approval_workflow"
   | "external_reports"
   | "portfolio_ar"
   | "customers"
   | "operational_users"
-  | "governance"
-  | "credit_policies";
+  | "workflow_roles"
+  | "approval_matrix"
+  | "companies_permissions"
+  | "configurable_policy"
+  | "policy_governance"
+  | "legacy_policies";
 
 export type RoleMatrixItemDto = {
   role: string;
@@ -312,10 +324,10 @@ export async function regenerateAdminUserInviteToken(id: number) {
   return apiClient.post<InviteUserResponse, Record<string, never>>(`/api/admin/users/${id}/invite-token`, {});
 }
 
-export async function resetOperationalData(confirm: string, domains?: string[]) {
-  return apiClient.post<ResetOperationalDataResponse, { confirm: string; domains?: string[] }>(
+export async function resetOperationalData(confirm: string, domains?: string[], previewOnly = false) {
+  return apiClient.post<ResetOperationalDataResponse, { confirm: string; domains?: string[]; preview_only?: boolean }>(
     "/api/admin/reset-operational-data",
-    { confirm, domains }
+    { confirm, domains, preview_only: previewOnly }
   );
 }
 

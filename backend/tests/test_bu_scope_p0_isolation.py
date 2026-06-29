@@ -166,7 +166,14 @@ class BUScopeP0IsolationTestCase(unittest.TestCase):
             db.commit()
             db.refresh(user)
             db.expunge(user)
-            return CurrentUser(user=user, permissions=set(permissions), bu_ids=set(bu_ids))
+            permission_set = set(permissions)
+            return CurrentUser(
+                user=user,
+                permissions=permission_set,
+                bu_ids=set(bu_ids),
+                is_administrator="scope:all_bu" in permission_set,
+                can_import_ar_aging="clients.aging.import" in permission_set,
+            )
 
     def _add_customer_with_rows(self, run_id: int, document: str, group_name: str, bu_name: str, open_amount: Decimal) -> int:
         with SessionLocal() as db:

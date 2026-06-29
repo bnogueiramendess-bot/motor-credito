@@ -65,6 +65,7 @@ from app.services.bootstrap_admin import (
 from app.services.permission_catalog import PROFILE_PERMISSION_CATALOG
 from app.services.operational_reset import (
     build_execution_plan,
+    count_business_impact,
     execute_table_cleanup,
     list_reset_domains,
     validate_registry_coverage,
@@ -97,6 +98,7 @@ STANDARD_USER_ROLE_NAME = "usuario_padrao"
 class ResetOperationalDataRequest(BaseModel):
     confirm: str
     domains: list[str] | None = None
+    preview_only: bool = False
 
 
 def _table_exists(db: Session, table_name: str) -> bool:
@@ -1141,6 +1143,36 @@ def reset_operational_data(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    coverage = validate_registry_coverage()
+    domain_catalog = list_reset_domains()
+    domain_summary = [
+        {
+            "key": key,
+            "label": domain_catalog[key]["label"],
+            "group": domain_catalog[key].get("group"),
+            "description": domain_catalog[key]["description"],
+            "tables": domain_catalog[key]["tables"],
+        }
+        for key in plan.domains
+    ]
+    impact_preview = count_business_impact(db, plan.table_order)
+
+    if payload.preview_only:
+        return {
+            "status": "preview",
+            "preview_only": True,
+            "reset_scope": "total_operational" if plan.is_total_reset else "partial_operational",
+            "domains": plan.domains,
+            "domain_summary": domain_summary,
+            "impact_preview": impact_preview,
+            "total_deleted": 0,
+            "tables": [],
+            "coverage": {
+                "missing_in_registry": coverage["missing_in_registry"],
+                "unknown_in_registry": coverage["unknown_in_registry"],
+            },
+        }
+
     try:
         total_deleted, summary = execute_table_cleanup(db, plan.table_order)
 
@@ -1175,23 +1207,13 @@ def reset_operational_data(
         db.rollback()
         raise
 
-    coverage = validate_registry_coverage()
-    domain_catalog = list_reset_domains()
-    domain_summary = [
-        {
-            "key": key,
-            "label": domain_catalog[key]["label"],
-            "description": domain_catalog[key]["description"],
-            "tables": domain_catalog[key]["tables"],
-        }
-        for key in plan.domains
-    ]
-
     return {
         "status": "ok",
+        "preview_only": False,
         "reset_scope": "total_operational" if plan.is_total_reset else "partial_operational",
         "domains": plan.domains,
         "domain_summary": domain_summary,
+        "impact_preview": impact_preview,
         "total_deleted": total_deleted,
         "tables": summary,
         "master_admin": master_admin,

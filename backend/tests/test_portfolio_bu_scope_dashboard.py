@@ -221,7 +221,14 @@ class PortfolioDashboardBUScopeTestCase(unittest.TestCase):
             db.commit()
             db.refresh(user)
             db.expunge(user)
-            return CurrentUser(user=user, permissions=set(permissions), bu_ids=set(bu_ids))
+            permission_set = set(permissions)
+            return CurrentUser(
+                user=user,
+                permissions=permission_set,
+                bu_ids=set(bu_ids),
+                is_administrator="scope:all_bu" in permission_set,
+                can_import_ar_aging="clients.aging.import" in permission_set,
+            )
 
     def test_single_bu_user_sees_only_own_bu_totals(self) -> None:
         bu_a_id, _bu_b_id, _run_closing_id, _run_current_id = self._setup_base()

@@ -30,7 +30,13 @@ class ArAgingImportPermissionsTestCase(unittest.TestCase):
             is_active=True,
             must_change_password=False,
         )
-        return CurrentUser(user=user, permissions=permissions, bu_ids=set())
+        return CurrentUser(
+            user=user,
+            permissions=permissions,
+            bu_ids=set(),
+            is_administrator=False,
+            can_import_ar_aging="clients.aging.import" in permissions,
+        )
 
     def test_create_import_requires_clients_aging_import_permission(self) -> None:
         current = self._build_current_user({"clients.dashboard.view"})
