@@ -131,7 +131,7 @@ export function AdminUsersPageView() {
     if (groups.size === 0) return "Sem vínculo";
 
     const labels: Array<{ type: WorkflowRoleDto["type"]; label: string }> = [
-      { type: "operational", label: "Operacionais" },
+      { type: "operational", label: "Execucao operacional" },
       { type: "governance", label: "Papéis de Aprovação (DOA)" }
     ];
     return labels.filter((item) => groups.has(item.type)).map((item) => item.label).join(", ");
@@ -429,18 +429,18 @@ export function AdminUsersPageView() {
                 </div>
 
                 <div className="space-y-2 rounded-lg border border-slate-300 p-3">
-                  <p className="text-sm font-medium text-slate-700">Papéis no Workflow</p>
+                  <p className="text-sm font-medium text-slate-700">Responsabilidades de Credito</p>
                   <p className="text-xs text-slate-500">
-                    Defina os papéis operacionais e os papéis corporativos utilizados na Matriz de Aprovação (DOA) para
-                    alçadas, aprovações e exceções. Esse vínculo não altera os acessos administrativos por flag.
+                    Defina separadamente papeis de execucao operacional e papeis de aprovacao DOA.
+                    Esse vinculo nao altera os acessos administrativos por flag.
                   </p>
                   {workflowRolesQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
                   {workflowRolesQuery.isError ? (
-                    <p className="text-sm text-rose-700">Não foi possível carregar os papéis do workflow.</p>
+                    <p className="text-sm text-rose-700">Nao foi possivel carregar as responsabilidades de credito.</p>
                   ) : null}
                   {!workflowRolesQuery.isLoading && !workflowRolesQuery.isError ? (
                     <div className="space-y-4">
-                      {renderWorkflowRoleGroup("Operacionais", workflowRolesByType.operational)}
+                      {renderWorkflowRoleGroup("Execucao operacional", workflowRolesByType.operational)}
                       {renderWorkflowRoleGroup("Papéis de Aprovação (DOA)", workflowRolesByType.governance)}
                     </div>
                   ) : null}
@@ -482,7 +482,7 @@ export function AdminUsersPageView() {
                   <th className="px-3 py-2">Nome de usuário</th>
                   <th className="px-3 py-2">E-mail</th>
                   <th className="px-3 py-2">Telefone</th>
-                  <th className="px-3 py-2">Papéis no Workflow</th>
+                  <th className="px-3 py-2">Responsabilidades de Credito</th>
                   <th className="px-3 py-2">Unidade de negócio</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Ações</th>

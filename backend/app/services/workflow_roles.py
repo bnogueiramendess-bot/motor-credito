@@ -28,6 +28,12 @@ WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY: dict[str, str] = {
     "CREDIT_OPINION": "CREDIT_ANALYST",
 }
 
+# Historical storage still uses workflow_roles.type, but the business concept is
+# "Papeis de Aprovacao (DOA)". Keep this boundary explicit so future committee
+# roles do not depend on type="approval" or on operational roles.
+DOA_APPROVAL_WORKFLOW_ROLE_TYPES: tuple[str, ...] = ("governance", "approval")
+COMMITTEE_COMPATIBILITY_WORKFLOW_ROLE_CODES: tuple[str, ...] = ("CREDIT_COMMITTEE",)
+
 WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
     {
         "code": "CREDIT_REQUESTER",
@@ -39,7 +45,7 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
         "code": "CREDIT_ANALYST",
         "name": "Analista de Crédito",
         "type": "operational",
-        "description": "Pode executar a analise completa, importar dados, revisar documentos, calcular score, elaborar parecer tecnico, gerar dossie e enviar para aprovacao.",
+        "description": "Executa a analise de credito completa: documentos, integracoes, politica, score, parecer tecnico, dossie e envio para aprovacao DOA.",
     },
     {
         "code": "CREDIT_CONSULTANT",
@@ -51,7 +57,7 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
         "code": "CREDIT_COMMITTEE",
         "name": "Comitê de Crédito",
         "type": "governance",
-        "description": "Participa de exceções, discussões e aprovações colegiadas.",
+        "description": "Compatibilidade para excecoes colegiadas na DOA atual. O Comite futuro tera arquitetura propria.",
     },
     {
         "code": "CREDIT_FINANCE_HEAD",
@@ -87,37 +93,37 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
         "code": "CEO",
         "name": "CEO",
         "type": "governance",
-        "description": "Papel executivo para governança administrativa de políticas.",
+        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
     },
     {
         "code": "CFO",
         "name": "CFO",
         "type": "governance",
-        "description": "Papel financeiro executivo para governança administrativa de políticas.",
+        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
     },
     {
         "code": "HEAD_COMMERCIAL",
         "name": "Head Comercial",
         "type": "governance",
-        "description": "Liderança comercial para governança administrativa de políticas.",
+        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
     },
     {
         "code": "HEAD_OPERATIONS",
         "name": "Head de Operações",
         "type": "governance",
-        "description": "Liderança operacional para governança administrativa de políticas.",
+        "description": "Governanca de credito para administracao de politicas e workflow.",
     },
     {
         "code": "HEAD_FINANCE",
         "name": "Head Financeiro",
         "type": "governance",
-        "description": "Liderança financeira para governança administrativa de políticas.",
+        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
     },
     {
         "code": "LEGAL",
         "name": "Jurídico",
         "type": "governance",
-        "description": "Papel jurídico para governança administrativa de políticas.",
+        "description": "Governanca de credito para administracao juridica de politicas.",
     },
 ]
 

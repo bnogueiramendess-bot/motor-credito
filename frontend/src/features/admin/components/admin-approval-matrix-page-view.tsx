@@ -231,7 +231,7 @@ export function AdminApprovalMatrixPageView() {
               <p><strong>Escopo BU:</strong> {rule.business_unit_name ?? "Todas as BU's"}</p>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              {rule.requires_committee ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Comitê obrigatório</span> : null}
+              {rule.requires_committee ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Excecao colegiada</span> : null}
               {rule.requires_unanimous ? <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">Aprovação unânime</span> : null}
               <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">Prioridade {rule.priority}</span>
             </div>
@@ -315,8 +315,8 @@ export function AdminApprovalMatrixPageView() {
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={requiresCommittee} onChange={(event) => setRequiresCommittee(event.target.checked)} />
-                    <span>Comitê obrigatório</span>
-                    <HelpTip text="Indica que a operação exige participação formal do Comitê de Crédito." />
+                    <span>Excecao colegiada</span>
+                    <HelpTip text="Indica que a operacao exige deliberacao colegiada pela regra DOA atual. A arquitetura futura de Comite sera independente." />
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={requiresUnanimous} onChange={(event) => setRequiresUnanimous(event.target.checked)} />
@@ -333,7 +333,7 @@ export function AdminApprovalMatrixPageView() {
                   <HelpTip text="Os papéis abaixo definem quem pode aprovar, rejeitar ou solicitar ajustes em análises de crédito conforme a Matriz DOA." />
                 </div>
                 {optionsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
-                {optionsQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar os papéis de workflow.</p> : null}
+                {optionsQuery.isError ? <p className="text-sm text-rose-700">Nao foi possivel carregar os papeis de aprovacao DOA.</p> : null}
                 {!optionsQuery.isLoading && !optionsQuery.isError && totalAvailableRoles === 0 ? (
                   <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
                     Nenhum papel de Aprovação (DOA) ativo encontrado. Cadastre ou ative papéis corporativos antes de criar regras de aprovação.

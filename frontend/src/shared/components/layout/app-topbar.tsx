@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Building2, ChevronDown, FileUp, Settings, Users } from "lucide-react";
+import { Building2, ChevronDown, FileUp, Landmark, Settings, Users } from "lucide-react";
 
 import { OperationalResetDialog } from "@/features/admin/components/operational-reset-dialog";
 import { AgingImportDrawer } from "@/features/portfolio/components/aging-import-drawer";
@@ -25,6 +25,14 @@ type NavGroup = {
   label: string;
   activePrefix: string;
   items: NavItem[];
+};
+
+type AdminMenuGroup = {
+  id: "system-admin" | "credit-governance" | "settings";
+  label: string;
+  title: string;
+  icon: typeof Building2;
+  items: Array<{ href?: string; label: string; tone?: "default" | "danger"; action?: "reset" | "logout" }>;
 };
 
 const navGroups: NavGroup[] = [
@@ -232,16 +240,69 @@ export function AppTopbar() {
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
   const [isOperationalResetDialogOpen, setIsOperationalResetDialogOpen] = useState(false);
-  const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
-  const [isUsersMenuOpen, setIsUsersMenuOpen] = useState(false);
+  const [openAdminMenuId, setOpenAdminMenuId] = useState<AdminMenuGroup["id"] | null>(null);
   const menusRef = useRef<HTMLDivElement | null>(null);
 
   const openGroup = visibleNavGroups.find((group) => group.id === openGroupId) ?? null;
 
   function toggleGroup(groupId: string) {
     setOpenGroupId((current) => (current === groupId ? null : groupId));
+  }
+
+  const adminMenuGroups = useMemo<AdminMenuGroup[]>(() => {
+    const groups: AdminMenuGroup[] = [];
+
+    const systemItems: AdminMenuGroup["items"] = [];
+    if (canManageUsers) systemItems.push({ href: "/admin/users", label: "Usuarios" });
+    if (canManageCompany) systemItems.push({ href: "/admin/company", label: "Empresas" });
+    if (canManageBusinessUnits) systemItems.push({ href: "/admin/business-units", label: "Unidades de negocio" });
+    if (systemItems.length > 0) {
+      groups.push({ id: "system-admin", label: "Administracao", title: "Administracao do Sistema", icon: Users, items: systemItems });
+    }
+
+    if (isAdministrator) {
+      groups.push({
+        id: "credit-governance",
+        label: "Credito",
+        title: "Governanca de Credito",
+        icon: Landmark,
+        items: [
+          { href: "/motor-credito/politica-decisao/score", label: "Score e Politica" },
+          { href: "/admin/approval-matrix", label: "Matriz DOA" },
+          { href: "/analises/monitor", label: "Workflow operacional" }
+        ]
+      });
+    }
+
+    groups.push({
+      id: "settings",
+      label: "Configuracoes",
+      title: "Configuracoes",
+      icon: Settings,
+      items: [
+        { label: isLoggingOut ? "Saindo..." : "Logoff", action: "logout" },
+        ...(canResetBase ? [{ label: "Reset Operacional", action: "reset", tone: "danger" as const }] : [])
+      ]
+    });
+
+    return groups;
+  }, [canManageBusinessUnits, canManageCompany, canManageUsers, canResetBase, isAdministrator, isLoggingOut]);
+
+  function toggleAdminMenu(groupId: AdminMenuGroup["id"]) {
+    setOpenAdminMenuId((current) => (current === groupId ? null : groupId));
+  }
+
+  function closeAdminMenu() {
+    setOpenAdminMenuId(null);
+  }
+
+  function handleAdminMenuAction(action: "reset" | "logout") {
+    if (action === "reset") {
+      void handleResetOperationalData();
+      return;
+    }
+    void handleLogout();
   }
 
   useEffect(() => {
@@ -255,9 +316,7 @@ export function AppTopbar() {
     function handleOutsideClick(event: MouseEvent) {
       if (!menusRef.current) return;
       if (event.target instanceof Node && !menusRef.current.contains(event.target)) {
-        setIsAdminMenuOpen(false);
-        setIsUsersMenuOpen(false);
-        setIsSettingsMenuOpen(false);
+        setOpenAdminMenuId(null);
       }
     }
 
@@ -266,12 +325,12 @@ export function AppTopbar() {
   }, []);
 
   async function handleResetOperationalData() {
-    setIsSettingsMenuOpen(false);
+    setOpenAdminMenuId(null);
     setIsOperationalResetDialogOpen(true);
   }
 
   async function handleLogout() {
-    setIsSettingsMenuOpen(false);
+    setOpenAdminMenuId(null);
     setIsLoggingOut(true);
     try {
       const response = await fetch("/api/auth/logout", { method: "POST" });
@@ -332,104 +391,54 @@ export function AppTopbar() {
           <div className="hidden h-8 w-px bg-[#334155] xl:block" aria-hidden="true" />
 
           <div ref={menusRef} className="ml-auto flex items-center gap-2 sm:gap-3">
-            {(canManageCompany || canManageBusinessUnits) ? (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsAdminMenuOpen((current) => !current);
-                    setIsUsersMenuOpen(false);
-                    setIsSettingsMenuOpen(false);
-                  }}
-                  title="Empresa"
-                  aria-label="Empresa"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E2E8F0]/40 bg-white/5 text-[#E2E8F0] transition hover:bg-white/10"
-                >
-                  <Building2 className="h-4 w-4" />
-                </button>
-                {isAdminMenuOpen ? (
-                  <div className="absolute right-0 top-12 z-50 min-w-[220px] rounded-lg border border-[#dbe3ef] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
-                    {canManageCompany ? (
-                      <Link href="/admin/company" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
-                        Cadastro da Empresa
-                      </Link>
-                    ) : null}
-                    {canManageBusinessUnits ? (
-                      <Link href="/admin/business-units" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
-                        Cadastro de BU&apos;s
-                      </Link>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {canManageUsers ? (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsUsersMenuOpen((current) => !current);
-                    setIsAdminMenuOpen(false);
-                    setIsSettingsMenuOpen(false);
-                  }}
-                  title="Usuários"
-                  aria-label="Usuários"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E2E8F0]/40 bg-white/5 text-[#E2E8F0] transition hover:bg-white/10"
-                >
-                  <Users className="h-4 w-4" />
-                </button>
-                {isUsersMenuOpen ? (
-                  <div className="absolute right-0 top-12 z-50 min-w-[220px] rounded-lg border border-[#dbe3ef] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
-                    <Link href="/admin/users" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
-                      Gestão de Usuários
-                    </Link>
-                    {isAdministrator ? (
-                      <Link href="/admin/approval-matrix" className="block rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
-                        Matriz de Aprovação
-                      </Link>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSettingsMenuOpen((current) => !current);
-                  setIsAdminMenuOpen(false);
-                  setIsUsersMenuOpen(false);
-                }}
-                title="Configurações"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E2E8F0]/40 bg-white/5 text-[#E2E8F0] transition hover:bg-white/10"
-                aria-label="Configurações do sistema"
-              >
-                <Settings className="h-4 w-4" />
-              </button>
-              {isSettingsMenuOpen ? (
-                <div className="absolute right-0 top-12 z-40 min-w-[220px] rounded-lg border border-[#dbe3ef] bg-white p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
+            {adminMenuGroups.map((group) => {
+              const Icon = group.icon;
+              const isOpen = openAdminMenuId === group.id;
+              return (
+                <div key={group.id} className="relative">
                   <button
                     type="button"
-                    onClick={() => void handleLogout()}
-                    disabled={isLoggingOut}
-                    className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => toggleAdminMenu(group.id)}
+                    title={group.title}
+                    aria-label={group.title}
+                    aria-expanded={isOpen}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#E2E8F0]/40 bg-white/5 px-3 text-[#E2E8F0] transition hover:bg-white/10"
                   >
-                    {isLoggingOut ? "Saindo..." : "Logoff"}
+                    <Icon className="h-4 w-4" />
+                    <span className="hidden text-xs font-semibold xl:inline">{group.label}</span>
                   </button>
-                  {canResetBase ? (
-                    <button
-                      type="button"
-                      onClick={() => void handleResetOperationalData()}
-                      className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50"
-                    >
-                      Reset Operacional
-                    </button>
+                  {isOpen ? (
+                    <div className="absolute right-0 top-12 z-50 min-w-[260px] rounded-lg border border-[#dbe3ef] bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.16)]">
+                      <p className="px-3 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">{group.title}</p>
+                      {group.items.map((item) => {
+                        const className = cn(
+                          "block w-full rounded-md px-3 py-2 text-left text-sm font-medium transition",
+                          item.tone === "danger" ? "text-rose-700 hover:bg-rose-50" : "text-slate-700 hover:bg-slate-100"
+                        );
+                        if (item.href) {
+                          return (
+                            <Link key={item.label} href={item.href} onClick={closeAdminMenu} className={className}>
+                              {item.label}
+                            </Link>
+                          );
+                        }
+                        return (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onClick={() => item.action ? handleAdminMenuAction(item.action) : closeAdminMenu()}
+                            disabled={item.action === "logout" && isLoggingOut}
+                            className={cn(className, item.action === "logout" && isLoggingOut ? "cursor-not-allowed opacity-60" : "")}
+                          >
+                            {item.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   ) : null}
                 </div>
-              ) : null}
-            </div>
+              );
+            })}
 
             {canImportAging ? (
               <button

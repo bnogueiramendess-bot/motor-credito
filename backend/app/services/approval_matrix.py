@@ -12,6 +12,7 @@ from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
 from app.models.business_unit import BusinessUnit
 from app.models.workflow_role import WorkflowRole
 from app.schemas.approval_matrix import ApprovalMatrixRuleWrite
+from app.services.workflow_roles import DOA_APPROVAL_WORKFLOW_ROLE_TYPES
 
 INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
     {
@@ -117,7 +118,7 @@ def _get_workflow_roles_by_codes(db: Session, codes: Iterable[str]) -> dict[str,
         db.scalars(
             select(WorkflowRole).where(
                 WorkflowRole.code.in_(code_list),
-                WorkflowRole.type == "governance",
+                WorkflowRole.type.in_(DOA_APPROVAL_WORKFLOW_ROLE_TYPES),
                 WorkflowRole.is_active.is_(True),
             )
         ).all()
@@ -129,7 +130,7 @@ def _save_rule_roles(db: Session, rule: ApprovalMatrixRule, role_codes: list[str
     role_by_code = _get_workflow_roles_by_codes(db, role_codes)
     missing = [code for code in role_codes if code not in role_by_code]
     if missing:
-        raise ValueError(f"Papel de workflow invalido: {', '.join(missing)}.")
+        raise ValueError(f"Papel de aprovacao DOA invalido: {', '.join(missing)}.")
 
     db.query(ApprovalMatrixRuleRole).filter(ApprovalMatrixRuleRole.approval_matrix_rule_id == rule.id).delete()
     for code in role_codes:

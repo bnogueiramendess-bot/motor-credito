@@ -15,7 +15,7 @@ type OperationalResetDialogProps = {
 
 type ResetDomainOption = {
   key: ResetDomainKey;
-  group: "Dados Operacionais" | "Dados Mestres" | "Administracao" | "Politica de Credito";
+  group: "Dados Operacionais" | "Dados Mestres" | "Administracao do Sistema" | "Governanca de Credito";
   title: string;
   description: string;
 };
@@ -55,49 +55,49 @@ const DOMAIN_OPTIONS: ResetDomainOption[] = [
   },
   {
     key: "operational_users",
-    group: "Administracao",
+    group: "Administracao do Sistema",
     title: "Usuarios Operacionais",
     description: "Remove usuarios, convites, sessoes e vinculos operacionais. O acesso Master/Admin sera preservado ou recriado."
   },
   {
     key: "workflow_roles",
-    group: "Administracao",
-    title: "Papeis do Workflow",
-    description: "Remove papeis operacionais e vinculos de usuarios do workflow."
+    group: "Governanca de Credito",
+    title: "Responsabilidades de Credito",
+    description: "Remove papeis de execucao, papeis de aprovacao DOA e vinculos de usuarios."
   },
   {
     key: "approval_matrix",
-    group: "Administracao",
+    group: "Governanca de Credito",
     title: "Matriz DOA",
     description: "Remove matriz de alcadas e regras de aprovacao de credito."
   },
   {
     key: "companies_permissions",
-    group: "Administracao",
+    group: "Administracao do Sistema",
     title: "Empresas e Permissoes",
     description: "Remove empresas, perfis e permissoes operacionais. A estrutura minima de acesso Master/Admin sera recriada quando necessario."
   },
   {
     key: "configurable_policy",
-    group: "Politica de Credito",
+    group: "Governanca de Credito",
     title: "Politica Configuravel",
     description: "Remove todas as versoes da Politica Configuravel e sua estrutura normalizada."
   },
   {
     key: "policy_governance",
-    group: "Politica de Credito",
-    title: "Governanca da Politica",
-    description: "Remove solicitacoes, aprovacoes e historico de governanca da Politica Configuravel."
+    group: "Governanca de Credito",
+    title: "Governanca de Credito - Politicas",
+    description: "Remove solicitacoes, aprovacoes e historico da governanca de credito para politicas."
   },
   {
     key: "legacy_policies",
-    group: "Politica de Credito",
+    group: "Governanca de Credito",
     title: "Politicas Legadas",
     description: "Remove politicas e regras legadas do motor de credito."
   }
 ];
 
-const DOMAIN_GROUPS = ["Dados Operacionais", "Dados Mestres", "Administracao", "Politica de Credito"] as const;
+const DOMAIN_GROUPS = ["Dados Operacionais", "Dados Mestres", "Administracao do Sistema", "Governanca de Credito"] as const;
 const ALL_DOMAIN_KEYS = DOMAIN_OPTIONS.map((domain) => domain.key);
 
 function mapFriendlyError(error: unknown) {

@@ -203,9 +203,9 @@ export function AdminCompanyPageView() {
         POLICY_ARCHIVE: updated.approval_roles.POLICY_ARCHIVE.map((role) => role.role_id),
         POLICY_STRUCTURE_CHANGE: updated.approval_roles.POLICY_STRUCTURE_CHANGE.map((role) => role.role_id),
       });
-      setPolicyGovernanceFeedback("Governança de Políticas atualizada com sucesso.");
+      setPolicyGovernanceFeedback("Governanca de Credito - Politicas atualizada com sucesso.");
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : "Não foi possível salvar a governança de políticas.";
+      const message = error instanceof ApiError ? error.message : "Nao foi possivel salvar a governanca de credito para politicas.";
       setPolicyGovernanceFeedback(message);
     }
   }
@@ -279,7 +279,7 @@ export function AdminCompanyPageView() {
 
           <article className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Governança de Políticas</h2>
+              <h2 className="text-base font-semibold text-slate-900">Governanca de Credito - Politicas</h2>
               <p className="mt-1 text-sm text-slate-600">
                 Defina quais papéis devem aprovar publicações, arquivamentos e alterações estruturais das políticas de crédito desta empresa.
               </p>
@@ -289,10 +289,10 @@ export function AdminCompanyPageView() {
             </div>
 
             {policyGovernanceQuery.isLoading || workflowRolesQuery.isLoading ? (
-              <p className="text-sm text-slate-500">Carregando papéis de governança de políticas...</p>
+              <p className="text-sm text-slate-500">Carregando papeis da governanca de credito...</p>
             ) : null}
             {policyGovernanceQuery.isError || workflowRolesQuery.isError ? (
-              <p className="text-sm text-rose-700">Não foi possível carregar a governança de políticas.</p>
+              <p className="text-sm text-rose-700">Nao foi possivel carregar a governanca de credito para politicas.</p>
             ) : null}
 
             {policyGovernanceSelection && !policyGovernanceQuery.isLoading && !workflowRolesQuery.isLoading ? (
@@ -362,7 +362,7 @@ export function AdminCompanyPageView() {
                 onClick={() => void handlePolicyGovernanceSubmit()}
                 className="inline-flex h-10 items-center rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
-                {updatePolicyGovernanceMutation.isPending ? "Salvando governança..." : "Salvar Governança de Políticas"}
+                {updatePolicyGovernanceMutation.isPending ? "Salvando governanca de credito..." : "Salvar Governanca de Credito"}
               </button>
             </div>
           </article>
