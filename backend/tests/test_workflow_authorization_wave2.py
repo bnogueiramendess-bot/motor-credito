@@ -138,8 +138,10 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
         self.assertEqual(catalog["CREDIT_CONSULTANT"]["name"], "Consultor")
         self.assertEqual(catalog["CREDIT_CONSULTANT"]["type"], "operational")
         self.assertIn("sem realizar alterações", catalog["CREDIT_CONSULTANT"]["description"])
-        self.assertIn("CREDIT_REVIEWER", catalog)
-        self.assertIn("CREDIT_OPINION", catalog)
+        operational_codes = [item["code"] for item in WORKFLOW_ROLE_CATALOG if item["type"] == "operational"]
+        self.assertEqual(operational_codes, ["CREDIT_REQUESTER", "CREDIT_ANALYST", "CREDIT_CONSULTANT"])
+        self.assertNotIn("CREDIT_REVIEWER", catalog)
+        self.assertNotIn("CREDIT_OPINION", catalog)
 
     def test_credit_analyst_can_execute_full_technical_flow(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=41), permissions=set())
@@ -174,7 +176,7 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
                 self.assertTrue(result.allowed, action)
                 self.assertIn("CREDIT_ANALYST", result.workflow_context.get("matched_roles", []))
 
-    def test_legacy_operational_roles_still_work_during_compatibility_period(self) -> None:
+    def test_legacy_operational_roles_map_to_credit_analyst_for_authorization(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=42), permissions=set())
         in_progress = DummyAnalysis(
             final_limit=None,
@@ -193,10 +195,14 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
         with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_OPINION"]):
             result = resolve_credit_workflow_action(db=object(), current=current, action="submit_approval", analysis=in_progress)  # type: ignore[arg-type]
             self.assertTrue(result.allowed)
+            self.assertEqual(result.workflow_context.get("matched_roles"), ["CREDIT_ANALYST"])
+            self.assertEqual(result.workflow_context.get("user_workflow_roles"), ["CREDIT_OPINION"])
 
         with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_REVIEWER"]):
             result = resolve_credit_workflow_action(db=object(), current=current, action="start_analysis", analysis=pending)  # type: ignore[arg-type]
             self.assertTrue(result.allowed)
+            self.assertEqual(result.workflow_context.get("matched_roles"), ["CREDIT_ANALYST"])
+            self.assertEqual(result.workflow_context.get("user_workflow_roles"), ["CREDIT_REVIEWER"])
 
     def test_credit_consultant_has_read_only_workflow_access(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=43), permissions=set())

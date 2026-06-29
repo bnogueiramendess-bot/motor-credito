@@ -71,7 +71,10 @@ from app.services.operational_reset import (
     validate_registry_coverage,
 )
 from app.services.security import generate_raw_token, hash_password, hash_token
-from app.services.workflow_roles import ensure_workflow_roles_seed
+from app.services.workflow_roles import (
+    LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODES,
+    ensure_workflow_roles_seed,
+)
 from app.services.approval_matrix import (
     create_approval_matrix_rule,
     ensure_approval_matrix_seed,
@@ -93,6 +96,7 @@ SYSTEM_PROFILE_NAMES = {"administrador_master"}
 ADMINISTRATOR_PROFILE_NAME = "administrador"
 AR_AGING_IMPORT_PERMISSION_KEY = "clients.aging.import"
 STANDARD_USER_ROLE_NAME = "usuario_padrao"
+LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODE_SET = set(LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODES)
 
 
 class ResetOperationalDataRequest(BaseModel):
@@ -472,16 +476,22 @@ def _replace_user_workflow_roles(
         return
     role_by_code = {
         role.code: role
-        for role in db.scalars(select(WorkflowRole).where(WorkflowRole.is_active.is_(True))).all()
+        for role in db.scalars(
+            select(WorkflowRole).where(
+                WorkflowRole.is_active.is_(True),
+                WorkflowRole.code.not_in(LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODE_SET),
+            )
+        ).all()
     }
     normalized_assignments: list[tuple[WorkflowRole, int | None]] = []
     seen_pairs: set[tuple[int, int | None]] = set()
     for assignment in assignments:
-        role = role_by_code.get(assignment.code)
+        role_code = assignment.code.strip().upper()
+        role = role_by_code.get(role_code)
         if role is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Papel de workflow invalido: {assignment.code}.",
+                detail=f"Papel de workflow invalido ou descontinuado: {assignment.code}.",
             )
 
         if assignment.business_unit_id is not None:
@@ -1238,7 +1248,16 @@ def list_workflow_roles(
     ensure_workflow_roles_seed(db)
     try:
         db.commit()
-        return list(db.scalars(select(WorkflowRole).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())).all())
+        return list(
+            db.scalars(
+                select(WorkflowRole)
+                .where(
+                    WorkflowRole.is_active.is_(True),
+                    WorkflowRole.code.not_in(LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODE_SET),
+                )
+                .order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
+            ).all()
+        )
     except SQLAlchemyError:
         db.rollback()
         return []
@@ -1292,7 +1311,12 @@ def get_approval_matrix_options(
         try:
             workflow_roles = list(
                 db.scalars(
-                    select(WorkflowRole).where(WorkflowRole.is_active.is_(True)).order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
+                    select(WorkflowRole)
+                    .where(
+                        WorkflowRole.is_active.is_(True),
+                        WorkflowRole.code.not_in(LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODE_SET),
+                    )
+                    .order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
                 ).all()
             )
         except SQLAlchemyError:

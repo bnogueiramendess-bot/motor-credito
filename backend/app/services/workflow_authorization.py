@@ -21,6 +21,7 @@ from app.services.bu_scope import (
     user_has_all_bu_scope,
 )
 from app.services.workflow_approval import get_active_approval_step, user_has_approval_step_role
+from app.services.workflow_roles import WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY
 
 LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
     "credit.request.create": ("credit.request.create", "credit_request_submit", "credit.requests.submit"),
@@ -41,43 +42,43 @@ ACTION_POLICIES: dict[str, dict] = {
         "statuses": {"pending"},
     },
     "start_analysis": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_REVIEWER"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.analysis.execute",),
         "statuses": {"pending"},
     },
     "continue_analysis": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_REVIEWER"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.analysis.execute",),
         "statuses": {"in_progress", "changes_requested"},
     },
     "save_technical_analysis": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.dossier.edit", "credit.analysis.execute"),
         "statuses": {"in_progress", "changes_requested"},
     },
     "import_technical_reports": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_REVIEWER"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.analysis.execute",),
         "statuses": {"in_progress", "changes_requested"},
     },
     "calculate_score": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_REVIEWER"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.analysis.execute",),
         "statuses": {"in_progress", "changes_requested"},
     },
     "execute_decision_engine": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.request.submit",),
         "statuses": {"in_progress", "changes_requested"},
     },
     "generate_opinion": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.dossier.edit",),
         "statuses": {"in_progress", "changes_requested"},
     },
     "generate_dossier": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_progress", "changes_requested", "in_approval", "approved", "rejected"}},
     "submit_approval": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_OPINION"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.request.submit",),
         "statuses": {"in_progress", "changes_requested"},
     },
@@ -100,7 +101,7 @@ ACTION_POLICIES: dict[str, dict] = {
         "statuses": {"pending", "in_progress", "changes_requested", "in_approval", "approved", "rejected"},
     },
     "access_workspace": {
-        "workflow_roles": ("CREDIT_ANALYST", "CREDIT_REVIEWER", "CREDIT_OPINION"),
+        "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.analysis.execute", "credit.dossier.edit", "credit.request.submit"),
         "statuses": {"pending", "in_progress", "in_approval", "changes_requested"},
     },
@@ -257,13 +258,28 @@ def _list_user_workflow_role_codes(db: Session, user_id: int) -> list[str]:
             db.scalars(
                 select(WorkflowRole.code)
                 .join(UserWorkflowRole, UserWorkflowRole.workflow_role_id == WorkflowRole.id)
-                .where(UserWorkflowRole.user_id == user_id, WorkflowRole.is_active.is_(True))
+                .where(
+                    UserWorkflowRole.user_id == user_id,
+                    (WorkflowRole.is_active.is_(True))
+                    | (WorkflowRole.code.in_(tuple(WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY.keys()))),
+                )
                 .distinct()
                 .order_by(WorkflowRole.code.asc())
             ).all()
         )
     except Exception:
         return []
+
+
+def _role_codes_for_authorization(role_codes: list[str]) -> list[str]:
+    expanded = list(role_codes)
+    seen = set(expanded)
+    for code in role_codes:
+        compatible_code = WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY.get(code)
+        if compatible_code is not None and compatible_code not in seen:
+            expanded.append(compatible_code)
+            seen.add(compatible_code)
+    return expanded
 
 
 def _can_view_in_scope(db: Session, current: CurrentUser, business_unit: str | None) -> bool:
@@ -354,6 +370,7 @@ def resolve_credit_workflow_action(
             )
 
     user_role_codes = _list_user_workflow_role_codes(db, current.user.id)
+    authorization_role_codes = _role_codes_for_authorization(user_role_codes)
     configured_roles = list(policy.get("workflow_roles") or [])
     legacy_permissions = list(policy.get("legacy_permissions") or [])
 
@@ -369,7 +386,7 @@ def resolve_credit_workflow_action(
         business_unit_id=business_unit_id,
     )
 
-    allowed_by_role = any(code in user_role_codes for code in configured_roles) if configured_roles else False
+    allowed_by_role = any(code in authorization_role_codes for code in configured_roles) if configured_roles else False
     allowed_by_legacy = any(_has_legacy_permission(current, key) for key in legacy_permissions) if legacy_permissions else False
     authorization_source = "denied"
     applicable_roles = configured_roles
@@ -377,8 +394,8 @@ def resolve_credit_workflow_action(
     if action in {"approve", "reject", "request_changes", "escalate_to_committee", "return_to_analysis", "finalize"}:
         required_roles = list(matrix_resolution.get("required_roles") or [])
         applicable_roles = required_roles
-        matched_roles = [code for code in required_roles if code in user_role_codes]
-        committee_match = bool(matrix_resolution.get("requires_committee")) and ("CREDIT_COMMITTEE" in user_role_codes)
+        matched_roles = [code for code in required_roles if code in authorization_role_codes]
+        committee_match = bool(matrix_resolution.get("requires_committee")) and ("CREDIT_COMMITTEE" in authorization_role_codes)
         enforcement_enabled = settings.credit_approval_matrix_enforcement_enabled
         legacy_fallback_enabled = settings.credit_approval_legacy_fallback_enabled
         if enforcement_enabled:
@@ -463,7 +480,7 @@ def resolve_credit_workflow_action(
             "matrix_amount": str(matrix_amount),
             "zero_financial_impact": _is_zero_financial_impact(analysis),
             "applicable_roles": applicable_roles,
-        "matched_roles": matched_roles if action in {"approve", "reject", "request_changes", "escalate_to_committee", "return_to_analysis", "finalize"} else [code for code in applicable_roles if code in user_role_codes],
+        "matched_roles": matched_roles if action in {"approve", "reject", "request_changes", "escalate_to_committee", "return_to_analysis", "finalize"} else [code for code in applicable_roles if code in authorization_role_codes],
             "user_workflow_roles": user_role_codes,
             "doa_rule_id": matrix_resolution.get("rule_id"),
             "doa_rule_name": matrix_resolution.get("rule_name"),
@@ -536,7 +553,8 @@ def can_submit_credit_analysis(db: Session, current: CurrentUser) -> WorkflowAut
 
 def can_view_approval_queue(db: Session, current: CurrentUser) -> WorkflowAuthorizationResult:
     workflow_role_codes = _list_user_workflow_role_codes(db, current.user.id)
-    non_requester_workflow_roles = [code for code in workflow_role_codes if code != "CREDIT_REQUESTER"]
+    authorization_role_codes = _role_codes_for_authorization(workflow_role_codes)
+    non_requester_workflow_roles = [code for code in authorization_role_codes if code != "CREDIT_REQUESTER"]
     if non_requester_workflow_roles:
         return WorkflowAuthorizationResult(
             allowed=True,

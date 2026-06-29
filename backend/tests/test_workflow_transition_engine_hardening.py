@@ -211,7 +211,7 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
             bu_ids={1},
         )
         analysis = DummyAnalysis(motor_result=object(), decision_calculated_at=None)
-        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_OPINION"]):
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_ANALYST"]):
             actions = resolve_credit_workflow_available_actions(db=object(), current=current, analysis=analysis, business_unit=None)  # type: ignore[arg-type]
         self.assertNotIn("submit_approval", actions)
 

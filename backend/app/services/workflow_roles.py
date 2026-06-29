@@ -12,6 +12,22 @@ from app.models.workflow_role import WorkflowRole
 
 logger = logging.getLogger(__name__)
 
+ACTIVE_OPERATIONAL_WORKFLOW_ROLE_CODES: tuple[str, ...] = (
+    "CREDIT_REQUESTER",
+    "CREDIT_ANALYST",
+    "CREDIT_CONSULTANT",
+)
+
+LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODES: tuple[str, ...] = (
+    "CREDIT_REVIEWER",
+    "CREDIT_OPINION",
+)
+
+WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY: dict[str, str] = {
+    "CREDIT_REVIEWER": "CREDIT_ANALYST",
+    "CREDIT_OPINION": "CREDIT_ANALYST",
+}
+
 WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
     {
         "code": "CREDIT_REQUESTER",
@@ -23,25 +39,13 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
         "code": "CREDIT_ANALYST",
         "name": "Analista de Crédito",
         "type": "operational",
-        "description": "Pode executar análise técnica.",
+        "description": "Pode executar a analise completa, importar dados, revisar documentos, calcular score, elaborar parecer tecnico, gerar dossie e enviar para aprovacao.",
     },
     {
         "code": "CREDIT_CONSULTANT",
         "name": "Consultor",
         "type": "operational",
         "description": "Pode consultar análises, decisões e históricos sem realizar alterações.",
-    },
-    {
-        "code": "CREDIT_REVIEWER",
-        "name": "Revisor de Crédito",
-        "type": "operational",
-        "description": "Pode revisar análise antes do parecer.",
-    },
-    {
-        "code": "CREDIT_OPINION",
-        "name": "Parecerista Financeiro",
-        "type": "operational",
-        "description": "Pode emitir parecer e submeter para aprovação.",
     },
     {
         "code": "CREDIT_COMMITTEE",
@@ -137,6 +141,10 @@ def ensure_workflow_roles_seed(db: Session) -> None:
             existing.description = item["description"]
             existing.type = item["type"]
             existing.is_active = True
+        for legacy_code in LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODES:
+            existing = db.scalar(select(WorkflowRole).where(WorkflowRole.code == legacy_code))
+            if existing is not None:
+                existing.is_active = False
         db.flush()
     except SQLAlchemyError:
         db.rollback()

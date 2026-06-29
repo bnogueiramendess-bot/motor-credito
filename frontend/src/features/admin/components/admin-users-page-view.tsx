@@ -16,6 +16,7 @@ import { cn } from "@/shared/lib/utils";
 
 const VISIBLE_OPERATIONAL_WORKFLOW_ROLE_CODES = new Set(["CREDIT_REQUESTER", "CREDIT_ANALYST", "CREDIT_CONSULTANT"]);
 const OPERATIONAL_WORKFLOW_ROLE_ORDER = ["CREDIT_REQUESTER", "CREDIT_ANALYST", "CREDIT_CONSULTANT"];
+const DISCONTINUED_OPERATIONAL_WORKFLOW_ROLE_CODES = new Set(["CREDIT_OPINION", "CREDIT_REVIEWER"]);
 
 function userStatusLabel(user: AdminUserDto) {
   if (user.first_access_pending) return "Pendente de primeiro acesso";
@@ -218,7 +219,7 @@ export function AdminUsersPageView() {
     setEmail(user.email);
     setPhone(user.phone ?? "");
     setSelectedBuIds(user.business_unit_ids);
-    setSelectedWorkflowRoleCodes(user.workflow_role_codes);
+    setSelectedWorkflowRoleCodes(user.workflow_role_codes.filter((code) => !DISCONTINUED_OPERATIONAL_WORKFLOW_ROLE_CODES.has(code)));
     setIsAdministrator(user.is_administrator);
     setCanImportArAging(user.can_import_ar_aging);
     setOpenDrawer(true);
