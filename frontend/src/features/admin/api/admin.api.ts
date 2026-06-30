@@ -165,6 +165,7 @@ export type ResetDomainKey =
   | "operational_users"
   | "workflow_roles"
   | "approval_matrix"
+  | "committees"
   | "companies_permissions"
   | "configurable_policy"
   | "policy_governance"
@@ -242,6 +243,67 @@ export type ApprovalMatrixOptionsDto = {
 };
 
 export type ApprovalMatrixNextCodeDto = {
+  code: string;
+};
+
+export type CommitteeDecisionRule = "all" | "majority" | "unanimous" | "chair_decides";
+export type CommitteeStatus = "draft" | "active" | "inactive" | "archived";
+
+export type CommitteeMemberDto = {
+  id: number;
+  workflow_role_id: number;
+  workflow_role_code: string;
+  workflow_role_name: string;
+  workflow_role_type: WorkflowRoleType | string;
+  sequence_order: number;
+  is_required: boolean;
+  is_chair: boolean;
+  is_active: boolean;
+};
+
+export type CommitteeDto = {
+  id: number;
+  company_id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  status: CommitteeStatus;
+  decision_rule: CommitteeDecisionRule;
+  sla_hours: number;
+  is_default: boolean;
+  member_count: number;
+  chair_role_name: string | null;
+  members: CommitteeMemberDto[];
+};
+
+export type CommitteeMemberWritePayload = {
+  workflow_role_id: number;
+  sequence_order: number;
+  is_required: boolean;
+  is_chair: boolean;
+  is_active: boolean;
+};
+
+export type CommitteeWritePayload = {
+  code: string;
+  name: string;
+  description: string | null;
+  status: CommitteeStatus;
+  decision_rule: CommitteeDecisionRule;
+  sla_hours: number;
+  is_default: boolean;
+  members: CommitteeMemberWritePayload[];
+};
+
+export type CommitteeOptionsDto = {
+  eligible_roles: Array<{ id: number; code: string; name: string; type: WorkflowRoleType | string; is_active: boolean }>;
+  workflow_roles: Array<{ id: number; code: string; name: string; type: WorkflowRoleType | string; is_active: boolean }>;
+  decision_rules: CommitteeDecisionRule[];
+  statuses: CommitteeStatus[];
+  sla_hours: number[];
+};
+
+export type CommitteeNextCodeDto = {
   code: string;
 };
 
@@ -353,6 +415,26 @@ export async function updateAdminProfile(id: number, payload: UpsertAdminProfile
 
 export async function updateAdminProfileStatus(id: number, status: ProfileStatus) {
   return apiClient.patch<AdminProfileDto, { status: ProfileStatus }>(`/api/admin/profiles/${id}/status`, { status });
+}
+
+export async function listCommittees() {
+  return apiClient.get<CommitteeDto[]>("/api/admin/committees");
+}
+
+export async function getCommitteeOptions() {
+  return apiClient.get<CommitteeOptionsDto>("/api/admin/committees/options");
+}
+
+export async function getCommitteeNextCode() {
+  return apiClient.get<CommitteeNextCodeDto>("/api/admin/committees/next-code");
+}
+
+export async function createCommittee(payload: CommitteeWritePayload) {
+  return apiClient.post<CommitteeDto, CommitteeWritePayload>("/api/admin/committees", payload);
+}
+
+export async function updateCommittee(id: number, payload: CommitteeWritePayload) {
+  return apiClient.put<CommitteeDto, CommitteeWritePayload>(`/api/admin/committees/${id}`, payload);
 }
 
 export async function listApprovalMatrixRules() {

@@ -4,6 +4,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import AnalysisStatus, FinalDecision, MotorResult
+from app.schemas.committee_session import CommitteeSessionRead
 
 
 class TechnicalDossierMissingRequirement(BaseModel):
@@ -75,6 +76,7 @@ class CreditAnalysisRead(BaseModel):
     rejected_at: datetime | None = None
     available_actions: list[str] = Field(default_factory=list)
     technical_dossier_status: TechnicalDossierStatus | None = None
+    committee_session: CommitteeSessionRead | None = None
     created_at: datetime
     completed_at: datetime | None
 

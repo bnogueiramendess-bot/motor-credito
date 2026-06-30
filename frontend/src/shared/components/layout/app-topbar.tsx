@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -145,6 +145,9 @@ function resolveTopbarMeta(pathname: string): { title: string; subtitle: string 
   if (pathname.startsWith("/motor-credito/politica-decisao/score") || pathname.startsWith("/admin/politicas-de-decisao/score")) {
     return { title: "Motor de Crédito · Política de Decisão", subtitle: "Score institucional parametrizável" };
   }
+  if (pathname.startsWith("/admin/committees")) {
+    return { title: "Governança de Crédito · Comitês", subtitle: "Estruturas corporativas colegiadas" };
+  }
   if (pathname.startsWith("/dados-externos")) {
     return { title: "Dados Externos", subtitle: "Evidências da análise" };
   }
@@ -270,7 +273,8 @@ export function AppTopbar() {
         items: [
           { href: "/motor-credito/politica-decisao/score", label: "Score e Politica" },
           { href: "/admin/approval-matrix", label: "Matriz DOA" },
-          { href: "/analises/monitor", label: "Workflow operacional" }
+          { href: "/analises/monitor", label: "Workflow operacional" },
+          { href: "/admin/committees", label: "Comitês" }
         ]
       });
     }

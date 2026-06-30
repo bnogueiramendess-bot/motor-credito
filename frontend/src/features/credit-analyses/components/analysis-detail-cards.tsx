@@ -66,8 +66,22 @@ function noInfo(value: string | null | undefined, fallback = "Dados n√£o dispon√
   return value;
 }
 
+function committeeSessionStatusLabel(status: string | null | undefined) {
+  if (status === "OPEN") return "Em deliberacao";
+  if (status === "CLOSED") return "Encerrada";
+  if (status === "CANCELLED") return "Cancelada";
+  return status || "Nao informado";
+}
+
+function committeeVoteStatusLabel(status: string | null | undefined) {
+  if (status === "PENDING") return "Pendente";
+  if (status === "VOTED") return "Votado";
+  if (status === "SKIPPED") return "Dispensado";
+  return status || "Nao informado";
+}
 export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   const { analysis, customer, score, decision, final_decision: finalDecision, events } = data;
+  const committeeSession = analysis.committee_session ?? null;
 
   const resolvedDecision = decisionPill(
     resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result)
@@ -378,6 +392,69 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
             </div>
           </div>
 
+          <div className="mb-6 rounded-[14px] border border-[#D7E1EC] bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px]">
+            <div className="mb-4 flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4F647A]">Comite de Credito</div>
+                {committeeSession ? (
+                  <p className="text-sm font-semibold text-[#102033]">{committeeSession.committee_name}</p>
+                ) : (
+                  <p className="text-sm font-medium text-[#102033]">Nenhuma sessao de Comite foi aberta para esta analise.</p>
+                )}
+              </div>
+              {committeeSession ? (
+                <span className="inline-flex w-fit items-center rounded-[999px] border border-[#F1D48A] bg-[#FFF8E1] px-3 py-1 text-[11px] font-semibold text-[#7A5A12]">
+                  {committeeSessionStatusLabel(committeeSession.status)}
+                </span>
+              ) : null}
+            </div>
+
+            {committeeSession ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="rounded-[10px] border border-[#EEF2F6] bg-[#F8FAFC] px-4 py-3">
+                    <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-[#6B7A8A]">Submetido por</div>
+                    <div className="text-sm font-medium text-[#102033]">{committeeSession.requested_by ?? "Nao informado"}</div>
+                  </div>
+                  <div className="rounded-[10px] border border-[#EEF2F6] bg-[#F8FAFC] px-4 py-3">
+                    <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-[#6B7A8A]">Data da submissao</div>
+                    <div className="text-sm font-medium text-[#102033]">{formatDate(committeeSession.requested_at)}</div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-[#6B7A8A]">Justificativa</div>
+                  <p className="whitespace-pre-line text-sm leading-6 text-[#102033]">{committeeSession.reason}</p>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-[11px] uppercase tracking-[0.06em] text-[#6B7A8A]">Membros</div>
+                  <div className="divide-y divide-[#EEF2F6] rounded-[10px] border border-[#EEF2F6]">
+                    {committeeSession.votes.length > 0 ? (
+                      committeeSession.votes.map((vote, index) => (
+                        <div key={`${vote.role_code ?? vote.role_name}-${vote.user_name ?? "pending"}-${index}`} className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="text-sm font-medium text-[#102033]">
+                            {vote.role_name}{vote.user_name ? ` - ${vote.user_name}` : ""}
+                          </div>
+                          <div className="text-xs font-semibold text-[#7A5A12]">{committeeVoteStatusLabel(vote.status)}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="px-4 py-3 text-sm text-[#4F647A]">Nenhum membro pendente foi registrado.</div>
+                    )}
+                  </div>
+                </div>
+
+                {committeeSession.warnings.length > 0 ? (
+                  <div className="rounded-[10px] border border-[#F1D48A] bg-[#FFFDF4] px-4 py-3">
+                    {committeeSession.warnings.map((warning) => (
+                      <div key={warning} className="text-xs leading-5 text-[#7A5A12]">{warning}</div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
           <AccordionRules rules={rules} />
 
           <div className="flex flex-col items-start justify-between gap-4 rounded-[14px] border border-[#D7E1EC] bg-white px-6 py-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-[2px] lg:flex-row lg:items-center">

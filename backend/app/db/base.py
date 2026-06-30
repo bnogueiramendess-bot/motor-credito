@@ -1,4 +1,4 @@
-﻿from app.db.session import Base
+from app.db.session import Base
 from app.models import (
     AnalysisDocument,
     AnalysisCommercialReference,
@@ -6,6 +6,10 @@ from app.models import (
     ApprovalMatrixRuleRole,
     AnalysisRequestMetadata,
     AuditLog,
+    Committee,
+    CommitteeMember,
+    CommitteeSession,
+    CommitteeSessionVote,
     ArAgingDataTotalRow,
     ArAgingGroupConsolidatedRow,
     ArAgingImportRun,
@@ -77,6 +81,10 @@ __all__ = [
     "UserInvitation",
     "RefreshToken",
     "AuditLog",
+    "Committee",
+    "CommitteeMember",
+    "CommitteeSession",
+    "CommitteeSessionVote",
     "AnalysisRequestMetadata",
     "AnalysisDocument",
     "AnalysisCommercialReference",

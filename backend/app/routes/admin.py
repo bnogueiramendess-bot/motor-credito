@@ -54,8 +54,19 @@ from app.schemas.approval_matrix import (
     ApprovalMatrixRuleRoleRead,
     ApprovalMatrixRuleWrite,
 )
+from app.schemas.committee import (
+    CommitteeDecisionRule,
+    CommitteeMemberRead,
+    CommitteeOptionWorkflowRole,
+    CommitteeOptionsRead,
+    CommitteeRead,
+    CommitteeStatus,
+    CommitteeWrite,
+)
 from app.models.approval_matrix_rule import ApprovalMatrixRule
 from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
+from app.models.committee import Committee
+from app.models.committee_member import CommitteeMember
 from app.services.bootstrap_admin import (
     DEFAULT_MASTER_EMAIL,
     DEFAULT_MASTER_NAME,
@@ -81,6 +92,16 @@ from app.services.approval_matrix import (
     generate_next_approval_matrix_code,
     list_approval_matrix_rules,
     update_approval_matrix_rule,
+)
+from app.services.committees import (
+    COMMITTEE_SLA_OPTIONS,
+    create_committee,
+    ensure_committees_seed,
+    generate_next_committee_code,
+    get_committee,
+    list_committee_eligible_workflow_roles,
+    list_committees,
+    update_committee,
 )
 from app.services.company_policy_governance_roles import (
     CompanyPolicyGovernanceRoleError,
@@ -557,6 +578,57 @@ def _approval_rule_to_read(db: Session, rule: ApprovalMatrixRule) -> ApprovalMat
         ],
     )
 
+
+
+def _committee_to_read(db: Session, committee: Committee) -> CommitteeRead:
+    member_rows = list(
+        db.execute(
+            select(
+                CommitteeMember.id,
+                CommitteeMember.workflow_role_id,
+                WorkflowRole.code,
+                WorkflowRole.name,
+                WorkflowRole.type,
+                CommitteeMember.sequence_order,
+                CommitteeMember.is_required,
+                CommitteeMember.is_chair,
+                CommitteeMember.is_active,
+            )
+            .join(WorkflowRole, WorkflowRole.id == CommitteeMember.workflow_role_id)
+            .where(CommitteeMember.committee_id == committee.id)
+            .order_by(CommitteeMember.sequence_order.asc(), WorkflowRole.name.asc())
+        ).all()
+    )
+    members = [
+        CommitteeMemberRead(
+            id=row[0],
+            workflow_role_id=row[1],
+            workflow_role_code=row[2],
+            workflow_role_name=row[3],
+            workflow_role_type=row[4],
+            sequence_order=row[5],
+            is_required=row[6],
+            is_chair=row[7],
+            is_active=row[8],
+        )
+        for row in member_rows
+    ]
+    chair_role_name = next((member.workflow_role_name for member in members if member.is_chair), None)
+    member_count = sum(1 for member in members if member.is_active)
+    return CommitteeRead(
+        id=committee.id,
+        company_id=committee.company_id,
+        code=committee.code,
+        name=committee.name,
+        description=committee.description,
+        status=CommitteeStatus(committee.status),
+        decision_rule=CommitteeDecisionRule(committee.decision_rule),
+        sla_hours=committee.sla_hours,
+        is_default=committee.is_default,
+        member_count=member_count,
+        chair_role_name=chair_role_name,
+        members=members,
+    )
 
 @router.post("/company", response_model=CompanyRead)
 def create_or_update_company(
@@ -1299,6 +1371,123 @@ def update_user_workflow_roles(
     db.commit()
     return _list_user_workflow_roles(db, user.id)
 
+
+@router.get("/committees/options", response_model=CommitteeOptionsRead)
+def get_committee_options(
+    db: Session = Depends(get_db),
+    _: CurrentUser = Depends(require_permissions(["committees:view"])),
+) -> CommitteeOptionsRead:
+    if not _table_exists(db, "workflow_roles"):
+        return CommitteeOptionsRead(
+            eligible_roles=[],
+            workflow_roles=[],
+            decision_rules=[item.value for item in CommitteeDecisionRule],
+            statuses=[item.value for item in CommitteeStatus],
+            sla_hours=COMMITTEE_SLA_OPTIONS,
+        )
+    try:
+        workflow_roles = list_committee_eligible_workflow_roles(db)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        workflow_roles = []
+    return CommitteeOptionsRead(
+        eligible_roles=[CommitteeOptionWorkflowRole.model_validate(role) for role in workflow_roles],
+        workflow_roles=[CommitteeOptionWorkflowRole.model_validate(role) for role in workflow_roles],
+        decision_rules=[item.value for item in CommitteeDecisionRule],
+        statuses=[item.value for item in CommitteeStatus],
+        sla_hours=COMMITTEE_SLA_OPTIONS,
+    )
+
+
+@router.get("/committees", response_model=list[CommitteeRead])
+def get_committees(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["committees:view"])),
+) -> list[CommitteeRead]:
+    if not _table_exists(db, "committees"):
+        return []
+    ensure_committees_seed(db)
+    try:
+        db.commit()
+        committees = list_committees(db, company_id=current.user.company_id)
+    except SQLAlchemyError:
+        db.rollback()
+        return []
+    return [_committee_to_read(db, committee) for committee in committees]
+
+
+@router.get("/committees/next-code")
+def get_committee_next_code(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["committees:view"])),
+) -> dict[str, str]:
+    if not _table_exists(db, "committees"):
+        return {"code": "COM-0001"}
+    return {"code": generate_next_committee_code(db, company_id=current.user.company_id)}
+
+
+@router.post("/committees", response_model=CommitteeRead, status_code=status.HTTP_201_CREATED)
+def create_committee_endpoint(
+    payload: CommitteeWrite,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["committees:manage"])),
+) -> CommitteeRead:
+    if not _table_exists(db, "committees") or not _table_exists(db, "committee_members"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Comites indisponiveis. Aplique as migrations de governanca.",
+        )
+    duplicated = db.scalar(
+        select(Committee.id).where(Committee.company_id == current.user.company_id, Committee.code == payload.code)
+    )
+    if duplicated is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ja existe um comite com este codigo.")
+    try:
+        committee = create_committee(
+            db,
+            company_id=current.user.company_id,
+            payload=payload,
+            created_by_user_id=current.user.id,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _committee_to_read(db, committee)
+
+
+@router.put("/committees/{committee_id}", response_model=CommitteeRead)
+def update_committee_endpoint(
+    committee_id: int,
+    payload: CommitteeWrite,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["committees:manage"])),
+) -> CommitteeRead:
+    if not _table_exists(db, "committees") or not _table_exists(db, "committee_members"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Comites indisponiveis. Aplique as migrations de governanca.",
+        )
+    committee = get_committee(db, committee_id=committee_id, company_id=current.user.company_id)
+    if committee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comite nao encontrado.")
+    duplicated = db.scalar(
+        select(Committee.id).where(
+            Committee.company_id == current.user.company_id,
+            Committee.code == payload.code,
+            Committee.id != committee_id,
+        )
+    )
+    if duplicated is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ja existe um comite com este codigo.")
+    try:
+        updated = update_committee(db, committee=committee, payload=payload, actor_user_id=current.user.id)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _committee_to_read(db, updated)
 
 @router.get("/approval-matrix/options", response_model=ApprovalMatrixOptionsRead)
 def get_approval_matrix_options(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { CreditRuleFormSheet, CreditRuleFormSheetSubmitPayload } from "@/features/credit-rules/components/credit-rule-form-sheet";
 import { CreditRulesFilters, PillarFilter, ScoreFilter } from "@/features/credit-rules/components/credit-rules-filters";
@@ -33,21 +33,21 @@ type SaveFeedback = {
 function getContextHeadline(context: CreditPolicyContextMode) {
   if (context === "active") {
     return {
-      title: "Visualizando: Política ativa",
-      description: "Esta é a política usada hoje nas análises. Neste modo, a edição fica desabilitada."
+      title: "Visualizando: PolÃ­tica ativa",
+      description: "Esta Ã© a polÃ­tica usada hoje nas anÃ¡lises. Neste modo, a ediÃ§Ã£o fica desabilitada."
     };
   }
 
   return {
-    title: "Visualizando: Rascunho em edição",
-    description: "As alterações feitas aqui só entram em vigor após a publicação."
+    title: "Visualizando: Rascunho em ediÃ§Ã£o",
+    description: "As alteraÃ§Ãµes feitas aqui sÃ³ entram em vigor apÃ³s a publicaÃ§Ã£o."
   };
 }
 
 export function CreditRulesPageView() {
-  const permissions = getEffectivePermissions();
-  const canViewPolicy = hasPermission("credit.policy.view", permissions);
-  const canManagePolicy = hasPermission("credit.policy.manage", permissions);
+  const [permissions, setPermissions] = useState<string[] | null>(null);
+  const canViewPolicy = permissions !== null && hasPermission("credit.policy.view", permissions);
+  const canManagePolicy = permissions !== null && hasPermission("credit.policy.manage", permissions);
   const activePolicyQuery = useActiveCreditPolicyQuery();
   const draftPolicyQuery = useDraftCreditPolicyQuery();
 
@@ -66,6 +66,14 @@ export function CreditRulesPageView() {
   const [deletingRuleId, setDeletingRuleId] = useState<number | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
 
+  useEffect(() => {
+    setPermissions(getEffectivePermissions());
+  }, []);
+
+  if (permissions === null) {
+    return <CreditRulesLoadingState />;
+  }
+
   if (!canViewPolicy) {
     return <PermissionDeniedState />;
   }
@@ -79,7 +87,7 @@ export function CreditRulesPageView() {
     return (
       <section className="readability-standard space-y-4">
         <ErrorState
-          title="Não foi possível carregar a política de crédito"
+          title="NÃ£o foi possÃ­vel carregar a polÃ­tica de crÃ©dito"
           description={activePolicyQuery.error?.message ?? draftPolicyQuery.error?.message ?? "Erro desconhecido."}
           onRetry={() => {
             activePolicyQuery.refetch();
@@ -91,7 +99,7 @@ export function CreditRulesPageView() {
   }
 
   if (!activePolicyQuery.data || !draftPolicyQuery.data) {
-    return <EmptyState title="Política indisponível" description="Não foi possível obter política ativa e rascunho no backend." />;
+    return <EmptyState title="PolÃ­tica indisponÃ­vel" description="NÃ£o foi possÃ­vel obter polÃ­tica ativa e rascunho no backend." />;
   }
 
   const activePolicy = mapCreditPolicyToViewModel(activePolicyQuery.data);
@@ -137,7 +145,7 @@ export function CreditRulesPageView() {
       setIsFormOpen(false);
       setEditingRuleId(null);
     } catch (error) {
-      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "Não foi possível salvar a regra." });
+      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "NÃ£o foi possÃ­vel salvar a regra." });
     }
   }
 
@@ -147,7 +155,7 @@ export function CreditRulesPageView() {
       await deleteRuleMutation.mutateAsync(ruleId);
       setSaveFeedback({ type: "success", message: "Regra removida do rascunho com sucesso." });
     } catch (error) {
-      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "Não foi possível excluir a regra." });
+      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "NÃ£o foi possÃ­vel excluir a regra." });
     } finally {
       setDeletingRuleId(null);
     }
@@ -156,22 +164,22 @@ export function CreditRulesPageView() {
   async function handlePublishDraft() {
     try {
       await publishDraftMutation.mutateAsync();
-      setSaveFeedback({ type: "success", message: "Rascunho publicado. O motor agora utiliza a nova política ativa." });
+      setSaveFeedback({ type: "success", message: "Rascunho publicado. O motor agora utiliza a nova polÃ­tica ativa." });
       setIsFormOpen(false);
       setEditingRuleId(null);
     } catch (error) {
-      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "Não foi possível publicar o rascunho." });
+      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "NÃ£o foi possÃ­vel publicar o rascunho." });
     }
   }
 
   async function handleResetDraft() {
     try {
       await resetDraftMutation.mutateAsync();
-      setSaveFeedback({ type: "success", message: "Rascunho resetado com base na política ativa." });
+      setSaveFeedback({ type: "success", message: "Rascunho resetado com base na polÃ­tica ativa." });
       setIsFormOpen(false);
       setEditingRuleId(null);
     } catch (error) {
-      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "Não foi possível descartar o rascunho." });
+      setSaveFeedback({ type: "error", message: error instanceof Error ? error.message : "NÃ£o foi possÃ­vel descartar o rascunho." });
     }
   }
 
@@ -197,7 +205,7 @@ export function CreditRulesPageView() {
           variant={saveFeedback.type === "error" ? "destructive" : "default"}
           className={saveFeedback.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : undefined}
         >
-          <AlertTitle>{saveFeedback.type === "success" ? "Operação concluída" : "Falha na operação"}</AlertTitle>
+          <AlertTitle>{saveFeedback.type === "success" ? "OperaÃ§Ã£o concluÃ­da" : "Falha na operaÃ§Ã£o"}</AlertTitle>
           <AlertDescription>{saveFeedback.message}</AlertDescription>
         </Alert>
       ) : null}
@@ -238,7 +246,7 @@ export function CreditRulesPageView() {
       <CreditRulesList
         rules={filteredRules}
         totalCount={currentPolicy.rules.length}
-        contextLabel={isDraftContext ? "Rascunho em edição" : "Política ativa"}
+        contextLabel={isDraftContext ? "Rascunho em ediÃ§Ã£o" : "PolÃ­tica ativa"}
         canEdit={canManagePolicy && isDraftContext}
         deletingRuleId={deletingRuleId}
         onEditRule={(rule) => {

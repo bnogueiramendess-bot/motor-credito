@@ -50,6 +50,10 @@ from app.models.audit_log import AuditLog
 from app.models.analysis_request_metadata import AnalysisRequestMetadata
 from app.models.analysis_document import AnalysisDocument
 from app.models.analysis_commercial_reference import AnalysisCommercialReference
+from app.models.committee import Committee
+from app.models.committee_member import CommitteeMember
+from app.models.committee_session import CommitteeSession
+from app.models.committee_session_vote import CommitteeSessionVote
 from app.models.approval_matrix_rule import ApprovalMatrixRule
 from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
 from app.models.workflow_role import WorkflowRole
@@ -103,6 +107,10 @@ __all__ = [
     "AnalysisRequestMetadata",
     "AnalysisDocument",
     "AnalysisCommercialReference",
+    "Committee",
+    "CommitteeMember",
+    "CommitteeSession",
+    "CommitteeSessionVote",
     "ApprovalMatrixRule",
     "ApprovalMatrixRuleRole",
     "WorkflowRole",
@@ -110,3 +118,6 @@ __all__ = [
     "WorkflowApprovalStep",
     "WorkflowApprovalDecision",
 ]
+
+
+

@@ -37,6 +37,8 @@ ADMIN_CONTROLLED_PERMISSIONS = {
     "profiles:manage",
     "approval.matrix:view",
     "approval.matrix:manage",
+    "committees:view",
+    "committees:manage",
 }
 ADMINISTRATOR_BASE_PERMISSIONS = {"company:manage", "bu:manage", "users:manage"}
 

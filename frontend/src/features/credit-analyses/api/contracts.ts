@@ -95,6 +95,23 @@ export type DecisionMemoryDto = {
   explainability?: DecisionExplainabilityDto;
 };
 
+export type CommitteeSessionVoteDto = {
+  role_name: string;
+  role_code?: string | null;
+  user_name?: string | null;
+  status: "PENDING" | "VOTED" | "SKIPPED" | string;
+};
+
+export type CommitteeSessionDto = {
+  id: number;
+  committee_name: string;
+  status: "OPEN" | "CLOSED" | "CANCELLED" | string;
+  requested_by?: string | null;
+  requested_at: string;
+  reason: string;
+  votes: CommitteeSessionVoteDto[];
+  warnings: string[];
+};
 export type CustomerDto = {
   id: number;
   company_name: string;
@@ -137,6 +154,7 @@ export type CreditAnalysisDto = {
   approved_at?: string | null;
   rejected_at?: string | null;
   available_actions?: string[];
+  committee_session?: CommitteeSessionDto | null;
   technical_dossier_status?: {
     is_completed: boolean;
     missing_requirements: Array<{

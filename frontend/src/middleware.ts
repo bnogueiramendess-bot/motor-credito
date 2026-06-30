@@ -11,6 +11,7 @@ const ADMIN_RULES: Array<{ prefix: string }> = [
   { prefix: "/admin/configuracoes" },
   { prefix: "/admin/profiles" },
   { prefix: "/admin/approval-matrix" },
+  { prefix: "/admin/committees" },
   { prefix: "/admin/matriz-aprovacao" }
 ];
 

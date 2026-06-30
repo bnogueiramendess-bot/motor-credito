@@ -64,6 +64,7 @@ from app.schemas.credit_analysis import (
     CreditAnalysisTriageSubmitRequest,
     CreditAnalysisTriageSubmitResponse,
 )
+from app.schemas.committee_session import CommitteeSessionCreateRequest, CommitteeSessionRead
 from app.schemas.decision import DecisionCalculationResponse, DecisionResultResponse
 from app.schemas.decision_event import DecisionEventRead
 from app.schemas.external_data import (
@@ -113,6 +114,13 @@ from app.services.approval_matrix import resolve_required_approval_roles
 from app.services.workflow_transition_engine import resolve_credit_workflow_transition
 from app.services.workflow_approval import list_latest_approval_steps
 from app.services.credit_decision_policy_publication import list_policy_approval_queue_items
+from app.services.committee_sessions import (
+    CommitteeSessionError,
+    CommitteeSessionPermissionError,
+    committee_session_to_read,
+    get_latest_committee_session,
+    open_credit_committee_session,
+)
 
 router = APIRouter(prefix="/credit-analyses", tags=["credit-analyses"])
 logger = logging.getLogger(__name__)
@@ -1332,6 +1340,11 @@ def _attach_available_actions_field(db: Session, current: CurrentUser, analysis:
 
 def _attach_technical_dossier_status_field(analysis: CreditAnalysis) -> None:
     setattr(analysis, "technical_dossier_status", resolve_technical_dossier_status(analysis))
+
+
+def _attach_committee_session_field(db: Session, analysis: CreditAnalysis) -> None:
+    session = get_latest_committee_session(db, analysis_id=analysis.id)
+    setattr(analysis, "committee_session", committee_session_to_read(db, session))
 
 
 def _extract_coface_coverage_limit(analysis: CreditAnalysis, db: Session, customer: Customer | None) -> Decimal | None:
@@ -3366,8 +3379,41 @@ def get_credit_analysis(
     _attach_recommendation_classification(db, analysis)
     _attach_available_actions_field(db, current, analysis)
     _attach_technical_dossier_status_field(analysis)
+    _attach_committee_session_field(db, analysis)
     return analysis
 
+
+
+
+@router.post("/{analysis_id}/committee-session", response_model=CommitteeSessionRead, status_code=status.HTTP_201_CREATED)
+def open_committee_session_for_analysis(
+    analysis_id: int,
+    payload: CommitteeSessionCreateRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CommitteeSessionRead:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_detail_read_access_or_403(db, current, analysis)
+
+    try:
+        session = open_credit_committee_session(db, analysis=analysis, current=current, reason=payload.reason)
+        db.commit()
+    except CommitteeSessionPermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except CommitteeSessionError as exc:
+        db.rollback()
+        message = str(exc)
+        status_code = status.HTTP_409_CONFLICT if "Ja existe" in message or "precisa estar" in message else status.HTTP_422_UNPROCESSABLE_CONTENT
+        raise HTTPException(status_code=status_code, detail=message) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nao foi possivel abrir a sessao de comite.") from exc
+
+    db.refresh(session)
+    return committee_session_to_read(db, session)
 
 @router.get("/{analysis_id}/approval-flow-summary", response_model=CreditAnalysisApprovalFlowSummary)
 def get_credit_analysis_approval_flow_summary(

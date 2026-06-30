@@ -44,13 +44,19 @@ RESET_DOMAIN_REGISTRY: dict[str, dict[str, object]] = {
         "label": "Responsabilidades de Credito",
         "group": "Governanca de Credito",
         "description": "Remove papeis de execucao, papeis de aprovacao DOA e vinculos de usuarios.",
-        "tables": ["user_workflow_roles", "company_policy_governance_roles", "company_policy_governance_settings", "approval_matrix_rule_roles", "workflow_roles"],
+        "tables": ["user_workflow_roles", "committee_members", "company_policy_governance_roles", "company_policy_governance_settings", "approval_matrix_rule_roles", "workflow_roles"],
     },
     "approval_matrix": {
         "label": "Matriz DOA",
         "group": "Governanca de Credito",
         "description": "Remove matriz de alcadas e regras de aprovacao de credito.",
         "tables": ["workflow_approval_decisions", "workflow_approval_steps", "approval_matrix_rule_roles", "approval_matrix_rules"],
+    },
+    "committees": {
+        "label": "Comites",
+        "group": "Governanca de Credito",
+        "description": "Remove estruturas corporativas de comites e seus papeis DOA.",
+        "tables": ["committee_members", "committees"],
     },
     "companies_permissions": {
         "label": "Empresas e Permissoes",
@@ -79,14 +85,14 @@ RESET_DOMAIN_REGISTRY: dict[str, dict[str, object]] = {
 }
 
 TOTAL_OPERATIONAL_DOMAINS: tuple[str, ...] = (
-    "credit_analysis", "approval_workflow", "external_reports", "portfolio_ar", "customers", "operational_users", "workflow_roles", "approval_matrix", "companies_permissions", "configurable_policy", "policy_governance", "legacy_policies",
+    "credit_analysis", "approval_workflow", "external_reports", "portfolio_ar", "customers", "operational_users", "workflow_roles", "approval_matrix", "committees", "companies_permissions", "configurable_policy", "policy_governance", "legacy_policies",
 )
 
 GLOBAL_DELETE_ORDER: tuple[str, ...] = (
     "external_data_files", "analysis_commercial_references", "analysis_documents", "analysis_request_metadata", "workflow_approval_decisions", "workflow_approval_steps", "decision_events", "score_results", "external_data_entries", "credit_analyses", "credit_report_reads",
     "ar_aging_bod_customer_rows", "ar_aging_bod_snapshots", "ar_aging_remark_rows", "ar_aging_group_consolidated_rows", "ar_aging_data_total_rows", "ar_aging_import_runs",
     "credit_decision_policy_score_ranges", "credit_decision_policy_indicators", "credit_decision_policy_subgroups", "credit_decision_policy_pillars", "credit_decision_policy_governance_request_approvals", "credit_decision_policy_governance_requests", "credit_decision_policies",
-    "company_policy_governance_roles", "company_policy_governance_settings", "approval_matrix_rule_roles", "approval_matrix_rules", "user_workflow_roles", "refresh_tokens", "audit_logs", "user_business_unit_scopes", "user_invitations", "users", "business_units", "role_permissions", "workflow_roles", "permissions", "roles", "companies", "credit_policy_rules", "credit_policies", "customers",
+    "committee_members", "committees", "company_policy_governance_roles", "company_policy_governance_settings", "approval_matrix_rule_roles", "approval_matrix_rules", "user_workflow_roles", "refresh_tokens", "audit_logs", "user_business_unit_scopes", "user_invitations", "users", "business_units", "role_permissions", "workflow_roles", "permissions", "roles", "companies", "credit_policy_rules", "credit_policies", "customers",
 )
 
 RESEED_CRITICAL_DOMAINS = {"operational_users", "companies_permissions"}
@@ -109,6 +115,7 @@ BUSINESS_IMPACT_METRICS: tuple[dict[str, str], ...] = (
     {"table": "users", "label": "usuarios operacionais"},
     {"table": "workflow_roles", "label": "responsabilidades de credito"},
     {"table": "approval_matrix_rules", "label": "regras DOA"},
+    {"table": "committees", "label": "comites corporativos"},
 )
 
 
