@@ -14,12 +14,18 @@ from app.models.workflow_role import WorkflowRole
 from app.schemas.approval_matrix import ApprovalMatrixRuleWrite
 from app.services.workflow_roles import DOA_APPROVAL_WORKFLOW_ROLE_TYPES
 
+# Current approval execution is sequential. Keep the concept explicit without
+# changing the public API; future parallel/hybrid flows should become their own
+# approval-flow model instead of overloading operational roles or governance.
+APPROVAL_FLOW_MODE = "sequential"
+APPROVAL_FLOW_LABEL = "Sequencial"
+
 INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
     {
         "legacy_code": "APPROVAL_BRL_0_1MM",
         "code": "DOA-0001",
-        "name": "Alçada BRL 0 a 1MM",
-        "description": "Aprovação padrão para valores até BRL 1MM.",
+        "name": "Faixa de Aprovacao BRL 0 a 1MM",
+        "description": "Politica corporativa DOA para operacoes ate BRL 1MM.",
         "min_amount": Decimal("0"),
         "max_amount": Decimal("1000000"),
         "currency": "BRL",
@@ -32,8 +38,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
     {
         "legacy_code": "APPROVAL_BRL_1_5MM",
         "code": "DOA-0002",
-        "name": "Alçada BRL 1MM a 5MM",
-        "description": "Aprovação padrão para valores entre BRL 1MM e BRL 5MM.",
+        "name": "Faixa de Aprovacao BRL 1MM a 5MM",
+        "description": "Politica corporativa DOA para operacoes entre BRL 1MM e BRL 5MM.",
         "min_amount": Decimal("1000000"),
         "max_amount": Decimal("5000000"),
         "currency": "BRL",
@@ -46,8 +52,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
     {
         "legacy_code": "APPROVAL_BRL_5_10MM",
         "code": "DOA-0003",
-        "name": "Alçada BRL 5MM a 10MM",
-        "description": "Aprovação padrão para valores entre BRL 5MM e BRL 10MM.",
+        "name": "Faixa de Aprovacao BRL 5MM a 10MM",
+        "description": "Politica corporativa DOA para operacoes entre BRL 5MM e BRL 10MM.",
         "min_amount": Decimal("5000000"),
         "max_amount": Decimal("10000000"),
         "currency": "BRL",
@@ -60,8 +66,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
     {
         "legacy_code": "APPROVAL_BRL_GT_10MM",
         "code": "DOA-0004",
-        "name": "Alçada BRL acima de 10MM",
-        "description": "Aprovação executiva para valores acima de BRL 10MM.",
+        "name": "Faixa de Aprovacao BRL acima de 10MM",
+        "description": "Politica corporativa DOA para decisoes executivas acima de BRL 10MM.",
         "min_amount": Decimal("10000000"),
         "max_amount": None,
         "currency": "BRL",
@@ -74,8 +80,8 @@ INITIAL_APPROVAL_MATRIX_RULES: list[dict] = [
     {
         "legacy_code": "APPROVAL_EXCEPTIONS_COMMITTEE",
         "code": "DOA-0005",
-        "name": "Exceções de Comitê",
-        "description": "Canal institucional para exceções e deliberações colegiadas.",
+        "name": "Excecao Colegiada",
+        "description": "Politica corporativa DOA para operacoes que exigem decisao colegiada.",
         "min_amount": None,
         "max_amount": None,
         "currency": "BRL",
@@ -114,6 +120,9 @@ def list_approval_matrix_rules(db: Session, *, company_id: int) -> list[Approval
 
 def _get_workflow_roles_by_codes(db: Session, codes: Iterable[str]) -> dict[str, WorkflowRole]:
     code_list = [code.strip().upper() for code in codes]
+    # DOA approval roles are the only authority for credit decisions. Historical
+    # storage may still use type="governance" or type="approval"; operational
+    # roles and future collegial structures must remain outside this boundary.
     roles = list(
         db.scalars(
             select(WorkflowRole).where(

@@ -20,7 +20,7 @@ const DECISION_ACTIONS: Array<{ value: DecisionAction; label: string }> = [
   { value: "approve", label: "Aprovar" },
   { value: "reject", label: "Rejeitar" },
   { value: "request_changes", label: "Devolver para ajustes" },
-  { value: "escalate_to_committee", label: "Direcionar para Comitê" },
+  { value: "escalate_to_committee", label: "Direcionar para Excecao Colegiada" },
 ];
 
 function formatCompactCurrency(value: number | string | null | undefined): string | null {
@@ -288,7 +288,7 @@ function ApprovalQueuePolicyCard({
         <div className="grid grid-cols-2 gap-x-4 gap-y-1">
           <p className="text-[12px] text-[#AEB4C1]">BU Responsável</p>
           <p className="text-[13px] font-semibold text-[#F2F4F8]">{safeText(item.business_unit)}</p>
-          <p className="text-[12px] text-[#AEB4C1]">Comitê</p>
+          <p className="text-[12px] text-[#AEB4C1]">Excecao Colegiada</p>
           <p className="text-[13px] font-semibold text-[#F2F4F8]">{safeText(item.committee, "-")}</p>
           <p className="text-[12px] text-[#AEB4C1]">Tipo de Política</p>
           <p className="text-[13px] font-semibold text-[#F2F4F8]">{safeText(item.policy_type)}</p>
@@ -499,7 +499,7 @@ export function ApprovalQueuePageView() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="rounded-full border border-[#C7D2FE] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4338CA]">Rodada {item.approval_round ?? 1}</span>
-                    {item.approval_escalated_to_committee ? <span className="rounded-full border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-1 text-[11px] font-semibold text-[#92400E]">Comitê Obrigatório</span> : null}
+                    {item.approval_escalated_to_committee ? <span className="rounded-full border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-1 text-[11px] font-semibold text-[#92400E]">Excecao Colegiada</span> : null}
                   </div>
                 </div>
                 {compactApprovalProgress(item.approval_progress)}

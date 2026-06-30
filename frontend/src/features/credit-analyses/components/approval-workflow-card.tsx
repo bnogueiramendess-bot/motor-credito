@@ -45,7 +45,7 @@ function approvalStatusLabel(status: string) {
 function decisionLabel(decision: string) {
   if (decision === "REQUEST_CHANGES") return "Solicitação de Ajustes";
   if (decision === "REJECTED") return "Rejeição";
-  if (decision === "ESCALATED_TO_COMMITTEE") return "Direcionamento ao Comitê";
+  if (decision === "ESCALATED_TO_COMMITTEE") return "Excecao Colegiada";
   if (decision === "APPROVED") return "Aprovação";
   return decision;
 }
@@ -100,7 +100,7 @@ export function ApprovalWorkflowCard({ analysisId, summary, availableActions, mo
           <h2 className="mt-1 text-[20px] font-semibold text-[#102033]">{summary?.display_status ?? "Aguardando aprovação"}</h2>
           <p className="mt-1 text-[13px] text-[#4F647A]">{summary?.display_message ?? "O fluxo será exibido após envio para aprovação."}</p>
         </div>
-        {summary?.approval_escalated_to_committee ? <span className="rounded-full border border-[#FDE68A] bg-[#FFFBEB] px-3 py-1 text-[12px] font-semibold text-[#92400E]">Comitê Obrigatório</span> : null}
+        {summary?.approval_escalated_to_committee ? <span className="rounded-full border border-[#FDE68A] bg-[#FFFBEB] px-3 py-1 text-[12px] font-semibold text-[#92400E]">Excecao Colegiada</span> : null}
       </div>
 
       <div className="mb-5 grid gap-3 md:grid-cols-4">
@@ -133,7 +133,7 @@ export function ApprovalWorkflowCard({ analysisId, summary, availableActions, mo
               </div>
             )) : <p className="rounded-[12px] border border-dashed border-[#D7E1EC] p-3 text-[12px] text-[#4F647A]">Nenhum comentário registrado.</p>}
           </div>
-          {summary?.committee_escalation ? <div className="rounded-[12px] border border-[#FDE68A] bg-[#FFFBEB] p-3"><p className="text-[12px] font-semibold text-[#92400E]">Encaminhado ao Comitê de Crédito</p><p className="mt-1 text-[11px] text-[#92400E]">{formatApprovalDate(summary.committee_escalation.created_at) ?? "Data não informada"}</p><p className="mt-2 text-[12px] text-[#78350F]">{summary.committee_escalation.comment ?? "Sem motivo informado."}</p></div> : null}
+          {summary?.committee_escalation ? <div className="rounded-[12px] border border-[#FDE68A] bg-[#FFFBEB] p-3"><p className="text-[12px] font-semibold text-[#92400E]">Encaminhado para Excecao Colegiada</p><p className="mt-1 text-[11px] text-[#92400E]">{formatApprovalDate(summary.committee_escalation.created_at) ?? "Data nao informada"}</p><p className="mt-2 text-[12px] text-[#78350F]">{summary.committee_escalation.comment ?? "Sem motivo informado."}</p></div> : null}
         </div>
       </div>
 
@@ -145,14 +145,14 @@ export function ApprovalWorkflowCard({ analysisId, summary, availableActions, mo
           <div className="flex flex-wrap gap-2">
             {canSubmitApproval ? <button type="button" onClick={() => runAction("submit_approval")} disabled={actionMutation.isPending} className="rounded-lg bg-[#102033] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Reenviar para Aprovação</button> : null}
             {canRequestChanges ? <button type="button" onClick={() => setModalAction("request_changes")} disabled={actionMutation.isPending} className="rounded-lg bg-[#6B7280] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Solicitar Ajustes</button> : null}
-            {canEscalate ? <button type="button" onClick={() => setModalAction("escalate_to_committee")} disabled={actionMutation.isPending} className="rounded-lg bg-[#92400E] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Direcionar para Comitê</button> : null}
+            {canEscalate ? <button type="button" onClick={() => setModalAction("escalate_to_committee")} disabled={actionMutation.isPending} className="rounded-lg bg-[#92400E] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Direcionar para Excecao Colegiada</button> : null}
             {canReject ? <button type="button" onClick={() => setModalAction("reject")} disabled={actionMutation.isPending} className="rounded-lg bg-[#C0392B] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Rejeitar</button> : null}
             {canApprove ? <button type="button" onClick={() => runAction("approve")} disabled={actionMutation.isPending} className="rounded-lg bg-[#E8B83A] px-4 py-2 text-[12px] font-semibold text-[#102033] disabled:opacity-50">Aprovar</button> : null}
           </div>
         </div>
       ) : null}
       {feedback ? <div className="mt-3 rounded-[10px] border border-[#D7E1EC] bg-[#F8FAFC] px-3 py-2 text-[12px] text-[#102033]">{feedback}</div> : null}
-      {modalAction ? <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#0D1B2A]/55 p-4" onClick={() => setModalAction(null)}><div className="w-full max-w-[560px] rounded-[14px] border border-[#D7E1EC] bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h3 className="text-[20px] font-semibold text-[#102033]">{modalAction === "reject" ? "Rejeitar análise" : modalAction === "escalate_to_committee" ? "Direcionar para Comitê" : "Solicitar ajustes"}</h3><textarea value={comment} onChange={(event) => setComment(event.target.value)} rows={5} className="mt-4 w-full rounded-[10px] border border-[#D7E1EC] px-3 py-2 text-[12px] text-[#102033] outline-none focus:border-[#94A3B8]" placeholder="Descreva a justificativa..." /><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setModalAction(null)} className="h-9 rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#475569]">Cancelar</button><button type="button" onClick={submitModalAction} disabled={actionMutation.isPending} className="h-9 rounded-[10px] bg-[#334155] px-3 text-[12px] font-medium text-white disabled:opacity-50">Confirmar</button></div></div></div> : null}
+      {modalAction ? <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#0D1B2A]/55 p-4" onClick={() => setModalAction(null)}><div className="w-full max-w-[560px] rounded-[14px] border border-[#D7E1EC] bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h3 className="text-[20px] font-semibold text-[#102033]">{modalAction === "reject" ? "Rejeitar analise" : modalAction === "escalate_to_committee" ? "Direcionar para Excecao Colegiada" : "Solicitar ajustes"}</h3><textarea value={comment} onChange={(event) => setComment(event.target.value)} rows={5} className="mt-4 w-full rounded-[10px] border border-[#D7E1EC] px-3 py-2 text-[12px] text-[#102033] outline-none focus:border-[#94A3B8]" placeholder="Descreva a justificativa..." /><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setModalAction(null)} className="h-9 rounded-[10px] border border-[#D7E1EC] bg-white px-3 text-[12px] font-medium text-[#475569]">Cancelar</button><button type="button" onClick={submitModalAction} disabled={actionMutation.isPending} className="h-9 rounded-[10px] bg-[#334155] px-3 text-[12px] font-medium text-white disabled:opacity-50">Confirmar</button></div></div></div> : null}
     </section>
   );
 }

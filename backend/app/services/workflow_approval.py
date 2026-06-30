@@ -275,7 +275,7 @@ def _activate_committee_step(db: Session, analysis: CreditAnalysis, *, base_step
         )
     )
     if committee_role is None:
-        raise ValueError("Papel CREDIT_COMMITTEE nao encontrado para direcionamento ao comite.")
+        raise ValueError("Papel CREDIT_COMMITTEE nao encontrado para Excecao Colegiada.")
 
     pending_steps = list(
         db.scalars(

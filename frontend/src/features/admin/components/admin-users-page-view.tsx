@@ -59,8 +59,8 @@ export function AdminUsersPageView() {
           (first, second) =>
             OPERATIONAL_WORKFLOW_ROLE_ORDER.indexOf(first.code) - OPERATIONAL_WORKFLOW_ROLE_ORDER.indexOf(second.code)
         ),
-      governance: (workflowRolesQuery.data ?? []).filter((role) => role.type === "governance"),
-      approval: (workflowRolesQuery.data ?? []).filter((role) => role.type === "approval")
+      governance: (workflowRolesQuery.data ?? []).filter((role) => role.type === "governance" || role.type === "approval"),
+      approval: []
     }),
     [workflowRolesQuery.data]
   );
@@ -123,16 +123,19 @@ export function AdminUsersPageView() {
     const groups = new Set<WorkflowRoleDto["type"]>();
     for (const code of codes) {
       const type = workflowRoleTypeByCode.get(code);
-      if (type) groups.add(type);
+      if (type === "approval") {
+        groups.add("governance");
+      } else if (type) {
+        groups.add(type);
+      }
     }
-    groups.delete("approval");
 
     if (groups.size === 2) return "Todos";
     if (groups.size === 0) return "Sem vínculo";
 
     const labels: Array<{ type: WorkflowRoleDto["type"]; label: string }> = [
       { type: "operational", label: "Execucao operacional" },
-      { type: "governance", label: "Papéis de Aprovação (DOA)" }
+      { type: "governance", label: "Papeis de Aprovacao (DOA)" }
     ];
     return labels.filter((item) => groups.has(item.type)).map((item) => item.label).join(", ");
   }
@@ -441,7 +444,7 @@ export function AdminUsersPageView() {
                   {!workflowRolesQuery.isLoading && !workflowRolesQuery.isError ? (
                     <div className="space-y-4">
                       {renderWorkflowRoleGroup("Execucao operacional", workflowRolesByType.operational)}
-                      {renderWorkflowRoleGroup("Papéis de Aprovação (DOA)", workflowRolesByType.governance)}
+                      {renderWorkflowRoleGroup("Papeis de Aprovacao (DOA)", workflowRolesByType.governance)}
                     </div>
                   ) : null}
                 </div>

@@ -312,7 +312,7 @@ def resolve_credit_workflow_transition(
     elif action == "escalate_to_committee":
         justification = str(payload.get("justification") or "").strip()
         if len(justification) < 10:
-            raise ValueError("Direcionamento para Comite exige justificativa com pelo menos 10 caracteres.")
+            raise ValueError("Direcionamento para Excecao Colegiada exige justificativa com pelo menos 10 caracteres.")
         approval_decision = decide_active_approval_step(
             db,
             current,

@@ -28,9 +28,10 @@ WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY: dict[str, str] = {
     "CREDIT_OPINION": "CREDIT_ANALYST",
 }
 
-# Historical storage still uses workflow_roles.type, but the business concept is
-# "Papeis de Aprovacao (DOA)". Keep this boundary explicit so future committee
-# roles do not depend on type="approval" or on operational roles.
+# Operational roles execute analysis; DOA approval roles decide credit;
+# governance administers policy/configuration; future collegial structures must
+# be modeled independently. Historical storage still uses workflow_roles.type,
+# so both governance and approval are accepted for DOA compatibility.
 DOA_APPROVAL_WORKFLOW_ROLE_TYPES: tuple[str, ...] = ("governance", "approval")
 COMMITTEE_COMPATIBILITY_WORKFLOW_ROLE_CODES: tuple[str, ...] = ("CREDIT_COMMITTEE",)
 
@@ -55,75 +56,75 @@ WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
     },
     {
         "code": "CREDIT_COMMITTEE",
-        "name": "Comitê de Crédito",
+        "name": "Excecao Colegiada",
         "type": "governance",
-        "description": "Compatibilidade para excecoes colegiadas na DOA atual. O Comite futuro tera arquitetura propria.",
+        "description": "Compatibilidade para operacoes que exigem decisao colegiada dentro da DOA atual.",
     },
     {
         "code": "CREDIT_FINANCE_HEAD",
         "name": "Finance Head",
         "type": "approval",
-        "description": "Papel de aprovação conforme alçada.",
+        "description": "Aprova operacoes enquadradas na faixa financeira sob sua alcada.",
     },
     {
         "code": "CREDIT_FINANCE_DIRECTOR",
         "name": "Finance Director",
         "type": "approval",
-        "description": "Papel de aprovação conforme alçada.",
+        "description": "Responsavel por decisoes estrategicas acima das alcadas gerenciais.",
     },
     {
         "code": "CREDIT_GROUP_CFO",
         "name": "Group CFO",
         "type": "approval",
-        "description": "Papel executivo de aprovação conforme DoA.",
+        "description": "Responsavel por decisoes financeiras de maior exposicao conforme politica corporativa DOA.",
     },
     {
         "code": "CREDIT_CEO",
         "name": "CEO",
         "type": "approval",
-        "description": "Papel máximo de aprovação conforme DoA.",
+        "description": "Autoridade executiva para decisoes estrategicas acima das alcadas inferiores.",
     },
     {
         "code": "CREDIT_COMMERCIAL_HEAD",
         "name": "Commercial Head",
         "type": "approval",
-        "description": "Papel comercial em aprovações conjuntas/exceções.",
+        "description": "Avaliador executivo para operacoes com impacto comercial relevante na politica DOA.",
     },
     {
         "code": "CEO",
         "name": "CEO",
         "type": "governance",
-        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
+        "description": "Autoridade executiva para decisoes estrategicas acima das alcadas inferiores.",
     },
     {
         "code": "CFO",
         "name": "CFO",
         "type": "governance",
-        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
+        "description": "Responsavel por decisoes financeiras de maior exposicao conforme politica corporativa DOA.",
     },
     {
         "code": "HEAD_COMMERCIAL",
         "name": "Head Comercial",
         "type": "governance",
-        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
+        "description": "Avaliador executivo para operacoes com impacto comercial relevante na politica DOA.",
     },
     {
         "code": "HEAD_OPERATIONS",
-        "name": "Head de Operações",
+        "name": "Head de Operacoes",
         "type": "governance",
-        "description": "Governanca de credito para administracao de politicas e workflow.",
+        "description": "Governanca de credito para administracao de politicas, score e fluxo de aprovacao.",
     },
     {
         "code": "HEAD_FINANCE",
         "name": "Head Financeiro",
         "type": "governance",
-        "description": "Papel de aprovacao DOA e governanca de credito para politicas.",
+        "description": "Aprova operacoes enquadradas na faixa financeira sob sua alcada.",
     },
     {
         "code": "LEGAL",
-        "name": "Jurídico",
+        "name": "Juridico",
         "type": "governance",
-        "description": "Governanca de credito para administracao juridica de politicas.",
+        "description": "Governanca de credito para administracao juridica de politicas corporativas.",
     },
 ]
 

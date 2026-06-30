@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { Check, CheckCircle2, Info, Lock, Pencil, PlusCircle, Shield } from "lucide-react";
+import { Check, CheckCircle2, Info, Lock, Pencil, PlusCircle, Route, Shield } from "lucide-react";
 
 import { ApprovalMatrixRuleDto, ApprovalMatrixRuleWritePayload } from "@/features/admin/api/admin.api";
 import { useApprovalMatrixOptionsQuery } from "@/features/admin/hooks/use-approval-matrix-options-query";
@@ -12,6 +12,11 @@ import { useUpdateApprovalMatrixRuleMutation } from "@/features/admin/hooks/use-
 import { ApiError } from "@/shared/lib/http/http-client";
 import { cn } from "@/shared/lib/utils";
 
+const APPROVAL_FLOW_LABEL = "Sequencial";
+const FUTURE_FLOW_LABELS = "Paralelo e Hibrido";
+
+type ApprovalRoleOption = { id: number; code: string; name: string; type: string; is_active?: boolean };
+
 function formatAmount(value: string | null, currency: string) {
   if (!value) return "Sem limite";
   const parsed = Number(value);
@@ -20,10 +25,15 @@ function formatAmount(value: string | null, currency: string) {
 }
 
 function formatRange(rule: ApprovalMatrixRuleDto) {
-  if (rule.min_amount && rule.max_amount) return `${formatAmount(rule.min_amount, rule.currency)} até ${formatAmount(rule.max_amount, rule.currency)}`;
+  if (rule.min_amount && rule.max_amount) return `${formatAmount(rule.min_amount, rule.currency)} ate ${formatAmount(rule.max_amount, rule.currency)}`;
   if (rule.min_amount && !rule.max_amount) return `Acima de ${formatAmount(rule.min_amount, rule.currency)}`;
-  if (!rule.min_amount && rule.max_amount) return `Até ${formatAmount(rule.max_amount, rule.currency)}`;
-  return "Faixa não limitada";
+  if (!rule.min_amount && rule.max_amount) return `Ate ${formatAmount(rule.max_amount, rule.currency)}`;
+  return "Faixa nao limitada";
+}
+
+function formatApproverFlow(rule: ApprovalMatrixRuleDto) {
+  const approvers = rule.roles.map((item) => item.workflow_role_name).filter(Boolean);
+  return approvers.length > 0 ? approvers.join(" -> ") : "Sem papel aprovador definido";
 }
 
 function normalizeWorkflowRoleType(value: string | null | undefined): "operational" | "governance" | "approval" | null {
@@ -39,7 +49,7 @@ type HelpTipProps = {
 function HelpTip({ text }: HelpTipProps) {
   return (
     <span className="group relative inline-flex">
-      <span className="inline-flex h-4.5 w-4.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-slate-500 transition-colors duration-150 group-hover:border-slate-400 group-hover:text-slate-700">
+      <span className="inline-flex h-[18px] w-[18px] cursor-help items-center justify-center rounded-full border border-slate-300 text-slate-500 transition-colors duration-150 group-hover:border-slate-400 group-hover:text-slate-700">
         <Info className="h-3 w-3" />
       </span>
       <span className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-20 w-64 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-medium leading-4 text-slate-100 opacity-0 shadow-xl ring-1 ring-slate-700/60 transition duration-200 group-hover:opacity-100">
@@ -92,9 +102,9 @@ export function AdminApprovalMatrixPageView() {
 
   const groupedRoles = useMemo(() => {
     const base = { operational: [], governance: [], approval: [] } as {
-      operational: Array<{ id: number; code: string; name: string; type: string; is_active?: boolean }>;
-      governance: Array<{ id: number; code: string; name: string; type: string; is_active?: boolean }>;
-      approval: Array<{ id: number; code: string; name: string; type: string; is_active?: boolean }>;
+      operational: ApprovalRoleOption[];
+      governance: ApprovalRoleOption[];
+      approval: ApprovalRoleOption[];
     };
     for (const role of optionsQuery.data?.workflow_roles ?? []) {
       const normalizedType = normalizeWorkflowRoleType(role.type);
@@ -105,7 +115,11 @@ export function AdminApprovalMatrixPageView() {
     return base;
   }, [optionsQuery.data?.workflow_roles]);
 
-  const totalAvailableRoles = groupedRoles.governance.length;
+  const doaApprovalRoles = useMemo(
+    () => [...groupedRoles.governance, ...groupedRoles.approval].sort((first, second) => first.name.localeCompare(second.name, "pt-BR")),
+    [groupedRoles.approval, groupedRoles.governance]
+  );
+  const totalAvailableRoles = doaApprovalRoles.length;
 
   function resetForm() {
     setEditingRuleId(null);
@@ -174,31 +188,32 @@ export function AdminApprovalMatrixPageView() {
     try {
       if (editingRuleId === null) {
         await createMutation.mutateAsync(payload);
-        setFeedback("Regra criada com sucesso.");
+        setFeedback("Politica DOA criada com sucesso.");
       } else {
         await updateMutation.mutateAsync({ id: editingRuleId, payload });
-        setFeedback("Regra atualizada com sucesso.");
+        setFeedback("Politica DOA atualizada com sucesso.");
       }
       setOpenEditor(false);
     } catch (error) {
-      setFeedback(error instanceof ApiError ? error.message : "Não foi possível salvar a regra.");
+      setFeedback(error instanceof ApiError ? error.message : "Nao foi possivel salvar a politica DOA.");
     }
   }
 
   return (
     <section className="space-y-5">
       <header className="rounded-2xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 px-6 py-5 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Papéis de Aprovação (DOA)</p>
-        <h1 className="mt-1 text-2xl font-semibold text-slate-900">Matriz de Aprovação</h1>
-        <p className="mt-2 text-sm text-slate-600">
-          Papéis corporativos utilizados na Matriz de Aprovação (DOA) para definição de alçadas, aprovações e exceções.
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Arquitetura de Aprovacao Corporativa</p>
+        <h1 className="mt-1 text-2xl font-semibold text-slate-900">Matriz de Aprovacao (DOA)</h1>
+        <p className="mt-2 max-w-4xl text-sm text-slate-600">
+          Fonte unica de autoridade para decisoes de credito. Cada politica conecta faixa financeira, papel aprovador,
+          fluxo de aprovacao e excecao colegiada quando aplicavel.
         </p>
       </header>
 
-      <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="text-sm text-slate-600">Gerencie regras por faixa, papéis aprovadores e exigências da estrutura DOA.</p>
-        <button type="button" onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
-          <PlusCircle className="h-4 w-4" /> Nova regra
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+        <p className="text-sm text-slate-600">Gerencie politicas corporativas por faixa de aprovacao, aprovadores DOA e fluxo sequencial.</p>
+        <button type="button" onClick={openCreate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
+          <PlusCircle className="h-4 w-4" /> Nova politica DOA
         </button>
       </div>
 
@@ -208,35 +223,53 @@ export function AdminApprovalMatrixPageView() {
         </div>
       ) : null}
 
-      {rulesQuery.isLoading ? <p className="text-sm text-slate-500">Carregando matriz...</p> : null}
-      {rulesQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar a matriz de aprovação.</p> : null}
+      {rulesQuery.isLoading ? <p className="text-sm text-slate-500">Carregando Matriz DOA...</p> : null}
+      {rulesQuery.isError ? <p className="text-sm text-rose-700">Nao foi possivel carregar a Matriz de Aprovacao (DOA).</p> : null}
+      {!rulesQuery.isLoading && !rulesQuery.isError && rules.length === 0 ? (
+        <p className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+          Nenhuma politica DOA cadastrada. Crie a primeira faixa de aprovacao corporativa.
+        </p>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         {rules.map((rule) => (
           <article key={rule.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">{rule.code}</p>
-                <h2 className="mt-1 text-lg font-semibold text-slate-900">{rule.name}</h2>
-                <p className="mt-1 text-sm text-slate-600">{rule.description ?? "Regra institucional sem descrição adicional."}</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Politica corporativa de aprovacao</p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">{rule.code} - {rule.name}</h2>
+                <p className="mt-1 text-sm text-slate-600">{rule.description ?? "Politica corporativa sem descricao adicional."}</p>
               </div>
               <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", rule.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700")}>
                 {rule.is_active ? "Ativa" : "Inativa"}
               </span>
             </div>
-            <div className="mt-4 space-y-2 text-sm text-slate-700">
-              <p><strong>Faixa:</strong> {formatRange(rule)}</p>
-              <p><strong>Aprovadores mínimos:</strong> {rule.required_approvals}</p>
-              <p><strong>Papéis:</strong> {rule.roles.map((item) => item.workflow_role_name).join(", ")}</p>
-              <p><strong>Escopo BU:</strong> {rule.business_unit_name ?? "Todas as BU's"}</p>
+            <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Faixa de Aprovacao</p>
+                <p className="mt-1 font-medium text-slate-900">{formatRange(rule)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Papeis Aprovadores</p>
+                <p className="mt-1 font-medium text-slate-900">{formatApproverFlow(rule)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Fluxo de Aprovacao</p>
+                <p className="mt-1 inline-flex items-center gap-2 font-medium text-slate-900"><Route className="h-4 w-4 text-slate-500" /> {APPROVAL_FLOW_LABEL}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Escopo</p>
+                <p className="mt-1 font-medium text-slate-900">{rule.business_unit_name ?? "Todas as BU's"}</p>
+              </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              {rule.requires_committee ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Excecao colegiada</span> : null}
-              {rule.requires_unanimous ? <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">Aprovação unânime</span> : null}
+              <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">Aprovadores minimos {rule.required_approvals}</span>
+              {rule.requires_committee ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Excecao Colegiada</span> : null}
+              {rule.requires_unanimous ? <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700">Aprovacao unanime</span> : null}
               <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">Prioridade {rule.priority}</span>
             </div>
             <button type="button" onClick={() => openEdit(rule)} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700">
-              <Pencil className="h-4 w-4" /> Editar regra
+              <Pencil className="h-4 w-4" /> Editar politica
             </button>
           </article>
         ))}
@@ -247,81 +280,91 @@ export function AdminApprovalMatrixPageView() {
           <div className="absolute right-0 top-0 h-full w-full max-w-3xl overflow-y-auto bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-start justify-between">
               <div>
-                <h3 className="text-xl font-semibold text-slate-900">{editingRuleId ? "Editar Regra" : "Nova Regra"}</h3>
-                <p className="text-sm text-slate-600">Defina critérios institucionais, alçadas e responsáveis pela aprovação corporativa.</p>
+                <h3 className="text-xl font-semibold text-slate-900">{editingRuleId ? "Editar Politica DOA" : "Nova Politica DOA"}</h3>
+                <p className="text-sm text-slate-600">Defina faixa financeira, papeis aprovadores e condicoes da politica corporativa de aprovacao.</p>
               </div>
               <button type="button" onClick={() => setOpenEditor(false)} className="text-sm text-slate-600">Fechar</button>
             </div>
             <form className="space-y-6" onSubmit={(event) => void handleSubmit(event)}>
               <section className="space-y-4 border-b border-slate-200 pb-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Informações da regra</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Informacoes da politica DOA</p>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <FieldLabel title="Código da regra" helpText="Identificador técnico e institucional da regra utilizado para rastreabilidade e auditoria da DOA." />
+                    <FieldLabel title="Codigo DOA" helpText="Identificador institucional utilizado para rastreabilidade e auditoria da Matriz DOA." />
                     <div className="relative">
                       <input value={code} readOnly placeholder="DOA-0001" className="h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 pr-9 text-sm text-slate-800 placeholder:text-slate-400" />
                       <Lock className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">Código institucional gerado automaticamente.</p>
+                    <p className="mt-1 text-xs text-slate-500">Codigo institucional gerado automaticamente.</p>
                   </div>
                   <div>
-                    <FieldLabel title="Nome da regra" />
-                    <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Alçada corporativa padrão" className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 placeholder:text-slate-400" />
+                    <FieldLabel title="Nome da politica" />
+                    <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Faixa de Aprovacao BRL 1MM a 5MM" className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 placeholder:text-slate-400" />
                   </div>
                 </div>
                 <div>
-                  <FieldLabel title="Descrição institucional" />
-                  <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Contextualize objetivo e aplicação institucional desta regra." className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400" />
+                  <FieldLabel title="Descricao executiva" />
+                  <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Contextualize a aplicacao corporativa desta politica DOA." className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400" />
                 </div>
               </section>
 
               <section className="space-y-4 border-b border-slate-200 pb-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Critérios de aprovação</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Faixa de Aprovacao</p>
                 <div className="grid gap-4 md:grid-cols-3">
                   <div>
-                    <FieldLabel title="Valor mínimo" helpText="Define a faixa de valor em que esta alçada será aplicada." />
+                    <FieldLabel title="Valor minimo" helpText="Limite inferior da faixa financeira em que esta politica DOA sera aplicada." />
                     <input value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="Ex.: 10000.00" className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 placeholder:text-slate-400" />
                   </div>
                   <div>
-                    <FieldLabel title="Valor máximo" helpText="Define a faixa de valor em que esta alçada será aplicada." />
+                    <FieldLabel title="Valor maximo" helpText="Limite superior da faixa financeira em que esta politica DOA sera aplicada." />
                     <input value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} placeholder="Ex.: 500000.00" className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 placeholder:text-slate-400" />
                   </div>
                   <div>
-                    <FieldLabel title="Mín. de aprovadores" helpText="Quantidade mínima de aprovadores exigidos para validação da operação. Preparado para aprovações múltiplas futuras." />
+                    <FieldLabel title="Aprovadores minimos" helpText="Quantidade minima de aprovadores exigidos pela politica corporativa." />
                     <input type="number" value={requiredApprovals} onChange={(event) => setRequiredApprovals(Number(event.target.value))} min={1} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800" />
                   </div>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
-                    <FieldLabel title="Unidade de negócio" />
+                    <FieldLabel title="Unidade de negocio" />
                     <select value={businessUnitId ?? ""} onChange={(event) => setBusinessUnitId(event.target.value ? Number(event.target.value) : null)} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800">
                       <option value="">Todas as BU&apos;s</option>
                       {businessUnits.map((bu) => <option key={bu.id} value={bu.id}>{bu.name}</option>)}
                     </select>
                   </div>
                   <div>
-                    <FieldLabel title="Prioridade" helpText="Usada para resolver conflitos entre regras. Regras com menor prioridade numérica possuem precedência." />
+                    <FieldLabel title="Prioridade" helpText="Usada para resolver sobreposicoes entre politicas. Menor prioridade numerica tem precedencia." />
                     <input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800" />
                   </div>
                 </div>
               </section>
 
               <section className="space-y-4 border-b border-slate-200 pb-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Critérios DOA</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Fluxo de Aprovacao</p>
                 <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                    <p className="font-semibold text-slate-900">{APPROVAL_FLOW_LABEL}</p>
+                    <p className="mt-1 text-xs text-slate-500">Modelo atual da DOA.</p>
+                  </div>
+                  <div className="rounded-lg border border-dashed border-slate-300 px-3 py-3 text-sm text-slate-500">
+                    <p className="font-semibold text-slate-700">{FUTURE_FLOW_LABELS}</p>
+                    <p className="mt-1 text-xs">Preparado para evolucao futura.</p>
+                  </div>
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
-                    <span>Regra ativa</span>
+                    <span>Politica ativa</span>
                   </label>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={requiresCommittee} onChange={(event) => setRequiresCommittee(event.target.checked)} />
-                    <span>Excecao colegiada</span>
-                    <HelpTip text="Indica que a operacao exige deliberacao colegiada pela regra DOA atual. A arquitetura futura de Comite sera independente." />
+                    <span>Excecao Colegiada</span>
+                    <HelpTip text="Indica que a operacao exige decisao colegiada pela regra DOA atual. O modulo colegiado futuro sera independente." />
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={requiresUnanimous} onChange={(event) => setRequiresUnanimous(event.target.checked)} />
-                    <span>Aprovação unânime</span>
-                    <HelpTip text="Quando habilitado, todos os aprovadores exigidos deverão aprovar a operação." />
+                    <span>Aprovacao unanime</span>
+                    <HelpTip text="Quando habilitado, todos os aprovadores exigidos deverao aprovar a operacao." />
                   </label>
                 </div>
               </section>
@@ -329,18 +372,18 @@ export function AdminApprovalMatrixPageView() {
               <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/40 p-4">
                 <div className="flex items-center gap-2 text-slate-800">
                   <Shield className="h-4 w-4" />
-                  <p className="text-sm font-semibold">Papéis aprovadores</p>
-                  <HelpTip text="Os papéis abaixo definem quem pode aprovar, rejeitar ou solicitar ajustes em análises de crédito conforme a Matriz DOA." />
+                  <p className="text-sm font-semibold">Papeis Aprovadores (DOA)</p>
+                  <HelpTip text="Somente papeis aprovadores DOA podem decidir credito. Papeis operacionais executam a analise e nao aprovam." />
                 </div>
-                {optionsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papéis...</p> : null}
+                {optionsQuery.isLoading ? <p className="text-sm text-slate-500">Carregando papeis aprovadores...</p> : null}
                 {optionsQuery.isError ? <p className="text-sm text-rose-700">Nao foi possivel carregar os papeis de aprovacao DOA.</p> : null}
                 {!optionsQuery.isLoading && !optionsQuery.isError && totalAvailableRoles === 0 ? (
                   <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                    Nenhum papel de Aprovação (DOA) ativo encontrado. Cadastre ou ative papéis corporativos antes de criar regras de aprovação.
+                    Nenhum papel aprovador DOA ativo encontrado. Cadastre ou ative papeis corporativos antes de criar politicas de aprovacao.
                   </p>
                 ) : null}
                 <div className="space-y-4">
-                  {([["Papéis de Aprovação (DOA)", groupedRoles.governance]] as const)
+                  {([ ["Papeis Aprovadores (DOA)", doaApprovalRoles] ] as const)
                     .filter(([, roleList]) => roleList.length > 0)
                     .map(([title, roleList]) => (
                     <div key={title} className="space-y-2">
@@ -377,7 +420,7 @@ export function AdminApprovalMatrixPageView() {
                   Cancelar
                 </button>
                 <button type="submit" className="rounded-lg bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm">
-                  {editingRuleId ? "Salvar alterações" : "Criar regra"}
+                  {editingRuleId ? "Salvar alteracoes" : "Criar politica"}
                 </button>
               </div>
             </form>

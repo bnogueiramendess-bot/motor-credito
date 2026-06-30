@@ -3085,12 +3085,12 @@ function PolicyGovernanceView({
 
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-4 py-4">
-            <div className="flex items-center gap-2"><Users className="h-4 w-4 text-blue-700" /><h2 className="text-sm font-semibold text-slate-900">Comitê da Política</h2></div>
+            <div className="flex items-center gap-2"><Users className="h-4 w-4 text-blue-700" /><h2 className="text-sm font-semibold text-slate-900">Governanca Colegiada</h2></div>
             <p className="mt-1 text-xs leading-5 text-slate-500">Funcionalidade planejada para versões futuras. Permitirá definir papéis específicos para cada política.</p>
           </div>
           <div className="grid gap-3 p-4">
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-              <strong className="block text-xs text-amber-900">Comitê da Política ainda não implementado.</strong>
+              <strong className="block text-xs text-amber-900">Governanca colegiada futura ainda nao implementada.</strong>
               <p className="mt-1 text-xs leading-5 text-amber-800">A governança de publicação já está ativa e utiliza papéis configurados por workflow.</p>
             </div>
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -3103,7 +3103,7 @@ function PolicyGovernanceView({
             </div>
             <div className="flex gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3">
               <Users className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
-              <p className="text-xs leading-5 text-blue-800">O Comitê da Política será uma camada complementar de governança. A aprovação de criação, edição, arquivamento e publicação já é controlada pelo workflow de governança implementado.</p>
+              <p className="text-xs leading-5 text-blue-800">A governanca colegiada sera uma camada complementar. A aprovacao de criacao, edicao, arquivamento e publicacao ja e controlada pelo workflow de governanca implementado.</p>
             </div>
           </div>
         </section>
