@@ -437,6 +437,14 @@ export async function updateCommittee(id: number, payload: CommitteeWritePayload
   return apiClient.put<CommitteeDto, CommitteeWritePayload>(`/api/admin/committees/${id}`, payload);
 }
 
+export async function archiveCommittee(id: number) {
+  return apiClient.post<CommitteeDto, Record<string, never>>(`/api/admin/committees/${id}/archive`, {});
+}
+
+export async function deleteCommittee(id: number) {
+  return apiClient.delete<void>(`/api/admin/committees/${id}`);
+}
+
 export async function listApprovalMatrixRules() {
   return apiClient.get<ApprovalMatrixRuleDto[]>("/api/admin/approval-matrix");
 }

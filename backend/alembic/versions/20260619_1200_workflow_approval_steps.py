@@ -37,7 +37,7 @@ def upgrade() -> None:
         sa.Column("decision_comment", sa.String(length=2000), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint(
-            "status IN ('PENDING', 'ACTIVE', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED', 'SKIPPED')",
+            "status IN ('PENDING', 'ACTIVE', 'IN_COMMITTEE', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED', 'SKIPPED')",
             name="ck_workflow_approval_step_status",
         ),
         sa.ForeignKeyConstraint(["approval_matrix_rule_id"], ["approval_matrix_rules.id"], ondelete="SET NULL"),

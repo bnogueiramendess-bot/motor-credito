@@ -20,7 +20,7 @@ const DECISION_ACTIONS: Array<{ value: DecisionAction; label: string }> = [
   { value: "approve", label: "Aprovar" },
   { value: "reject", label: "Rejeitar" },
   { value: "request_changes", label: "Devolver para ajustes" },
-  { value: "escalate_to_committee", label: "Direcionar para Excecao Colegiada" },
+  { value: "escalate_to_committee", label: "Submeter ao Comite" },
 ];
 
 function formatCompactCurrency(value: number | string | null | undefined): string | null {
@@ -106,7 +106,7 @@ function impactValueClass(label: string) {
 function approvalProgressClass(status: string) {
   const normalized = status.toLowerCase();
   if (normalized === "approved") return "border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]";
-  if (normalized === "active") return "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]";
+  if (normalized === "active" || normalized === "in_committee") return "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]";
   if (normalized === "rejected" || normalized === "changes_requested") return "border-[#FECACA] bg-[#FEF2F2] text-[#B91C1C]";
   if (normalized === "skipped") return "border-[#CBD5E1] bg-[#F8FAFC] text-[#64748B]";
   return "border-[#E2E8F0] bg-white text-[#64748B]";
@@ -115,7 +115,7 @@ function approvalProgressClass(status: string) {
 function approvalProgressMarker(status: string) {
   const normalized = status.toLowerCase();
   if (normalized === "approved") return "?";
-  if (normalized === "active") return "?";
+  if (normalized === "active" || normalized === "in_committee") return "?";
   if (normalized === "rejected") return "×";
   if (normalized === "changes_requested") return "?";
   return "?";
@@ -499,7 +499,7 @@ export function ApprovalQueuePageView() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="rounded-full border border-[#C7D2FE] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4338CA]">Rodada {item.approval_round ?? 1}</span>
-                    {item.approval_escalated_to_committee ? <span className="rounded-full border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-1 text-[11px] font-semibold text-[#92400E]">Excecao Colegiada</span> : null}
+                    {item.approval_escalated_to_committee ? <span className="rounded-full border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-1 text-[11px] font-semibold text-[#92400E]">Em Comite</span> : null}
                   </div>
                 </div>
                 {compactApprovalProgress(item.approval_progress)}

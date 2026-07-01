@@ -8,6 +8,7 @@ from app.models.audit_log import AuditLog
 from app.models.company import Company
 from app.models.committee import Committee
 from app.models.committee_member import CommitteeMember
+from app.models.committee_session import CommitteeSession
 from app.models.workflow_role import WorkflowRole
 from app.schemas.committee import CommitteeDecisionRule, CommitteeStatus, CommitteeWrite
 from app.services.workflow_roles import ensure_workflow_roles_seed
@@ -137,15 +138,21 @@ def create_committee(
     payload: CommitteeWrite,
     created_by_user_id: int | None,
 ) -> Committee:
+    if payload.status == CommitteeStatus.ARCHIVED:
+        raise ValueError("Comite arquivado nao pode ser criado diretamente.")
+    if payload.is_default and payload.status != CommitteeStatus.ACTIVE:
+        raise ValueError("Apenas comite ativo pode ser definido como padrao.")
+
     if payload.is_default:
         db.query(Committee).filter(
             Committee.company_id == company_id,
             Committee.is_default.is_(True),
         ).update({Committee.is_default: False}, synchronize_session=False)
 
+    generated_code = generate_next_committee_code(db, company_id=company_id)
     committee = Committee(
         company_id=company_id,
-        code=payload.code,
+        code=generated_code,
         name=payload.name,
         description=payload.description,
         status=payload.status.value,
@@ -175,6 +182,13 @@ def update_committee(
     payload: CommitteeWrite,
     actor_user_id: int | None,
 ) -> Committee:
+    if committee.status == CommitteeStatus.ARCHIVED.value:
+        raise ValueError("Comite arquivado nao permite edicao operacional.")
+    if payload.status == CommitteeStatus.ARCHIVED:
+        raise ValueError("Use a acao de arquivamento para arquivar o comite.")
+    if payload.is_default and payload.status != CommitteeStatus.ACTIVE:
+        raise ValueError("Apenas comite ativo pode ser definido como padrao.")
+
     if payload.is_default:
         db.query(Committee).filter(
             Committee.company_id == committee.company_id,
@@ -200,6 +214,61 @@ def update_committee(
     db.flush()
     return committee
 
+def archive_committee(
+    db: Session,
+    *,
+    committee: Committee,
+    actor_user_id: int | None,
+) -> Committee:
+    if committee.status != CommitteeStatus.ACTIVE.value:
+        raise ValueError("Apenas comite ativo pode ser arquivado.")
+
+    previous_status = committee.status
+    committee.status = CommitteeStatus.ARCHIVED.value
+    committee.is_default = False
+    _audit(
+        db,
+        actor_user_id=actor_user_id,
+        action="committee_archived",
+        committee=committee,
+        metadata={"code": committee.code, "previous_status": previous_status},
+    )
+    db.flush()
+    return committee
+
+
+def delete_draft_committee(
+    db: Session,
+    *,
+    committee: Committee,
+    actor_user_id: int | None,
+) -> None:
+    if committee.status != CommitteeStatus.DRAFT.value:
+        raise ValueError("Apenas comite em rascunho pode ser excluido.")
+
+    session_exists = db.scalar(
+        select(CommitteeSession.id).where(CommitteeSession.committee_id == committee.id).limit(1)
+    )
+    if session_exists is not None:
+        raise ValueError("Comite ja utilizado em sessao. Arquive o comite para preservar o historico.")
+
+    metadata = {
+        "committee_id": committee.id,
+        "code": committee.code,
+        "name": committee.name,
+        "member_count": len(committee.members),
+    }
+    db.add(
+        AuditLog(
+            actor_user_id=actor_user_id,
+            action="committee_deleted",
+            resource="committee",
+            resource_id=str(committee.id),
+            metadata_json=metadata,
+        )
+    )
+    db.delete(committee)
+    db.flush()
 
 def ensure_committees_seed(db: Session) -> None:
     try:

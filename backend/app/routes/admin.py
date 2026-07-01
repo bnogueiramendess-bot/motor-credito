@@ -95,7 +95,9 @@ from app.services.approval_matrix import (
 )
 from app.services.committees import (
     COMMITTEE_SLA_OPTIONS,
+    archive_committee,
     create_committee,
+    delete_draft_committee,
     ensure_committees_seed,
     generate_next_committee_code,
     get_committee,
@@ -1438,11 +1440,6 @@ def create_committee_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Comites indisponiveis. Aplique as migrations de governanca.",
         )
-    duplicated = db.scalar(
-        select(Committee.id).where(Committee.company_id == current.user.company_id, Committee.code == payload.code)
-    )
-    if duplicated is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ja existe um comite com este codigo.")
     try:
         committee = create_committee(
             db,
@@ -1489,6 +1486,51 @@ def update_committee_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return _committee_to_read(db, updated)
 
+
+@router.post("/committees/{committee_id}/archive", response_model=CommitteeRead)
+def archive_committee_endpoint(
+    committee_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["committees:manage"])),
+) -> CommitteeRead:
+    if not _table_exists(db, "committees"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Comites indisponiveis. Aplique as migrations de governanca.",
+        )
+    committee = get_committee(db, committee_id=committee_id, company_id=current.user.company_id)
+    if committee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comite nao encontrado.")
+    try:
+        archived = archive_committee(db, committee=committee, actor_user_id=current.user.id)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _committee_to_read(db, archived)
+
+
+@router.delete("/committees/{committee_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_committee_endpoint(
+    committee_id: int,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["committees:manage"])),
+) -> None:
+    if not _table_exists(db, "committees") or not _table_exists(db, "committee_members"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Comites indisponiveis. Aplique as migrations de governanca.",
+        )
+    committee = get_committee(db, committee_id=committee_id, company_id=current.user.company_id)
+    if committee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comite nao encontrado.")
+    try:
+        delete_draft_committee(db, committee=committee, actor_user_id=current.user.id)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return None
 @router.get("/approval-matrix/options", response_model=ApprovalMatrixOptionsRead)
 def get_approval_matrix_options(
     db: Session = Depends(get_db),

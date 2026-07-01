@@ -133,6 +133,10 @@ class WorkflowActionRequest(BaseModel):
     justification: str | None = None
 
 
+class SubmitToCommitteeRequest(BaseModel):
+    justification: str
+
+
 class WorkflowActionResponse(BaseModel):
     analysis_id: int
     current_status: str
@@ -516,7 +520,7 @@ def _build_approval_workflow_snapshot(db: Session, analysis: CreditAnalysis) -> 
 
     latest_round = max((step.round_number for step in steps), default=None)
     latest_steps = [step for step in steps if latest_round is not None and step.round_number == latest_round]
-    active_step = next((step for step in latest_steps if step.status == "ACTIVE"), None)
+    active_step = next((step for step in latest_steps if step.status in {"ACTIVE", "IN_COMMITTEE"}), None)
 
     def step_item(step: WorkflowApprovalStep) -> dict:
         role = roles.get(step.workflow_role_id)
@@ -562,6 +566,8 @@ def _build_approval_workflow_snapshot(db: Session, analysis: CreditAnalysis) -> 
     ]
     committee_decisions = [decision for decision in decisions if decision.decision == "ESCALATED_TO_COMMITTEE"]
     committee_escalation = decision_item(committee_decisions[-1]) if committee_decisions else None
+    latest_committee_session = get_latest_committee_session(db, analysis_id=analysis.id)
+    committee_session_open = latest_committee_session is not None and latest_committee_session.status == "OPEN"
     active_role = roles.get(active_step.workflow_role_id) if active_step else None
     approval_started_at = analysis.submitted_for_approval_at
     if approval_started_at is None and steps:
@@ -573,7 +579,7 @@ def _build_approval_workflow_snapshot(db: Session, analysis: CreditAnalysis) -> 
         "approval_round": latest_round,
         "approval_progress": [step_item(step) for step in latest_steps],
         "approval_rounds": approval_rounds,
-        "approval_escalated_to_committee": committee_escalation is not None,
+        "approval_escalated_to_committee": committee_escalation is not None or committee_session_open,
         "approval_sla_label": _approval_elapsed_label(approval_started_at),
         "approval_started_at": approval_started_at,
         "committee_escalation": committee_escalation,
@@ -594,6 +600,7 @@ def _build_approval_flow_summary(
         "analysis_rejected": "rejected",
         "returned_for_revision": "request_changes",
         "analysis_escalated_to_committee": "escalated_to_committee",
+        "committee_submitted": "escalated_to_committee",
         "analysis_approval_step_approved": "approved",
     }
     def role_label_from_code(code: str) -> str:
@@ -709,11 +716,16 @@ def _build_approval_flow_summary(
     if returned_for_revision_at is not None:
         completed_steps.append("Devolvida para ajustes")
 
+    committee_active = any(step.status == "IN_COMMITTEE" for step in persisted_steps)
+
     pending_steps: list[str] = []
     if status_value == "in_approval":
-        active_step = next((step for step in persisted_steps if step.status == "ACTIVE"), None)
+        active_step = next((step for step in persisted_steps if step.status in {"ACTIVE", "IN_COMMITTEE"}), None)
         active_role = step_roles_by_id.get(active_step.workflow_role_id) if active_step else None
-        pending_steps.append(f"Aguardando {active_role.name}" if active_role else "Aguardando decisão da alçada")
+        if active_step is not None and active_step.status == "IN_COMMITTEE":
+            pending_steps.append("Aguardando deliberacao do Comite")
+        else:
+            pending_steps.append(f"Aguardando {active_role.name}" if active_role else "Aguardando decisão da alçada")
     elif status_value == "pending":
         pending_steps.append("Pendente de submissão")
     elif status_value == "in_progress":
@@ -792,10 +804,16 @@ def _build_approval_flow_summary(
         display_message = "A solicitação foi devolvida para ajustes."
     elif status_value == "in_approval":
         flow_state = "in_approval"
-        display_status = "Aguardando aprovação"
-        display_stage = "Em aprovação"
-        display_title = "Em aprovação"
-        display_message = "Aguardando decisão da alçada."
+        if committee_active:
+            display_status = "Em Comite"
+            display_stage = "Deliberacao do Comite"
+            display_title = "Em Comite"
+            display_message = "Aguardando deliberacao do Comite de Credito."
+        else:
+            display_status = "Aguardando aprovação"
+            display_stage = "Em aprovação"
+            display_title = "Em aprovação"
+            display_message = "Aguardando decisão da alçada."
     elif analysis.submitted_for_approval_at is None:
         flow_state = "not_submitted"
         display_status = "Ainda não enviado para aprovação"
@@ -4016,6 +4034,73 @@ def apply_analysis_final_decision(
         completed_at=analysis.completed_at,
     )
 
+
+@router.post("/{analysis_id}/submit-to-committee", response_model=WorkflowActionResponse, status_code=status.HTTP_200_OK)
+def submit_analysis_to_committee(
+    analysis_id: int,
+    payload: SubmitToCommitteeRequest,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> WorkflowActionResponse:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    try:
+        transition = resolve_credit_workflow_transition(
+            db,
+            current,
+            analysis,
+            action="submit_to_committee",
+            payload={"justification": payload.justification},
+        )
+    except CommitteeSessionPermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except CommitteeSessionError as exc:
+        db.rollback()
+        message = str(exc)
+        status_code = status.HTTP_409_CONFLICT if "Ja existe" in message or "precisa estar" in message else status.HTTP_422_UNPROCESSABLE_CONTENT
+        raise HTTPException(status_code=status_code, detail=message) from exc
+    except PermissionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    if not transition.allowed:
+        denial_type = transition.workflow_context.get("denial_type")
+        if denial_type == "invalid_status":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=transition.workflow_context.get("denial_reason") or "Status atual nao permite esta transicao.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=transition.workflow_context.get("denial_reason") or "Sem permissao para esta transicao.",
+        )
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nao foi possivel persistir a submissao ao Comite.") from exc
+
+    db.refresh(analysis)
+    return WorkflowActionResponse(
+        analysis_id=analysis.id,
+        current_status=transition.current_status,
+        next_status=transition.next_status,
+        current_owner=transition.current_owner,
+        next_owner=transition.next_owner,
+        current_stage=transition.current_stage,
+        next_stage=transition.next_stage,
+        timeline_event=transition.timeline_event,
+        audit_event=transition.audit_event,
+        available_actions=transition.available_actions,
+        workflow_context=transition.workflow_context,
+    )
 
 @router.post("/{analysis_id}/workflow-actions", response_model=WorkflowActionResponse, status_code=status.HTTP_200_OK)
 def execute_workflow_action(

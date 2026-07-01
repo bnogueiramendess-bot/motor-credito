@@ -24,3 +24,17 @@ export async function PUT(request: Request, { params }: Context) {
     return NextResponse.json({ detail: "Nao foi possivel atualizar o comite." }, { status: 500 });
   }
 }
+export async function DELETE(_request: Request, { params }: Context) {
+  const { committeeId } = await params;
+  try {
+    await fetchBackend(`/admin/committees/${committeeId}`, {
+      method: "DELETE"
+    });
+    return new NextResponse(null, { status: 204 });
+  } catch (error) {
+    if (error instanceof BackendError) {
+      return NextResponse.json({ detail: error.message }, { status: error.status });
+    }
+    return NextResponse.json({ detail: "Nao foi possivel excluir o comite." }, { status: 500 });
+  }
+}

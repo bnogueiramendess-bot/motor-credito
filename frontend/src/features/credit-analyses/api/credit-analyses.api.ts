@@ -135,3 +135,6 @@ export async function updateCreditAnalysisWorkspaceState(
 ) {
   return apiClient.put(`/api/credit-analyses/${analysisId}/workspace-state`, payload);
 }
+export async function submitCreditAnalysisToCommittee(analysisId: number, justification: string) {
+  return apiClient.post<WorkflowActionResponse, { justification: string }>(`/api/credit-analyses/${analysisId}/submit-to-committee`, { justification });
+}

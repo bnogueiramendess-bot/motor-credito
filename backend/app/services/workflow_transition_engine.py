@@ -19,7 +19,8 @@ from app.services.workflow_authorization import (
     resolve_credit_workflow_action,
     resolve_credit_workflow_available_actions,
 )
-from app.services.workflow_approval import create_workflow_approval_round, decide_active_approval_step
+from app.services.committee_sessions import open_credit_committee_session
+from app.services.workflow_approval import create_workflow_approval_round, decide_active_approval_step, get_active_approval_step
 
 DECIMAL_ZERO = Decimal("0.00")
 
@@ -333,6 +334,29 @@ def resolve_credit_workflow_transition(
                 "approval_decision_id": approval_decision.decision.id,
                 "next_active_approval_step_id": approval_decision.next_active_step.id if approval_decision.next_active_step else None,
                 "escalated_to_committee": True,
+            }
+        )
+    elif action == "submit_to_committee":
+        justification = str(payload.get("justification") or "").strip()
+        if len(justification) < 10:
+            raise ValueError("Submissao ao Comite exige justificativa com pelo menos 10 caracteres.")
+        session = open_credit_committee_session(db, analysis=analysis, current=current, reason=justification)
+        active_step = get_active_approval_step(db, analysis.id)
+        if active_step is not None:
+            active_step.status = "IN_COMMITTEE"
+        next_status = "in_approval"
+        next_owner_user_id = None
+        next_owner_role = "comite_credito"
+        analysis.analysis_status = AnalysisStatus.IN_APPROVAL
+        timeline_event = "committee_submitted"
+        authorization.workflow_context.update(
+            {
+                "committee_session_id": session.id,
+                "committee_id": session.committee_id,
+                "committee_status": session.status,
+                "approval_step_id": active_step.id if active_step is not None else None,
+                "approval_step_status": active_step.status if active_step is not None else None,
+                "submitted_to_committee": True,
             }
         )
     elif action == "finalize":

@@ -10,7 +10,7 @@ class WorkflowApprovalStep(Base):
     __tablename__ = "workflow_approval_steps"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('PENDING', 'ACTIVE', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED', 'SKIPPED')",
+            "status IN ('PENDING', 'ACTIVE', 'IN_COMMITTEE', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED', 'SKIPPED')",
             name="ck_workflow_approval_step_status",
         ),
     )

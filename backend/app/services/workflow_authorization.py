@@ -12,8 +12,10 @@ from app.core.security import CurrentUser
 from app.models.business_unit import BusinessUnit
 from app.models.credit_analysis import CreditAnalysis
 from app.models.user_workflow_role import UserWorkflowRole
+from app.models.workflow_approval_step import WorkflowApprovalStep
 from app.models.workflow_role import WorkflowRole
 from app.services.approval_matrix import resolve_required_approval_roles
+from app.services.committee_sessions import get_open_committee_session
 from app.services.bu_scope import (
     bu_name_in_scope,
     get_user_allowed_business_units,
@@ -86,6 +88,7 @@ ACTION_POLICIES: dict[str, dict] = {
     "reject": {"workflow_roles": (), "legacy_permissions": ("credit.approval.reject",), "statuses": {"in_approval"}},
     "request_changes": {"workflow_roles": (), "legacy_permissions": ("credit.approval.reject",), "statuses": {"in_approval"}},
     "escalate_to_committee": {"workflow_roles": (), "legacy_permissions": ("credit.approval.approve",), "statuses": {"in_approval"}},
+    "submit_to_committee": {"workflow_roles": (), "legacy_permissions": ("credit.approval.approve",), "statuses": {"in_approval"}},
     "return_to_analysis": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_approval"}},
     "finalize": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"approved", "rejected"}},
     "view_result": {"workflow_roles": ("CREDIT_CONSULTANT",), "legacy_permissions": ("credit.requests.view",), "statuses": {"approved", "rejected"}},
@@ -114,7 +117,7 @@ MONITOR_ACTION_TO_WORKFLOW_ACTION = {
     "approve": "approve",
     "reject": "reject",
     "request_changes": "request_changes",
-    "escalate_to_committee": "escalate_to_committee",
+    "escalate_to_committee": "submit_to_committee",
     "view_result": "view_result",
     "view_dossier": "view_dossier",
     "view_tracking": "view_tracking",
@@ -294,6 +297,17 @@ def _is_technical_dossier_completed(analysis: CreditAnalysis) -> bool:
     return getattr(analysis, "motor_result", None) is not None and getattr(analysis, "decision_calculated_at", None) is not None
 
 
+def _get_current_approval_or_committee_step(db: Session, analysis_id: int) -> WorkflowApprovalStep | None:
+    return db.scalar(
+        select(WorkflowApprovalStep)
+        .where(
+            WorkflowApprovalStep.credit_analysis_id == analysis_id,
+            WorkflowApprovalStep.status.in_(("ACTIVE", "IN_COMMITTEE")),
+        )
+        .order_by(WorkflowApprovalStep.round_number.desc(), WorkflowApprovalStep.sequence_order.asc(), WorkflowApprovalStep.id.asc())
+        .limit(1)
+    )
+
 def resolve_technical_dossier_status(analysis: CreditAnalysis) -> dict:
     missing: list[dict[str, str]] = []
     decision_calculated_at = getattr(analysis, "decision_calculated_at", None)
@@ -368,6 +382,31 @@ def resolve_credit_workflow_action(
                 available_actions=[],
                 workflow_context={"action": action, "status": status_value},
             )
+    if analysis is not None and action in {"approve", "reject", "request_changes", "escalate_to_committee", "submit_to_committee"}:
+        try:
+            open_committee_session = get_open_committee_session(db, analysis_id=analysis.id)
+        except Exception:
+            open_committee_session = None
+        if open_committee_session is not None:
+            detail = (
+                "Ja existe uma Sessao de Comite em andamento para esta analise."
+                if action == "submit_to_committee"
+                else "Analise em deliberacao do Comite de Credito."
+            )
+            return WorkflowAuthorizationContext(
+                allowed=False,
+                denial_reason=detail,
+                denial_type="invalid_status",
+                applicable_doa_code=None,
+                applicable_doa_range=None,
+                available_actions=[],
+                workflow_context={
+                    "action": action,
+                    "status": status_value,
+                    "committee_session_id": open_committee_session.id,
+                    "committee_status": open_committee_session.status,
+                },
+            )
 
     user_role_codes = _list_user_workflow_role_codes(db, current.user.id)
     authorization_role_codes = _role_codes_for_authorization(user_role_codes)
@@ -391,7 +430,7 @@ def resolve_credit_workflow_action(
     authorization_source = "denied"
     applicable_roles = configured_roles
 
-    if action in {"approve", "reject", "request_changes", "escalate_to_committee", "return_to_analysis", "finalize"}:
+    if action in {"approve", "reject", "request_changes", "escalate_to_committee", "submit_to_committee", "return_to_analysis", "finalize"}:
         required_roles = list(matrix_resolution.get("required_roles") or [])
         applicable_roles = required_roles
         matched_roles = [code for code in required_roles if code in authorization_role_codes]
@@ -400,19 +439,21 @@ def resolve_credit_workflow_action(
         legacy_fallback_enabled = settings.credit_approval_legacy_fallback_enabled
         if enforcement_enabled:
             try:
-                active_step = get_active_approval_step(db, getattr(analysis, "id", 0)) if analysis is not None else None
+                active_step = _get_current_approval_or_committee_step(db, getattr(analysis, "id", 0)) if analysis is not None else None
             except Exception:
                 active_step = None
             if active_step is not None and not hasattr(active_step, "workflow_role_id"):
                 active_step = None
-            if action in {"approve", "reject", "request_changes", "escalate_to_committee"} and active_step is not None:
+            if action in {"approve", "reject", "request_changes", "escalate_to_committee", "submit_to_committee"} and active_step is not None:
                 active_role = getattr(active_step, "workflow_role", None)
                 active_role_code = active_role.code if active_role is not None else db.scalar(
                     select(WorkflowRole.code).where(WorkflowRole.id == active_step.workflow_role_id)
                 )
                 applicable_roles = [active_role_code] if active_role_code else []
                 matched_roles = applicable_roles if user_has_approval_step_role(db, current, active_step) else []
-            if matched_roles or committee_match:
+            if action == "submit_to_committee" and active_step is not None:
+                authorization_source = "approval_matrix" if matched_roles else "denied"
+            elif matched_roles or committee_match:
                 authorization_source = "approval_matrix"
             elif legacy_fallback_enabled and allowed_by_legacy:
                 authorization_source = "legacy_permission"
@@ -427,7 +468,34 @@ def resolve_credit_workflow_action(
             authorization_source = "legacy_permission"
 
     if action == "view_dossier" and analysis is not None and status_value == "in_approval":
-        for decision_action in ("approve", "reject", "request_changes", "escalate_to_committee"):
+        try:
+            committee_step = _get_current_approval_or_committee_step(db, analysis.id)
+        except Exception:
+            committee_step = None
+        if committee_step is not None and committee_step.status == "IN_COMMITTEE" and user_has_approval_step_role(db, current, committee_step):
+            active_role = getattr(committee_step, "workflow_role", None)
+            active_role_code = active_role.code if active_role is not None else db.scalar(
+                select(WorkflowRole.code).where(WorkflowRole.id == committee_step.workflow_role_id)
+            )
+            return WorkflowAuthorizationContext(
+                allowed=True,
+                denial_reason=None,
+                denial_type=None,
+                applicable_doa_code=matrix_resolution.get("rule_code"),
+                applicable_doa_range=matrix_resolution.get("rule_range"),
+                available_actions=[],
+                workflow_context={
+                    "action": action,
+                    "status": status_value,
+                    "authorization_source": "approval_matrix",
+                    "granted_via_committee_step": True,
+                    "applicable_roles": [active_role_code] if active_role_code else [],
+                    "matched_roles": [active_role_code] if active_role_code else [],
+                    "user_workflow_roles": user_role_codes,
+                    "business_unit": business_unit,
+                },
+            )
+        for decision_action in ("approve", "reject", "request_changes", "submit_to_committee"):
             decision_resolution = resolve_credit_workflow_action(
                 db,
                 current,
@@ -480,7 +548,7 @@ def resolve_credit_workflow_action(
             "matrix_amount": str(matrix_amount),
             "zero_financial_impact": _is_zero_financial_impact(analysis),
             "applicable_roles": applicable_roles,
-        "matched_roles": matched_roles if action in {"approve", "reject", "request_changes", "escalate_to_committee", "return_to_analysis", "finalize"} else [code for code in applicable_roles if code in authorization_role_codes],
+            "matched_roles": matched_roles if action in {"approve", "reject", "request_changes", "escalate_to_committee", "submit_to_committee", "return_to_analysis", "finalize"} else [code for code in applicable_roles if code in authorization_role_codes],
             "user_workflow_roles": user_role_codes,
             "doa_rule_id": matrix_resolution.get("rule_id"),
             "doa_rule_name": matrix_resolution.get("rule_name"),
@@ -629,7 +697,7 @@ def can_execute_approval_action(
     *,
     action: str,
 ) -> ApprovalDecisionAuthorizationResult:
-    if action not in {"approve", "reject", "request_changes", "escalate_to_committee"}:
+    if action not in {"approve", "reject", "request_changes", "escalate_to_committee", "submit_to_committee"}:
         return ApprovalDecisionAuthorizationResult(
             allowed=False,
             authorization_source="denied",

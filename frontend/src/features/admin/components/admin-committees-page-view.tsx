@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { Check, CheckCircle2, Crown, Pencil, PlusCircle, ShieldCheck, Trash2, UsersRound } from "lucide-react";
+import { Archive, Check, CheckCircle2, Crown, Eye, Pencil, PlusCircle, ShieldCheck, Trash2, UsersRound } from "lucide-react";
 
 import {
   CommitteeDecisionRule,
@@ -10,10 +10,12 @@ import {
   CommitteeStatus,
   CommitteeWritePayload
 } from "@/features/admin/api/admin.api";
+import { useArchiveCommitteeMutation } from "@/features/admin/hooks/use-archive-committee-mutation";
 import { useCommitteeNextCodeQuery } from "@/features/admin/hooks/use-committee-next-code-query";
 import { useCommitteeOptionsQuery } from "@/features/admin/hooks/use-committee-options-query";
 import { useCommitteesQuery } from "@/features/admin/hooks/use-committees-query";
 import { useCreateCommitteeMutation } from "@/features/admin/hooks/use-create-committee-mutation";
+import { useDeleteCommitteeMutation } from "@/features/admin/hooks/use-delete-committee-mutation";
 import { useUpdateCommitteeMutation } from "@/features/admin/hooks/use-update-committee-mutation";
 import { ApiError } from "@/shared/lib/http/http-client";
 import { cn } from "@/shared/lib/utils";
@@ -65,6 +67,8 @@ export function AdminCommitteesPageView() {
   const nextCodeQuery = useCommitteeNextCodeQuery();
   const createMutation = useCreateCommitteeMutation();
   const updateMutation = useUpdateCommitteeMutation();
+  const archiveMutation = useArchiveCommitteeMutation();
+  const deleteMutation = useDeleteCommitteeMutation();
 
   const [openEditor, setOpenEditor] = useState(false);
   const [editingCommitteeId, setEditingCommitteeId] = useState<number | null>(null);
@@ -110,6 +114,10 @@ export function AdminCommitteesPageView() {
   }
 
   function openEdit(committee: CommitteeDto) {
+    if (committee.status === "archived") {
+      setFeedback("Comite arquivado permanece visivel apenas para historico.");
+      return;
+    }
     setEditingCommitteeId(committee.id);
     setCode(committee.code);
     setName(committee.name);
@@ -146,6 +154,30 @@ export function AdminCommitteesPageView() {
     setMembers((current) => current.filter((_, memberIndex) => memberIndex !== index).map((member, order) => ({ ...member, sequence_order: order + 1 })));
   }
 
+
+  async function handleArchive(committee: CommitteeDto) {
+    const confirmed = window.confirm("Arquivar este Comite?\nEle deixara de estar disponivel para novas submissoes, mas o historico sera preservado.");
+    if (!confirmed) return;
+    setFeedback(null);
+    try {
+      await archiveMutation.mutateAsync(committee.id);
+      setFeedback("Comite arquivado com sucesso.");
+    } catch (error) {
+      setFeedback(error instanceof ApiError ? error.message : "Nao foi possivel arquivar o comite.");
+    }
+  }
+
+  async function handleDelete(committee: CommitteeDto) {
+    const confirmed = window.confirm("Excluir este Comite em rascunho?\nEsta acao removera o Comite e seus membros, desde que ele ainda nao tenha sido utilizado.");
+    if (!confirmed) return;
+    setFeedback(null);
+    try {
+      await deleteMutation.mutateAsync(committee.id);
+      setFeedback("Comite excluido com sucesso.");
+    } catch (error) {
+      setFeedback(error instanceof ApiError ? error.message : "Nao foi possivel excluir o comite.");
+    }
+  }
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFeedback(null);
@@ -229,7 +261,7 @@ export function AdminCommitteesPageView() {
                 </h2>
                 <p className="mt-1 text-sm leading-5 text-slate-600">{committee.description ?? "Estrutura corporativa sem descricao adicional."}</p>
               </div>
-              <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", committee.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700")}>
+              <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", committee.status === "active" ? "bg-emerald-100 text-emerald-700" : committee.status === "archived" ? "bg-zinc-200 text-zinc-700" : committee.status === "draft" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-700")}>
                 {statusLabels[committee.status]}
               </span>
             </div>
@@ -254,9 +286,27 @@ export function AdminCommitteesPageView() {
               <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700"><Crown className="h-3.5 w-3.5" /> {committee.chair_role_name ?? "Sem presidente"}</span>
             </div>
 
-            <button type="button" onClick={() => openEdit(committee)} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700">
-              <Pencil className="h-4 w-4" /> Editar comite
-            </button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {committee.status === "archived" ? (
+                <button type="button" disabled className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500">
+                  <Eye className="h-4 w-4" /> Historico
+                </button>
+              ) : (
+                <button type="button" onClick={() => openEdit(committee)} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700">
+                  <Pencil className="h-4 w-4" /> Editar comite
+                </button>
+              )}
+              {committee.status === "active" ? (
+                <button type="button" onClick={() => void handleArchive(committee)} disabled={archiveMutation.isPending} className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 disabled:opacity-50">
+                  <Archive className="h-4 w-4" /> Arquivar
+                </button>
+              ) : null}
+              {committee.status === "draft" ? (
+                <button type="button" onClick={() => void handleDelete(committee)} disabled={deleteMutation.isPending} className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 disabled:opacity-50">
+                  <Trash2 className="h-4 w-4" /> Excluir
+                </button>
+              ) : null}
+            </div>
           </article>
         ))}
       </div>
@@ -279,7 +329,7 @@ export function AdminCommitteesPageView() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
                     <FieldLabel title="Codigo" />
-                    <input value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800" placeholder="COM-0001" />
+                    <input value={code} readOnly className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700" placeholder="Gerado automaticamente" />
                   </div>
                   <div>
                     <FieldLabel title="Nome" />
@@ -306,7 +356,7 @@ export function AdminCommitteesPageView() {
                   <div>
                     <FieldLabel title="Status" />
                     <select value={status} onChange={(event) => setStatus(event.target.value as CommitteeStatus)} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800">
-                      {(optionsQuery.data?.statuses ?? fallbackStatuses).map((item) => <option key={item} value={item}>{statusLabels[item]}</option>)}
+                      {(optionsQuery.data?.statuses ?? fallbackStatuses).filter((item) => item !== "archived").map((item) => <option key={item} value={item}>{statusLabels[item]}</option>)}
                     </select>
                   </div>
                   <label className="mt-6 flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700">

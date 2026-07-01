@@ -103,7 +103,7 @@ def open_credit_committee_session(
     if analysis.analysis_status != AnalysisStatus.IN_APPROVAL:
         raise CommitteeSessionError("A analise precisa estar em aprovacao para abrir sessao de comite.")
     if get_open_committee_session(db, analysis_id=analysis.id) is not None:
-        raise CommitteeSessionError("Ja existe uma sessao de comite aberta para esta analise.")
+        raise CommitteeSessionError("Ja existe uma Sessao de Comite em andamento para esta analise.")
 
     active_step = get_active_approval_step(db, analysis.id)
     if active_step is None:
@@ -175,7 +175,7 @@ def open_credit_committee_session(
     db.add(
         AuditLog(
             actor_user_id=current.user.id,
-            action="committee_session_opened",
+            action="committee_submitted",
             resource="credit_analysis",
             resource_id=str(analysis.id),
             metadata_json={
