@@ -179,6 +179,30 @@ export type DecisionEventDto = {
   created_at: string;
 };
 
+export type ScorePillarItemDto = {
+  code: string | null;
+  name: string | null;
+  score: number | string | null;
+  max_score: number | string | null;
+  weighted_score?: number | string | null;
+  weight_percent?: number | string | null;
+  status: string | null;
+  source?: string | null;
+  reason: string | null;
+  warnings: unknown[];
+  calculation_trace?: unknown[];
+};
+
+export type ScorePillarsDto = {
+  engine: string;
+  available: boolean;
+  policy_id?: number | string | null;
+  policy_code?: string | null;
+  policy_version?: number | string | null;
+  reason?: string | null;
+  items: ScorePillarItemDto[];
+};
+
 export type ScoreResultDto = {
   id: number;
   credit_analysis_id: number;
@@ -186,6 +210,7 @@ export type ScoreResultDto = {
   final_score: number;
   score_band: ScoreBand;
   calculation_memory_json: Record<string, unknown>;
+  score_pillars?: ScorePillarsDto | null;
   created_at: string;
   updated_at: string;
 };

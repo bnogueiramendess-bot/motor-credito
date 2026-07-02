@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   AlertCircle,
@@ -44,6 +44,7 @@ import {
   PillarFiveSimulationResultDto,
   PillarFourSimulationResultDto,
   PillarTwoSimulationResultDto,
+  PolicyMotorBindingDto,
   ScoreIndicatorDto,
   ScorePillarDto,
   ScorePillarRoadmapDto,
@@ -396,6 +397,11 @@ function hasPublicationExecutionEvidence(item: GovernanceHistoryItem | null) {
   );
 }
 
+function domainPublicationState(policy: ScorePolicyDto | null | undefined, binding?: PolicyMotorBindingDto | null): GovernancePublicationState | null {
+  if (binding?.published || policy?.publication_status === "PUBLISHED") return "published";
+  return null;
+}
+
 function governancePublicationState(items: GovernanceHistoryItem[]): GovernancePublicationState {
   const request = latestPublicationRequest(items);
   if (!request) return "not_requested";
@@ -429,6 +435,15 @@ function governancePublicationBadgeClass(state: GovernancePublicationState) {
   if (state === "published" || state === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (state === "pending") return "border-amber-200 bg-amber-50 text-amber-700";
   if (state === "rejected") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-slate-200 bg-slate-100 text-slate-600";
+}
+
+function motorBindingBadgeClass(binding: { is_bound?: boolean; conflict?: boolean; reason?: string | null } | null | undefined) {
+  if (binding?.is_bound) return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (binding?.conflict) return "border-rose-200 bg-rose-50 text-rose-700";
+  if (binding?.reason === "active_policy_without_governed_publication" || binding?.reason === "policy_has_pending_governance_request") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
   return "border-slate-200 bg-slate-100 text-slate-600";
 }
 
@@ -562,7 +577,7 @@ function Hero({
                 <span className="text-white/48">Política <strong className="ml-1 text-white/90">{policy?.name ?? "Política de Decisão"}</strong></span>
                 <span className="text-white/48">Versão <strong className="ml-1 text-white/90">{policy?.version ?? "-"}</strong></span>
                 <span className="text-white/48">Status <strong className="ml-1 text-white/90">{lifecycleLabel(policy?.status)}</strong></span>
-                <span className="text-white/48">Motor oficial <strong className="ml-1 text-white/90">Não vinculado</strong></span>
+                <span className="text-white/48">Motor oficial <strong className="ml-1 text-white/90">{structure?.governance.motor_binding?.label ?? "Não vinculado"}</strong></span>
               </div>
             </div>
           ) : (
@@ -1812,7 +1827,7 @@ function PillarTwoSimulation({
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
             <div className="flex items-center gap-2 text-slate-700"><Calculator className="h-3.5 w-3.5 text-slate-500" /><b>Contribuição para o Score Institucional</b></div>
             <p className="mt-1 text-[11px] leading-5 text-slate-500">
-              Nota {displayScore(result.score)} × peso do Pilar {displayPercent(result.weight_percent)} = <strong className="text-slate-700">{displayPoints(result.weighted_score)}</strong>
+              Nota {displayScore(result.score)} — peso do Pilar {displayPercent(result.weight_percent)} = <strong className="text-slate-700">{displayPoints(result.weighted_score)}</strong>
             </p>
           </div>
 
@@ -2716,12 +2731,8 @@ function PolicyMonitorView({
                 const rowIsLoaded = row.id === policy.id;
                 const rowManagementState = policyManagementState(row.status, rowIsLoaded ? configurationStatus : "validated");
                 const rowStatusLabel = rowManagementState === "in_construction" ? "Rascunho" : lifecycleLabel(row.status);
-                const rowUsageLabel =
-                  row.status === "active"
-                    ? "Vinculada ao motor"
-                    : rowManagementState === "archived"
-                      ? "Arquivada"
-                      : "Não vinculada ao motor";
+                const rowMotorBinding = rowIsLoaded ? structure.governance.motor_binding ?? row.motor_binding : row.motor_binding;
+                const rowUsageLabel = rowMotorBinding?.label ?? (rowManagementState === "archived" ? "Arquivada" : "Não vinculada ao Motor");
                 return (
                   <tr key={row.id} className={`transition ${rowSelected ? "bg-blue-50/80" : "bg-white hover:bg-slate-50"}`}>
                     <td className="border-b border-slate-100 px-4 py-4">
@@ -2742,11 +2753,7 @@ function PolicyMonitorView({
                       }`}>{rowStatusLabel}</span>
                     </td>
                     <td className="border-b border-slate-100 px-4 py-4">
-                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${
-                        row.status === "active"
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                          : "border-slate-200 bg-slate-100 text-slate-600"
-                      }`}>{rowUsageLabel}</span>
+                      <span className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${motorBindingBadgeClass(rowMotorBinding)}`}>{rowUsageLabel}</span>
                     </td>
                     <td className="border-b border-slate-100 px-4 py-4">
                       {rowIsLoaded ? (
@@ -2947,7 +2954,8 @@ function PolicyGovernanceView({
   const policyStatusLabel = managementState === "in_construction" ? "Rascunho" : lifecycleLabel(policy.status);
   const committeeRoles = ["CEO", "CFO", "Head Comercial", "Head de Operações", "Head Financeiro", "Jurídico"];
   const isScoreReady = configurationStatus === "validated" || configuredPillars === expectedPillars;
-  const publicationGovernanceState = governancePublicationState(historyItems);
+  const officialMotorBinding = structure.governance.motor_binding ?? null;
+  const publicationGovernanceState = domainPublicationState(policy, officialMotorBinding) ?? governancePublicationState(historyItems);
   const latestPublishRequest = latestPublicationRequest(historyItems);
   const hasGovernanceApproval = publicationGovernanceState === "approved" || publicationGovernanceState === "published";
   const hasGovernancePublication = publicationGovernanceState === "published";
@@ -2964,7 +2972,9 @@ function PolicyGovernanceView({
   const publicationState = hasGovernancePublication
     ? {
         title: "Publicação via governança registrada.",
-        detail: "Esta versão possui evidência de publicação pelo workflow de governança.",
+        detail: policy.published_at
+          ? `Esta versão foi publicada via governança em ${formatDateTime(policy.published_at)}.`
+          : "Esta versão possui publicação registrada na política.",
         className: "border-emerald-200 bg-emerald-50 text-emerald-900",
         buttonTitle: "Versão publicada via governança",
         buttonLabel: "Versão publicada via governança",
@@ -3194,7 +3204,7 @@ function GovernancePanel({ structure }: { structure: ScoreStructureDto | null })
       </div>
       <div className="flex gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
         <ShieldCheck className="mt-0.5 h-4 w-4 text-slate-600" />
-        <p>Política parametrizável ainda não conectada ao motor oficial.</p>
+        <p>Vínculo com motor oficial: {structure?.governance.motor_binding?.label ?? "Não vinculada ao Motor"}.</p>
       </div>
       <div className="flex gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
         <FileClock className="mt-0.5 h-4 w-4 text-slate-600" />
@@ -3379,7 +3389,10 @@ export function PolicyScorePage() {
     () => structure?.pillar_roadmap.find((item) => item.code === selectedPillarCode) ?? null,
     [selectedPillarCode, structure]
   );
-  const publicationGovernanceState = useMemo(() => governancePublicationState(historyItems), [historyItems]);
+  const publicationGovernanceState = useMemo(
+    () => domainPublicationState(structure?.policy, structure?.governance.motor_binding) ?? governancePublicationState(historyItems),
+    [historyItems, structure?.governance.motor_binding, structure?.policy]
+  );
   const governanceToolbarButton = useMemo(() => {
     if (!selectedPolicyId) {
       return {
@@ -4043,3 +4056,4 @@ export function PolicyScorePage() {
     </main>
   );
 }
+

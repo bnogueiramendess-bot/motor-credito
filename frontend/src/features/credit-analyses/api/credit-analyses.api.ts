@@ -102,11 +102,19 @@ export async function getCreditAnalysesMonitorOptions(businessUnitContext?: stri
   return apiClient.get<CreditAnalysisQueueOptionsResponse>(`/api/credit-analyses/monitor/options${suffix}`);
 }
 
+function assertValidAnalysisId(analysisId: number) {
+  if (!Number.isFinite(analysisId) || analysisId <= 0) {
+    throw new Error("Identificador da análise ausente ou inválido.");
+  }
+}
+
 export async function getCreditAnalysisDetail(analysisId: number) {
+  assertValidAnalysisId(analysisId);
   return apiClient.get<CreditAnalysisDetailApiResponse>(`/api/credit-analyses/${analysisId}/detail`);
 }
 
 export async function startCreditAnalysis(analysisId: number) {
+  assertValidAnalysisId(analysisId);
   return apiClient.post(`/api/credit-analyses/${analysisId}/start`, {});
 }
 
@@ -115,10 +123,12 @@ export async function executeCreditAnalysisWorkflowAction(analysisId: number, pa
 }
 
 export async function calculateCreditAnalysisScore(analysisId: number) {
+  assertValidAnalysisId(analysisId);
   return apiClient.post(`/api/credit-analyses/${analysisId}/score/calculate`, {});
 }
 
 export async function calculateCreditAnalysisDecision(analysisId: number) {
+  assertValidAnalysisId(analysisId);
   return apiClient.post(`/api/credit-analyses/${analysisId}/decision/calculate`, {});
 }
 

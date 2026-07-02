@@ -37,6 +37,20 @@ class CreditDecisionPolicy(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    publication_status: Mapped[str] = mapped_column(
+        Enum("UNPUBLISHED", "PUBLISHED", "REVOKED", name="credit_decision_policy_publication_status_enum", native_enum=False),
+        nullable=False,
+        default="UNPUBLISHED",
+        server_default="UNPUBLISHED",
+        index=True,
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    governance_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("credit_decision_policy_governance_requests.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

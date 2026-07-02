@@ -21,6 +21,11 @@ class CreditDecisionPolicyRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     activated_at: datetime | None = None
+    publication_status: str = "UNPUBLISHED"
+    published_at: datetime | None = None
+    published_by_user_id: int | None = None
+    governance_request_id: int | None = None
+    motor_binding: dict[str, Any] | None = None
 
 
 class CreditDecisionPolicyListItem(BaseModel):
@@ -38,6 +43,11 @@ class CreditDecisionPolicyListItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     activated_at: datetime | None = None
+    publication_status: str = "UNPUBLISHED"
+    published_at: datetime | None = None
+    published_by_user_id: int | None = None
+    governance_request_id: int | None = None
+    motor_binding: dict[str, Any] | None = None
 
 
 class CreditDecisionPolicyCreate(BaseModel):

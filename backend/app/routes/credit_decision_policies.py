@@ -63,6 +63,7 @@ from app.services.credit_decision_policy_service import (
     list_credit_decision_policies,
     update_credit_decision_policy_score_structure,
 )
+from app.services.effective_credit_policy import get_policy_motor_binding
 from app.services.credit_decision_policy_score_structure import (
     CreditDecisionPolicyScoreStructureNotFoundError,
     get_current_score_structure,
@@ -324,10 +325,11 @@ def request_credit_decision_policy_archive(
 @router.get("/active", response_model=CreditDecisionPolicyRead)
 def get_active_policy(
     db: Session = Depends(get_db),
-    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
 ) -> CreditDecisionPolicyRead:
     try:
         policy = get_active_credit_decision_policy(db)
+        setattr(policy, "motor_binding", get_policy_motor_binding(db, policy, company_id=current.user.company_id).__dict__)
         return CreditDecisionPolicyRead.model_validate(policy)
     except CreditDecisionPolicyNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -336,9 +338,14 @@ def get_active_policy(
 @router.get("", response_model=list[CreditDecisionPolicyListItem])
 def list_policies(
     db: Session = Depends(get_db),
-    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
 ) -> list[CreditDecisionPolicyListItem]:
-    return [CreditDecisionPolicyListItem.model_validate(item) for item in list_credit_decision_policies(db)]
+    items = []
+    for item in list_credit_decision_policies(db):
+        binding = get_policy_motor_binding(db, item, company_id=current.user.company_id)
+        setattr(item, "motor_binding", binding.__dict__)
+        items.append(CreditDecisionPolicyListItem.model_validate(item))
+    return items
 
 
 @router.get("/preview/{analysis_id}", response_model=CreditDecisionPolicyPreviewResult)
@@ -493,10 +500,11 @@ def simulate_policy_pillar_five_score(
 def get_policy(
     policy_id: int,
     db: Session = Depends(get_db),
-    _: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
+    current: CurrentUser = Depends(require_permissions(["credit.policy.view"])),
 ) -> CreditDecisionPolicyRead:
     try:
         policy = get_credit_decision_policy(db, policy_id)
+        setattr(policy, "motor_binding", get_policy_motor_binding(db, policy, company_id=current.user.company_id).__dict__)
         return CreditDecisionPolicyRead.model_validate(policy)
     except CreditDecisionPolicyNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

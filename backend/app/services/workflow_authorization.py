@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
@@ -126,13 +126,13 @@ MONITOR_ACTION_TO_WORKFLOW_ACTION = {
 TECHNICAL_DOSSIER_REQUIREMENTS: tuple[tuple[str, str, str], ...] = (
     (
         "decision_not_calculated",
-        "Calcular decisão técnica",
-        "Execute o cálculo da decisão antes de enviar para aprovação.",
+        "Calcular decisÃ£o tÃ©cnica",
+        "Execute o cÃ¡lculo da decisÃ£o antes de enviar para aprovaÃ§Ã£o.",
     ),
     (
         "motor_result_not_available",
         "Gerar resultado do motor",
-        "Execute o motor de crédito para consolidar o resultado técnico.",
+        "Execute o motor de crÃ©dito para consolidar o resultado tÃ©cnico.",
     ),
 )
 
@@ -191,8 +191,8 @@ def _resolve_analysis_amount(analysis: CreditAnalysis | None, requested_amount: 
         return requested_amount
     if analysis is None:
         return Decimal("0")
-    # Prioriza o primeiro valor positivo para não colapsar alçada em 0 quando
-    # há limite sugerido/final zerado, mas solicitação original com valor.
+    # Prioriza o primeiro valor positivo para nÃ£o colapsar alÃ§ada em 0 quando
+    # hÃ¡ limite sugerido/final zerado, mas solicitaÃ§Ã£o original com valor.
     for candidate in (analysis.final_limit, analysis.suggested_limit, analysis.requested_limit):
         if candidate is not None and Decimal(candidate) > Decimal("0"):
             return Decimal(candidate)
@@ -242,8 +242,8 @@ def _is_zero_financial_impact(analysis: CreditAnalysis | None) -> bool:
         return False
     proposed_value = Decimal(proposed)
     current_value = Decimal(effective_current_limit)
-    # "Manutenção do limite atual" exige limite atual e proposto positivos e iguais.
-    # Evita confundir ausência de recomendação (0) com impacto financeiro real zero.
+    # "ManutenÃ§Ã£o do limite atual" exige limite atual e proposto positivos e iguais.
+    # Evita confundir ausÃªncia de recomendaÃ§Ã£o (0) com impacto financeiro real zero.
     if proposed_value <= Decimal("0") or current_value <= Decimal("0"):
         return False
     return proposed_value == current_value
@@ -324,9 +324,9 @@ def resolve_technical_dossier_status(analysis: CreditAnalysis) -> dict:
         "is_completed": len(missing) == 0,
         "missing_requirements": missing,
         "display_message": (
-            "Dossiê técnico concluído e elegível para envio à aprovação."
+            "DossiÃª tÃ©cnico concluÃ­do e elegÃ­vel para envio Ã  aprovaÃ§Ã£o."
             if len(missing) == 0
-            else "Conclua as pendências técnicas para liberar o envio à aprovação."
+            else "Conclua as pendÃªncias tÃ©cnicas para liberar o envio Ã  aprovaÃ§Ã£o."
         ),
     }
 
@@ -372,22 +372,32 @@ def resolve_credit_workflow_action(
         )
 
     if action.startswith("view_") or analysis is not None:
+
         if not _can_view_in_scope(db, current, business_unit):
+
             return WorkflowAuthorizationContext(
+
                 allowed=False,
+
                 denial_reason="Usuario fora do escopo da unidade de negocio.",
+
                 denial_type="forbidden",
+
                 applicable_doa_code=None,
+
                 applicable_doa_range=None,
+
                 available_actions=[],
+
                 workflow_context={"action": action, "status": status_value},
+
             )
     if analysis is not None and action in {"approve", "reject", "request_changes", "escalate_to_committee", "submit_to_committee"}:
         try:
             open_committee_session = get_open_committee_session(db, analysis_id=analysis.id)
         except Exception:
             open_committee_session = None
-        if open_committee_session is not None:
+        if open_committee_session is not None and hasattr(open_committee_session, "id") and hasattr(open_committee_session, "status"):
             detail = (
                 "Ja existe uma Sessao de Comite em andamento para esta analise."
                 if action == "submit_to_committee"
@@ -472,7 +482,7 @@ def resolve_credit_workflow_action(
             committee_step = _get_current_approval_or_committee_step(db, analysis.id)
         except Exception:
             committee_step = None
-        if committee_step is not None and committee_step.status == "IN_COMMITTEE" and user_has_approval_step_role(db, current, committee_step):
+        if committee_step is not None and hasattr(committee_step, "status") and committee_step.status == "IN_COMMITTEE" and user_has_approval_step_role(db, current, committee_step):
             active_role = getattr(committee_step, "workflow_role", None)
             active_role_code = active_role.code if active_role is not None else db.scalar(
                 select(WorkflowRole.code).where(WorkflowRole.id == committee_step.workflow_role_id)
@@ -710,3 +720,5 @@ def can_execute_approval_action(
             legacy_fallback_used=False,
         )
     return _build_approval_result(db, current, analysis, action=action)
+
+

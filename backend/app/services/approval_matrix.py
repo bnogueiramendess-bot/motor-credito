@@ -14,6 +14,8 @@ from app.models.workflow_role import WorkflowRole
 from app.schemas.approval_matrix import ApprovalMatrixRuleWrite
 from app.services.workflow_roles import DOA_APPROVAL_WORKFLOW_ROLE_TYPES
 
+NEW_DOA_APPROVAL_WORKFLOW_ROLE_TYPE = "governance"
+
 # Current approval execution is sequential. Keep the concept explicit without
 # changing the public API; future parallel/hybrid flows should become their own
 # approval-flow model instead of overloading operational roles or governance.
@@ -120,14 +122,14 @@ def list_approval_matrix_rules(db: Session, *, company_id: int) -> list[Approval
 
 def _get_workflow_roles_by_codes(db: Session, codes: Iterable[str]) -> dict[str, WorkflowRole]:
     code_list = [code.strip().upper() for code in codes]
-    # DOA approval roles are the only authority for credit decisions. Historical
-    # storage may still use type="governance" or type="approval"; operational
-    # roles and future collegial structures must remain outside this boundary.
+    # New DOA matrix rules must use the official governance role taxonomy.
+    # Historical "approval" roles are still accepted by runtime authorization
+    # compatibility, but they must not be written into new rules.
     roles = list(
         db.scalars(
             select(WorkflowRole).where(
                 WorkflowRole.code.in_(code_list),
-                WorkflowRole.type.in_(DOA_APPROVAL_WORKFLOW_ROLE_TYPES),
+                WorkflowRole.type == NEW_DOA_APPROVAL_WORKFLOW_ROLE_TYPE,
                 WorkflowRole.is_active.is_(True),
             )
         ).all()
@@ -309,3 +311,5 @@ def ensure_approval_matrix_seed(db: Session) -> None:
         db.rollback()
         # Base ainda sem migration da matriz: manter startup funcional em modo legado.
         return
+
+

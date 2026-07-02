@@ -213,6 +213,10 @@ class CreditDecisionPolicyPublicationTestCase(unittest.TestCase):
         self.db.refresh(self.policy)
 
         self.assertEqual(self.policy.status, "active")
+        self.assertEqual(self.policy.publication_status, "PUBLISHED")
+        self.assertIsNotNone(self.policy.published_at)
+        self.assertEqual(self.policy.published_by_user_id, self.user.id)
+        self.assertEqual(self.policy.governance_request_id, request["request_id"])
         actions = list(
             self.db.scalars(
                 select(AuditLog.action).where(
@@ -276,6 +280,7 @@ class CreditDecisionPolicyPublicationTestCase(unittest.TestCase):
         )
 
         self.assertEqual(policy.status, "archived")
+        self.assertEqual(policy.publication_status, "UNPUBLISHED")
         actions = set(
             self.db.scalars(
                 select(AuditLog.action).where(

@@ -65,6 +65,10 @@ export type PolicyGovernanceSummaryPolicyDto = {
   effective_from?: string | null;
   effective_to?: string | null;
   activated_at?: string | null;
+  publication_status?: string | null;
+  published_at?: string | null;
+  published_by_user_id?: number | null;
+  governance_request_id?: number | null;
 } | null;
 
 export type PolicyGovernanceSummaryGovernanceDto = {

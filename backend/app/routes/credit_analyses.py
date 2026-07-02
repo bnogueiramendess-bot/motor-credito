@@ -1,4 +1,4 @@
-﻿from decimal import Decimal
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -85,7 +85,7 @@ from app.schemas.analysis_request import (
 )
 from app.services.protocol import generate_protocol_number
 from app.services.decision import DecisionCalculationError, calculate_and_apply_decision
-from app.services.score import ScoreCalculationError, calculate_and_upsert_score
+from app.services.score import ScoreCalculationError, build_score_pillars_contract, calculate_and_upsert_score
 from app.services.external_cnpj import fetch_external_cnpj_data, is_valid_cnpj
 from app.services.recommendation import classify_recommendation
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_text_key
@@ -1358,6 +1358,12 @@ def _attach_available_actions_field(db: Session, current: CurrentUser, analysis:
 
 def _attach_technical_dossier_status_field(analysis: CreditAnalysis) -> None:
     setattr(analysis, "technical_dossier_status", resolve_technical_dossier_status(analysis))
+
+
+def _score_result_response(score_result: ScoreResult) -> ScoreResultResponse:
+    response = ScoreResultResponse.model_validate(score_result)
+    response.score_pillars = build_score_pillars_contract(score_result)
+    return response
 
 
 def _attach_committee_session_field(db: Session, analysis: CreditAnalysis) -> None:
@@ -3774,7 +3780,9 @@ def calculate_score(
     _enforce_technical_access_or_403(db, current, analysis)
 
     try:
-        score_result, source_entry, recalculated = calculate_and_upsert_score(db, analysis_id)
+        score_result, source_entry, recalculated = calculate_and_upsert_score(
+            db, analysis_id, company_id=current.user.company_id
+        )
     except ScoreCalculationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -3808,7 +3816,7 @@ def calculate_score(
 
     db.refresh(score_result)
     return ScoreCalculationResponse(
-        score_result=ScoreResultResponse.model_validate(score_result),
+        score_result=_score_result_response(score_result),
         recalculated=recalculated,
         source_entry_id=source_entry.id,
     )
@@ -3819,7 +3827,7 @@ def get_score_result(
     analysis_id: int,
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
-) -> ScoreResult:
+) -> ScoreResultResponse:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
         raise HTTPException(
@@ -3835,7 +3843,7 @@ def get_score_result(
             detail="Score result not found for this analysis.",
         )
 
-    return score_result
+    return _score_result_response(score_result)
 
 
 @router.post(
@@ -4195,5 +4203,3 @@ def get_analysis_final_decision(
         analyst_notes=analysis.analyst_notes,
         completed_at=analysis.completed_at,
     )
-
-

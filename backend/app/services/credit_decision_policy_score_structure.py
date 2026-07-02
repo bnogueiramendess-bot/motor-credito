@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.credit_analysis import CreditAnalysis
 from app.models.credit_decision_policy import CreditDecisionPolicy
+from app.services.effective_credit_policy import get_policy_motor_binding
+
 from app.models.credit_decision_policy_score_structure import (
     CreditDecisionPolicyIndicator,
     CreditDecisionPolicyPillar,
@@ -234,6 +237,21 @@ def _load_pillars(db: Session, policy_id: int) -> list[CreditDecisionPolicyPilla
     return pillars
 
 
+def _policy_is_effective_now(policy: CreditDecisionPolicy) -> bool:
+    now = datetime.now(timezone.utc)
+    effective_from = policy.effective_from
+    effective_to = policy.effective_to
+    if effective_from is not None and effective_from.tzinfo is None:
+        effective_from = effective_from.replace(tzinfo=timezone.utc)
+    if effective_to is not None and effective_to.tzinfo is None:
+        effective_to = effective_to.replace(tzinfo=timezone.utc)
+    if effective_from is not None and effective_from > now:
+        return False
+    if effective_to is not None and effective_to < now:
+        return False
+    return True
+
+
 def get_current_score_policy(db: Session) -> tuple[CreditDecisionPolicy, str]:
     draft = db.scalar(
         select(CreditDecisionPolicy)
@@ -243,13 +261,21 @@ def get_current_score_policy(db: Session) -> tuple[CreditDecisionPolicy, str]:
     if draft is not None:
         return draft, "latest_draft"
 
-    active = db.scalar(
-        select(CreditDecisionPolicy)
-        .where(CreditDecisionPolicy.status == "active")
-        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
+    active_policies = list(
+        db.scalars(
+            select(CreditDecisionPolicy)
+            .where(CreditDecisionPolicy.status == "active")
+            .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
+        ).all()
     )
-    if active is not None:
-        return active, "active"
+    effective_active_policies = [policy for policy in active_policies if _policy_is_effective_now(policy)]
+    if len(effective_active_policies) > 1:
+        ids = ", ".join(str(policy.id) for policy in effective_active_policies)
+        raise CreditDecisionPolicyScoreStructureNotFoundError(
+            f"Conflito de politicas ativas/vigentes para Score e Politica: {ids}."
+        )
+    if effective_active_policies:
+        return effective_active_policies[0], "active"
 
     archived = db.scalar(
         select(CreditDecisionPolicy)
@@ -503,6 +529,7 @@ def get_score_structure(db: Session, policy_id: int, *, source: str = "requested
     pillars = [item for item in _load_pillars(db, policy_id) if item.is_enabled]
     validation_summary = validate_score_structure(db, policy_id)
     policy_progress, pillar_roadmap = _build_policy_progress(policy, pillars)
+    motor_binding = get_policy_motor_binding(db, policy)
     return {
         "policy": _policy_to_dict(policy, source=source),
         "status": policy.status,
@@ -515,8 +542,9 @@ def get_score_structure(db: Session, policy_id: int, *, source: str = "requested
         "governance": {
             "active_policy_editable": False,
             "simulation_persists_result": False,
-            "connected_to_official_engine": False,
-            "configurable_score_policy_enabled": False,
+            "connected_to_official_engine": motor_binding.is_bound,
+            "configurable_score_policy_enabled": motor_binding.is_bound,
+            "motor_binding": motor_binding.__dict__,
         },
     }
 

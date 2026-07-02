@@ -7,27 +7,36 @@ import pytest
 from app.services import score
 
 
-def test_feature_flag_disabled_uses_legacy_score_engine():
+def test_existing_legacy_score_without_snapshot_preserves_legacy_engine():
     legacy_result = (object(), object(), False)
+    analysis = SimpleNamespace(decision_memory_json={})
+    existing_score = SimpleNamespace(calculation_memory_json={"score_source": "legacy_policy"})
+    db = MagicMock()
+    db.get.return_value = analysis
+    db.scalar.return_value = existing_score
+
     with (
-        patch("app.services.score.settings.configurable_score_policy_enabled", False),
         patch("app.services.score._calculate_and_upsert_legacy_score", return_value=legacy_result) as legacy,
         patch("app.services.score._calculate_and_upsert_configurable_score") as configurable,
     ):
-        assert score.calculate_and_upsert_score(MagicMock(), 123) == legacy_result
+        assert score.calculate_and_upsert_score(db, 123) == legacy_result
 
     legacy.assert_called_once()
     configurable.assert_not_called()
 
 
-def test_feature_flag_enabled_uses_configurable_score_engine():
+def test_missing_snapshot_without_existing_legacy_score_uses_configurable_score_engine():
     configurable_result = (object(), object(), False)
+    analysis = SimpleNamespace(decision_memory_json={})
+    db = MagicMock()
+    db.get.return_value = analysis
+    db.scalar.return_value = None
+
     with (
-        patch("app.services.score.settings.configurable_score_policy_enabled", True),
         patch("app.services.score._calculate_and_upsert_configurable_score", return_value=configurable_result) as configurable,
         patch("app.services.score._calculate_and_upsert_legacy_score") as legacy,
     ):
-        assert score.calculate_and_upsert_score(MagicMock(), 123) == configurable_result
+        assert score.calculate_and_upsert_score(db, 123) == configurable_result
 
     configurable.assert_called_once()
     legacy.assert_not_called()
@@ -37,15 +46,17 @@ def test_configurable_policy_failure_falls_back_to_legacy_and_records_reason():
     score_result = SimpleNamespace(calculation_memory_json={"final_score": 820})
     legacy_result = (score_result, object(), True)
 
+    db = MagicMock()
+    db.scalar.return_value = None
+
     with (
-        patch("app.services.score.settings.configurable_score_policy_enabled", True),
         patch(
             "app.services.score._calculate_and_upsert_configurable_score",
             side_effect=score.ConfigurableScorePolicyUnavailable("policy_not_published"),
         ),
         patch("app.services.score._calculate_and_upsert_legacy_score", return_value=legacy_result),
     ):
-        returned_score, _, _ = score.calculate_and_upsert_score(MagicMock(), 123)
+        returned_score, _, _ = score.calculate_and_upsert_score(db, 123)
 
     assert returned_score.calculation_memory_json["score_source"] == "legacy_policy"
     assert returned_score.calculation_memory_json["fallback_used"] is True
@@ -61,14 +72,13 @@ def test_configurable_policy_failure_falls_back_to_legacy_and_records_reason():
     }
 
 
-def test_legacy_policy_snapshot_forces_legacy_even_with_feature_flag_enabled():
+def test_legacy_policy_snapshot_forces_legacy():
     legacy_result = (object(), object(), False)
     analysis = SimpleNamespace(decision_memory_json={"policy_snapshot": {"engine": "legacy_policy"}})
     db = MagicMock()
     db.get.return_value = analysis
 
     with (
-        patch("app.services.score.settings.configurable_score_policy_enabled", True),
         patch("app.services.score._calculate_and_upsert_legacy_score", return_value=legacy_result) as legacy,
         patch("app.services.score._calculate_and_upsert_configurable_score") as configurable,
     ):
@@ -78,7 +88,7 @@ def test_legacy_policy_snapshot_forces_legacy_even_with_feature_flag_enabled():
     configurable.assert_not_called()
 
 
-def test_configurable_policy_snapshot_forces_configurable_even_with_feature_flag_disabled():
+def test_configurable_policy_snapshot_forces_configurable():
     configurable_result = (object(), object(), False)
     analysis = SimpleNamespace(
         decision_memory_json={
@@ -92,8 +102,9 @@ def test_configurable_policy_snapshot_forces_configurable_even_with_feature_flag
     db = MagicMock()
     db.get.return_value = analysis
 
+    db.scalar.return_value = None
+
     with (
-        patch("app.services.score.settings.configurable_score_policy_enabled", False),
         patch("app.services.score._calculate_and_upsert_configurable_score", return_value=configurable_result) as configurable,
         patch("app.services.score._calculate_and_upsert_legacy_score") as legacy,
     ):
@@ -114,7 +125,6 @@ def test_capture_analysis_policy_snapshot_persists_configurable_policy():
     analysis = SimpleNamespace(decision_memory_json={})
 
     with (
-        patch("app.services.score.settings.configurable_score_policy_enabled", True),
         patch("app.services.score._load_active_configurable_policy", return_value=policy),
         patch("app.services.score._validate_configurable_policy_ready", return_value={}),
     ):
@@ -144,8 +154,8 @@ def test_configurable_policy_validation_requires_pillar_three_planned_and_no_eff
     }
 
     with (
-        patch("app.services.score._has_governed_publication", return_value=True),
-        patch("app.services.score._has_pending_publication_or_archive_request", return_value=False),
+        patch("app.services.score.is_policy_published", return_value=True),
+        patch("app.services.score.has_pending_publication_or_archive_request", return_value=False),
         patch(
             "app.services.score.validate_score_structure",
             return_value={"operational_status": "configured", "effective_pillars_weight": Decimal("85")},
@@ -156,8 +166,8 @@ def test_configurable_policy_validation_requires_pillar_three_planned_and_no_eff
 
     structure["pillar_roadmap"][0]["affects_score"] = True
     with (
-        patch("app.services.score._has_governed_publication", return_value=True),
-        patch("app.services.score._has_pending_publication_or_archive_request", return_value=False),
+        patch("app.services.score.is_policy_published", return_value=True),
+        patch("app.services.score.has_pending_publication_or_archive_request", return_value=False),
         patch(
             "app.services.score.validate_score_structure",
             return_value={"operational_status": "configured", "effective_pillars_weight": Decimal("85")},
@@ -174,8 +184,8 @@ def test_configurable_policy_validation_requires_effective_weight_85():
     policy = SimpleNamespace(id=759, status="active", activated_at=object())
 
     with (
-        patch("app.services.score._has_governed_publication", return_value=True),
-        patch("app.services.score._has_pending_publication_or_archive_request", return_value=False),
+        patch("app.services.score.is_policy_published", return_value=True),
+        patch("app.services.score.has_pending_publication_or_archive_request", return_value=False),
         patch(
             "app.services.score.validate_score_structure",
             return_value={"operational_status": "configured", "effective_pillars_weight": Decimal("100")},
@@ -185,3 +195,33 @@ def test_configurable_policy_validation_requires_effective_weight_85():
         score._validate_configurable_policy_ready(MagicMock(), policy)
 
     assert exc_info.value.reason == "invalid_effective_weight"
+
+def test_calculate_score_passes_company_id_to_configurable_engine():
+    configurable_result = (object(), object(), False)
+    analysis = SimpleNamespace(decision_memory_json={})
+    db = MagicMock()
+    db.get.return_value = analysis
+    db.scalar.return_value = None
+
+    with patch(
+        "app.services.score._calculate_and_upsert_configurable_score",
+        return_value=configurable_result,
+    ) as configurable:
+        assert score.calculate_and_upsert_score(db, 123, company_id=77) == configurable_result
+
+    configurable.assert_called_once_with(db, 123, company_id=77)
+
+
+def test_missing_governed_publication_message_includes_lookup_context():
+    message = score._policy_unavailable_message(
+        "active_policy_without_governed_publication",
+        {
+            "policy_id": 84,
+            "status": "active",
+            "publication_status": "UNPUBLISHED",
+        },
+    )
+
+    assert "id=84" in message
+    assert "status=active" in message
+    assert "publication_status=UNPUBLISHED" in message

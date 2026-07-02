@@ -78,6 +78,10 @@ def _policy_to_dict(policy: CreditDecisionPolicy | None, *, company_id: int) -> 
         "effective_from": policy.effective_from,
         "effective_to": policy.effective_to,
         "activated_at": policy.activated_at,
+        "publication_status": getattr(policy, "publication_status", "UNPUBLISHED"),
+        "published_at": getattr(policy, "published_at", None),
+        "published_by_user_id": getattr(policy, "published_by_user_id", None),
+        "governance_request_id": getattr(policy, "governance_request_id", None),
     }
 
 

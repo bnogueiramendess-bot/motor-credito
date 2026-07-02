@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -11,7 +11,8 @@ import { AgriskImportStatus, AgriskReportReadResponse, AgriskReportType, Analysi
 import { InstitutionalScoreCard } from "@/features/analysis-journey/components/institutional-score-card";
 import { RecommendationInsightsCard } from "@/features/analysis-journey/components/recommendation-insights-card";
 import { ApprovalWorkflowCard } from "@/features/credit-analyses/components/approval-workflow-card";
-import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
+import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, startCreditAnalysis, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
+import type { ScorePillarItemDto, ScorePillarsDto } from "@/features/credit-analyses/api/contracts";
 import { createExternalDataEntry, getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
 import { getPortfolioCustomers } from "@/features/portfolio/api/portfolio.api";
 import {
@@ -96,10 +97,62 @@ type InstitutionalScoreBreakdownItem = {
   key: string;
   title: string;
   weight: number;
-  score: number;
-  weighted: number;
+  score: number | null;
+  weighted: number | null;
   tooltip: PolicyPillar["tooltip"];
 };
+
+type ScorePillarDefinition = {
+  code: string;
+  aliases: string[];
+  key: string;
+  title: string;
+  weight: number;
+  description: string;
+};
+
+const SCORE_PILLAR_DEFINITIONS: ScorePillarDefinition[] = [
+  {
+    code: "financial_stability_liquidity",
+    aliases: ["financial_liquidity"],
+    key: "financial_liquidity",
+    title: "Estabilidade Financeira e Liquidez",
+    weight: 55,
+    description: "Avalia a robustez financeira por demonstracoes financeiras, liquidez, endividamento e geracao de caixa.",
+  },
+  {
+    code: "guarantees_credit_insurance",
+    aliases: ["guarantees"],
+    key: "guarantees",
+    title: "Garantias / Seguro de Credito",
+    weight: 20,
+    description: "Avalia o nivel de mitigacao do risco da operacao por cobertura COFACE, exposicao liquida nao coberta e garantias estruturadas.",
+  },
+  {
+    code: "market_conditions",
+    aliases: [],
+    key: "market_conditions",
+    title: "Condicoes de Mercado",
+    weight: 15,
+    description: "Avalia fatores externos relacionados ao ambiente de atuacao do cliente, como setor, mercado e condicoes macroeconomicas.",
+  },
+  {
+    code: "payment_history",
+    aliases: [],
+    key: "payment_history",
+    title: "Historico de Pagamento",
+    weight: 5,
+    description: "Avalia o comportamento de credito do cliente com base nos sinais de pagamento disponiveis.",
+  },
+  {
+    code: "relationship_history",
+    aliases: [],
+    key: "relationship_history",
+    title: "Historico de Relacionamento",
+    weight: 5,
+    description: "Avalia o relacionamento interno do cliente com a empresa, considerando carteira, exposicao atual e comportamento interno.",
+  },
+];
 
 type InternalEconomicPosition = {
   open_amount: number | string;
@@ -437,6 +490,41 @@ function pickNumberFromSources(
   return null;
 }
 
+function normalizePillarCode(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function findScorePillarItem(contract: ScorePillarsDto | null | undefined, definition: ScorePillarDefinition): ScorePillarItemDto | null {
+  if (!contract?.available) return null;
+  const codes = new Set([definition.code, ...definition.aliases].map((item) => item.toLowerCase()));
+  return contract.items.find((item) => codes.has(normalizePillarCode(item.code))) ?? null;
+}
+
+function statusFromScorePillarItem(item: ScorePillarItemDto | null, score: number | null): PolicyPillarStatus {
+  if (!item) return "Informações insuficientes";
+  if (item.status === "not_available") return "Informações insuficientes";
+  if (score === null) return "Informações insuficientes";
+  if (score >= 8) return "Forte";
+  if (score >= 6) return "Adequado";
+  if (score >= 4) return "Atenção";
+  return "Crítico";
+}
+
+function sourceLabelFromScorePillarItem(item: ScorePillarItemDto | null): string {
+  if (!item?.source) return "Motor de score configurável.";
+  if (item.source === "coface") return "COFACE / motor configurável.";
+  if (item.source === "agrisk_financial_analysis") return "Agrisk Financeiro / motor configurável.";
+  if (item.source === "not_available") return "Motor configurável.";
+  return `${item.source} / motor configurável.`;
+}
+
+function reasonFromScorePillarItem(item: ScorePillarItemDto | null): string {
+  if (typeof item?.reason === "string" && item.reason.trim()) return item.reason;
+  if (item?.status === "not_available") return "Informação insuficiente para cálculo do pilar.";
+  if (item) return "Pilar calculado pelo backend configurável.";
+  return "Pilar não retornado pelo contrato oficial do backend.";
+}
+
 function toScoreBand(score: number | null): InstitutionalScoreBand {
   if (score === null || Number.isNaN(score)) return "Informações insuficientes";
   if (score >= 9) return "AA";
@@ -744,12 +832,16 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const router = useRouter();
   const queryClient = useQueryClient();
   const isWorkspaceMode = mode === "workspace";
-  const effectivePermissions = useMemo(() => getEffectivePermissions(), []);
+  const [effectivePermissions, setEffectivePermissions] = useState<string[]>([]);
+  useEffect(() => {
+    setEffectivePermissions(getEffectivePermissions());
+  }, []);
   const hasTechnicalContinuationCapability = hasPermission("credit.analysis.execute", effectivePermissions);
   const isOperationalSubmitOnlyFlow = !isWorkspaceMode && !hasTechnicalContinuationCapability;
   const [workingAnalysisId, setWorkingAnalysisId] = useState<number | null>(analysisId ?? null);
   const activeAnalysisId = workingAnalysisId;
-  const hasStep1Workspace = Number.isFinite(activeAnalysisId) && (activeAnalysisId ?? 0) > 0;
+  const hasValidActiveAnalysisId = Number.isFinite(activeAnalysisId) && (activeAnalysisId ?? 0) > 0;
+  const hasStep1Workspace = hasValidActiveAnalysisId;
   useEffect(() => {
     setWorkingAnalysisId(analysisId ?? null);
   }, [analysisId]);
@@ -854,6 +946,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const [approvalSubmissionSuccessModalOpen, setApprovalSubmissionSuccessModalOpen] = useState(false);
   const [isStep3AdvancePending, setIsStep3AdvancePending] = useState(false);
   const [step3AdvanceError, setStep3AdvanceError] = useState<string | null>(null);
+  const step3CanonicalCalculationStartedRef = useRef<number | null>(null);
+  const step3EnsureTechnicalDossierRef = useRef<(() => Promise<void>) | null>(null);
   const persistJourneyProgressMutation = useMutation({
     mutationFn: ({ id, currentStep, lastCompletedStep }: { id: number; currentStep: number; lastCompletedStep: number }) =>
       updateCreditAnalysisJourneyProgress(id, {
@@ -893,15 +987,35 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   const workspaceDetailQuery = useQuery({
-    queryKey: ["workspace-analysis-detail", analysisId],
-    queryFn: () => getCreditAnalysisDetail(analysisId as number),
-    enabled: isWorkspaceMode && Number.isFinite(analysisId) && (analysisId ?? 0) > 0
+    queryKey: ["workspace-analysis-detail", activeAnalysisId],
+    queryFn: () => {
+      if (!hasValidActiveAnalysisId || !activeAnalysisId) {
+        throw new Error("Não foi possível carregar a análise. Identificador da análise ausente.");
+      }
+      return getCreditAnalysisDetail(activeAnalysisId);
+    },
+    enabled: hasValidActiveAnalysisId && (isWorkspaceMode || (!isOperationalSubmitOnlyFlow && step >= 3))
   });
   const workspaceExternalDataQuery = useQuery({
-    queryKey: ["workspace-analysis-external-data", analysisId],
-    queryFn: () => getExternalDataDashboard(analysisId as number),
-    enabled: isWorkspaceMode && Number.isFinite(analysisId) && (analysisId ?? 0) > 0
+    queryKey: ["workspace-analysis-external-data", activeAnalysisId],
+    queryFn: () => {
+      if (!hasValidActiveAnalysisId || !activeAnalysisId) {
+        throw new Error("Não foi possível carregar a análise. Identificador da análise ausente.");
+      }
+      return getExternalDataDashboard(activeAnalysisId);
+    },
+    enabled: isWorkspaceMode && hasValidActiveAnalysisId
   });
+  async function refetchWorkspaceDetailIfPossible() {
+    if (!hasValidActiveAnalysisId || isOperationalSubmitOnlyFlow) return null;
+    return workspaceDetailQuery.refetch();
+  }
+
+  async function refetchWorkspaceExternalDataIfPossible() {
+    if (!isWorkspaceMode || !hasValidActiveAnalysisId) return null;
+    return workspaceExternalDataQuery.refetch();
+  }
+
   const step1MetadataQuery = useQuery({
     queryKey: ["analysis-step1-metadata", activeAnalysisId],
     queryFn: () => getAnalysisRequestMetadata(activeAnalysisId as number),
@@ -1108,8 +1222,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   useEffect(() => {
     if (!isWorkspaceMode) return;
 
-    if (!Number.isFinite(analysisId) || (analysisId ?? 0) <= 0) {
-      setWorkspaceError("ID da análise inválido para abrir o workspace.");
+    if (!hasValidActiveAnalysisId) {
+      setWorkspaceError("Não foi possível carregar a análise. Identificador da análise ausente.");
       return;
     }
     if (workspaceDetailQuery.isLoading || workspaceExternalDataQuery.isLoading) return;
@@ -1350,7 +1464,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       }
     })();
   }, [
-    analysisId,
+    hasValidActiveAnalysisId,
     isWorkspaceMode,
     workspaceDetailQuery.data,
     workspaceDetailQuery.error,
@@ -1370,6 +1484,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     onMutate: () => {
       setTriageState("loading");
       setTriageMessage(null);
+      setWorkingAnalysisId(null);
+      setDraftRecovery(null);
     },
     onSuccess: async (response) => {
       setTriageResult(response);
@@ -1408,12 +1524,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       } catch {
         setGovernanceStatus(null);
       }
-      try {
-        const recoveredDraft = await recoverCreditAnalysisDraft(response.customer_data.cnpj);
-        setDraftRecovery(recoveredDraft);
-      } catch {
-        setDraftRecovery(null);
-      }
+      const workspaceId = await createStep1WorkspaceFromTriage(response);
+      if (!workspaceId) return;
       setTriageModalOpen(false);
     },
     onError: (error) => {
@@ -1454,39 +1566,44 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }
   });
 
-  async function ensureStep1Workspace(): Promise<number | null> {
-    if (hasStep1Workspace && activeAnalysisId) return activeAnalysisId;
-    const digits = sanitizeDigits(customer.cnpj);
-    if (digits.length !== 14) {
-      setDocumentUploadFeedback({ type: "error", message: "Informe um CNPJ válido antes de anexar documentos." });
-      return null;
-    }
-
-    const draftSource = triageResult?.found_in_portfolio ? "portfolio" : triageResult ? "external" : "manual";
+  async function createStep1WorkspaceFromTriage(response: CreditAnalysisTriageResponse): Promise<number | null> {
+    const digits = sanitizeDigits(response.customer_data.cnpj);
+    const draftSource = response.found_in_portfolio ? "portfolio" : "external";
+    const businessUnit = response.customer_data.business_unit?.trim() || null;
     try {
+      const recoveredDraft = await recoverCreditAnalysisDraft(digits);
+      if (recoveredDraft) {
+        setWorkingAnalysisId(recoveredDraft.analysis_id);
+        setDraftRecovery(null);
+        setStepError(null);
+        return recoveredDraft.analysis_id;
+      }
+
       const draft = await createCreditAnalysisDraft({
         cnpj: digits,
-        customer_name: customer.companyName?.trim() || null,
-        economic_group: triageResult?.customer_data.economic_group ?? null,
-        business_unit: triageSelectedBusinessUnit?.trim() || null,
+        customer_name: response.customer_data.company_name?.trim() || null,
+        economic_group: response.customer_data.economic_group ?? null,
+        business_unit: businessUnit,
         source: draftSource
       });
       setWorkingAnalysisId(draft.analysis_id);
-      setGovernanceStatus(null);
+      setDraftRecovery(null);
       setStepError(null);
-      setDraftRecovery({
-        analysis_id: draft.analysis_id,
-        customer_id: draft.customer_id,
-        cnpj: draft.cnpj,
-        status: draft.status,
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-      });
       return draft.analysis_id;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Não foi possível preparar a solicitação para upload.";
-      setDocumentUploadFeedback({ type: "error", message });
+      const message = error instanceof Error ? error.message : "Não foi possível preparar a solicitação após a consulta do CNPJ.";
+      setTriageState("error");
+      setTriageMessage(message);
+      setWorkingAnalysisId(null);
+      setDraftRecovery(null);
       return null;
     }
+  }
+
+  function ensureStep1Workspace(message: string): number | null {
+    if (hasStep1Workspace && activeAnalysisId) return activeAnalysisId;
+    setDocumentUploadFeedback({ type: "error", message });
+    return null;
   }
 
   async function handleContinueDraft() {
@@ -1512,10 +1629,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }
   }
   const createCommercialReferenceMutation = useMutation({
-    mutationFn: (payload: { name: string; phone: string | null; email: string | null }) =>
-      createCommercialReference(activeAnalysisId as number, payload),
-    onSuccess: () => {
-      commercialReferencesQuery.refetch();
+    mutationFn: ({ analysisId, payload }: { analysisId: number; payload: { name: string; phone: string | null; email: string | null } }) =>
+      createCommercialReference(analysisId, payload),
+    onSuccess: (reference) => {
+      queryClient.invalidateQueries({ queryKey: ["analysis-commercial-references", reference.credit_analysis_id] });
     },
     onError: (error) => {
       setCommercialReferenceForm((prev) => ({
@@ -1652,7 +1769,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       }
 
       const shouldRunTechnicalConsolidation =
-        isWorkspaceMode &&
+        !isOperationalSubmitOnlyFlow &&
+        hasValidActiveAnalysisId &&
         (
           (step === 2 && targetStep >= 3) ||
           targetStep === 4
@@ -1706,7 +1824,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         setStep3AdvanceError(message);
         return;
       }
-      await workspaceDetailQuery.refetch();
+      await refetchWorkspaceDetailIfPossible();
     } catch (error) {
       console.error("[STEP3_ADVANCE] failed", error);
       const message = normalizeTechnicalConsolidationErrorMessage(error);
@@ -1727,7 +1845,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       if (!result.advanced) {
         const message = result.errorMessage ?? "Não foi possível avançar para a Mesa de Análise. Verifique os dados da etapa 2.";
         setStepError(message);
+        return;
       }
+      await refetchWorkspaceDetailIfPossible();
     } catch (error) {
       console.error("[STEP2_ADVANCE] failed", error);
       const message = normalizeTechnicalConsolidationErrorMessage(error);
@@ -1736,6 +1856,37 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setIsStep3AdvancePending(false);
     }
   }
+
+  useEffect(() => {
+    if (step !== 3) return;
+    if (isOperationalSubmitOnlyFlow || !hasValidActiveAnalysisId || !activeAnalysisId) return;
+    if (workspaceDetailQuery.data?.score?.score_pillars?.available === true) return;
+    if (calculateTechnicalDossierMutation.isPending || isStep3AdvancePending) return;
+    if (step3CanonicalCalculationStartedRef.current === activeAnalysisId) return;
+
+    step3CanonicalCalculationStartedRef.current = activeAnalysisId;
+    setStepError(null);
+    const ensureTechnicalDossier = step3EnsureTechnicalDossierRef.current;
+    if (!ensureTechnicalDossier) return;
+
+    setIsStep3AdvancePending(true);
+    void ensureTechnicalDossier()
+      .catch((error) => {
+        const message = normalizeTechnicalConsolidationErrorMessage(error);
+        setStepError(message);
+      })
+      .finally(() => {
+        setIsStep3AdvancePending(false);
+      });
+  }, [
+    activeAnalysisId,
+    calculateTechnicalDossierMutation.isPending,
+    hasValidActiveAnalysisId,
+    isOperationalSubmitOnlyFlow,
+    isStep3AdvancePending,
+    step,
+    workspaceDetailQuery.data?.score?.score_pillars?.available
+  ]);
 
   useEffect(() => {
     if (!isJourneyReadOnly) return;
@@ -2206,7 +2357,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     };
 
     await createExternalDataEntry(analysisIdValue, payload);
-    await workspaceExternalDataQuery.refetch();
+    await refetchWorkspaceExternalDataIfPossible();
     if (process.env.NODE_ENV !== "production") {
       console.debug("[dossie-step3] ensureExternalDataEntryForTechnicalCalculation:created", {
         analysisId: analysisIdValue,
@@ -2215,7 +2366,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   async function ensureTechnicalDossierCalculatedForStep4() {
-    if (!isWorkspaceMode || !activeAnalysisId || activeAnalysisId <= 0) return;
+    if (isOperationalSubmitOnlyFlow) return;
+    if (!hasValidActiveAnalysisId || !activeAnalysisId) {
+      throw new Error("Não foi possível carregar a análise. Identificador da análise ausente.");
+    }
     console.warn("[STEP3_ADVANCE] ensure started");
     if (process.env.NODE_ENV !== "production") {
       console.debug("[dossie-step3] ensureTechnicalDossierCalculatedForStep4:start", {
@@ -2224,15 +2378,29 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         availableActions: workflowAvailableActions,
       });
     }
-    const status = workspaceDetailQuery.data?.analysis?.technical_dossier_status;
-    if (status?.is_completed === true) return;
+    const latestDetailResult = await refetchWorkspaceDetailIfPossible();
+    const latestDetail = latestDetailResult?.data ?? workspaceDetailQuery.data ?? null;
+    const status = latestDetail?.analysis?.technical_dossier_status;
+    if (status?.is_completed === true && latestDetail?.score?.score_pillars?.available === true) return;
+    const analysisStatus = latestDetail?.analysis?.analysis_status;
+    if (analysisStatus === "created") {
+      console.warn("[STEP3_ADVANCE] starting analysis before technical consolidation");
+      await startCreditAnalysis(activeAnalysisId);
+      await refetchWorkspaceDetailIfPossible();
+    }
     console.warn("[STEP3_ADVANCE] ensuring external data");
     await ensureExternalDataEntryForTechnicalCalculation(activeAnalysisId);
     console.warn("[STEP3_ADVANCE] calculating score");
     console.warn("[STEP3_ADVANCE] calculating decision");
-    await calculateTechnicalDossierMutation.mutateAsync(activeAnalysisId);
+    let calculationError: unknown = null;
+    try {
+      await calculateTechnicalDossierMutation.mutateAsync(activeAnalysisId);
+    } catch (error) {
+      calculationError = error;
+    }
     console.warn("[STEP3_ADVANCE] refetching detail");
-    await workspaceDetailQuery.refetch();
+    await refetchWorkspaceDetailIfPossible();
+    if (calculationError) throw calculationError;
     console.warn("[STEP3_ADVANCE] ensure completed");
     if (process.env.NODE_ENV !== "production") {
       console.debug("[dossie-step3] ensureTechnicalDossierCalculatedForStep4:done", {
@@ -2242,6 +2410,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       });
     }
   }
+
+  step3EnsureTechnicalDossierRef.current = ensureTechnicalDossierCalculatedForStep4;
 
   function handleApprovalSubmissionSuccessClose() {
     setApprovalSubmissionSuccessModalOpen(false);
@@ -2519,232 +2689,72 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       subtitle: "Carteira"
     }
   ];
-  const hasFinancialDocuments = financialDocuments.length > 0;
   const hasValidCofaceCoverage = technicalCoverageValue !== null && technicalCoverageValue > 0;
-  const financialPillarScore = hasValidCofaceCoverage ? 10 : 0;
-  const financialPillarStatus: PolicyPillarStatus = hasValidCofaceCoverage ? "Forte" : "Informações insuficientes";
-  const financialPillarSummary = hasValidCofaceCoverage
-    ? "Cobertura COFACE válida considerada como mitigador da estabilidade financeira."
-    : "Pilar não avaliado por ausência de DFs/relatório financeiro estruturado.";
-  const financialPillarCriteria = hasValidCofaceCoverage
-    ? [
-      `Cobertura COFACE válida: ${formatCurrencyBRL(String(technicalCoverageValue))}`,
-      "Mitigação financeira aplicada conforme política institucional",
-      "Pilar avaliado com score máximo pela garantia externa"
-    ]
-    : [
-      "Ausência de documentação financeira estruturada para motor institucional",
-      "Score financeiro estruturado indisponível"
-    ];
-  const financialPillarExplanation = hasValidCofaceCoverage
-    ? "A cobertura COFACE válida e positiva é tratada como mitigador da instabilidade financeira nesta etapa preliminar, atribuindo nota máxima ao pilar de Estabilidade Financeira e Liquidez."
-    : "A ausência de documentação financeira estruturada não é tratada como dado neutro. Enquanto não houver DFs ou relatório financeiro AGRISK disponível, o pilar permanece com nota zero e impacta o score institucional.";
-  const financialPillarSource = hasValidCofaceCoverage
-    ? "COFACE, DFs e relatório financeiro AGRISK."
-    : "DFs e relatório financeiro AGRISK.";
-  const financialPillarNote = hasValidCofaceCoverage
-    ? "Cobertura COFACE válida aplicada como mitigador, com nota 10.0/10."
-    : "Enquanto a fonte estruturada não estiver ativa, o pilar permanece com nota 0.0/10.";
-  const guaranteeRequestedLimit = technicalRequestedLimit > 0 ? technicalRequestedLimit : 0;
-  const guaranteeCoverageRatio = technicalCoverageValue !== null && guaranteeRequestedLimit > 0
-    ? technicalCoverageValue / guaranteeRequestedLimit
-    : 0;
-  const guaranteePillarScore = !hasCofaceImported || technicalCoverageValue === null || technicalCoverageValue <= 0 || guaranteeRequestedLimit <= 0
-    ? 0
-    : Math.max(0, Math.min(10, guaranteeCoverageRatio * 10));
-  const guaranteePillarStatus: PolicyPillarStatus = guaranteePillarScore >= 8
-    ? "Forte"
-    : guaranteePillarScore >= 6
-      ? "Adequado"
-      : guaranteePillarScore >= 4
-        ? "Atenção"
-        : guaranteePillarScore >= 1
-          ? "Crítico"
-          : "Informações insuficientes";
-  const guaranteeCoveragePercent = Math.max(0, Math.round(guaranteeCoverageRatio * 100));
-  const guaranteeCoverageHelperText = !hasCofaceImported || technicalCoverageValue === null || technicalCoverageValue <= 0 || guaranteeRequestedLimit <= 0
-    ? "Sem cobertura estruturada disponível."
-    : `Cobertura COFACE equivalente a ${guaranteeCoveragePercent}% do limite solicitado.`;
-  const marketPillarScore = 0;
-  const marketPillarStatus: PolicyPillarStatus = "Informações insuficientes";
-  const agriskRestrictiveScoresRaw = [
-    agriskImport.agriskReadPayload?.credit?.score ?? null,
-    ...(agriskImport.agriskReadPayload?.credit?.secondary_scores ?? []).map((item) => item.score ?? null)
-  ]
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
-  const agriskRestrictiveScoresNormalized = agriskRestrictiveScoresRaw.map((score) => normalizeAgriskScoreToTenScale(score));
-  const paymentPillarScore = agriskRestrictiveScoresNormalized.length === 0
-    ? 0
-    : agriskRestrictiveScoresNormalized.reduce((acc, score) => acc + score, 0) / agriskRestrictiveScoresNormalized.length;
-  const paymentPillarStatus: PolicyPillarStatus = paymentPillarScore >= 8
-    ? "Forte"
-    : paymentPillarScore >= 6
-      ? "Adequado"
-      : paymentPillarScore >= 4
-        ? "Atenção"
-        : paymentPillarScore >= 1
-          ? "Crítico"
-          : "Informações insuficientes";
-  const paymentPillarHelperText = agriskRestrictiveScoresNormalized.length === 0
-    ? "Sem scores restritivos AGRISK disponíveis."
-    : `Média dos scores restritivos AGRISK disponíveis: ${paymentPillarScore.toFixed(1)}/10.`;
-  const relationshipHasInternalBase = hasInternalDataAvailable;
-  const relationshipExposure = technicalExposureValue > 0 ? technicalExposureValue : 0;
-  const relationshipOverdue = technicalOverdueValue !== null && technicalOverdueValue > 0 ? technicalOverdueValue : 0;
-  const relationshipHasActiveExposure = relationshipExposure > 0;
-  const relationshipOverdueRatio = relationshipHasActiveExposure ? relationshipOverdue / relationshipExposure : 0;
-  const relationshipPillarScore = !relationshipHasInternalBase
-    ? 0
-    : !relationshipHasActiveExposure
-      ? 6
-      : relationshipOverdue <= 0
-        ? 10
-        : relationshipOverdueRatio <= 0.05
-          ? 7.5
-          : 5;
-  const relationshipPillarStatus: PolicyPillarStatus = relationshipPillarScore >= 8
-    ? "Forte"
-    : relationshipPillarScore >= 6
-      ? "Adequado"
-      : relationshipPillarScore >= 4
-        ? "Atenção"
-        : relationshipPillarScore >= 1
-          ? "Crítico"
-          : "Informações insuficientes";
-  const relationshipPillarHelperText = !relationshipHasInternalBase
-    ? "Cliente novo, sem histórico interno de relacionamento."
-    : !relationshipHasActiveExposure
-      ? "Cliente na base interna, sem exposição atual."
-      : relationshipOverdue <= 0
-        ? "Cliente com relacionamento ativo na carteira e sem overdue relevante."
-        : relationshipOverdueRatio <= 0.05
-          ? "Cliente com overdue interno moderado."
-          : "Cliente com overdue interno relevante.";
-  const policyPillars: PolicyPillar[] = [
-    {
-      key: "financial_liquidity",
-      title: "Estabilidade Financeira e Liquidez",
-      weight: 55,
-      score: financialPillarScore,
-      status: financialPillarStatus,
-      summary: financialPillarSummary,
-      sources: ["Documentação financeira", "Agrisk"],
-      criteria: financialPillarCriteria,
-      explanation: financialPillarExplanation,
-      tooltip: {
-        title: "Estabilidade Financeira e Liquidez",
-        description: "Avalia a robustez financeira por demonstrações financeiras, liquidez, endividamento e geração de caixa.",
-        source: financialPillarSource,
-        note: financialPillarNote,
-        weightLabel: "Peso do Pilar: 55%"
-      }
-    },
-    {
-      key: "guarantees",
-      title: "Garantias / Seguro de Crédito",
-      weight: 20,
-      score: guaranteePillarScore,
-      status: guaranteePillarStatus,
-      summary: guaranteeCoverageHelperText,
-      sources: ["COFACE", "Mesa de análise"],
-      criteria: [
-        guaranteeRequestedLimit > 0 ? `Limite solicitado: ${formatCurrencyBRL(String(guaranteeRequestedLimit))}` : "Limite solicitado indisponível",
-        technicalCoverageValue !== null ? `Cobertura segurada: ${formatCurrencyBRL(String(technicalCoverageValue))}` : "Cobertura segurada não disponível",
-        `Índice de cobertura: ${guaranteeCoveragePercent}%`
-      ],
-      explanation: "A nota é calculada por (Cobertura COFACE / Limite Solicitado) × 10, com limite máximo de 10.0.",
-      tooltip: {
-        title: "Garantias / Seguro de Crédito",
-        description: "Avalia o nível de mitigação do risco da operação por cobertura COFACE, exposição líquida não coberta e garantias estruturadas.",
-        source: "COFACE, Carteira Corporativa e Complemento Manual.",
-        note: "A nota atual reflete diretamente o percentual coberto da solicitação comercial original.",
-        weightLabel: "Peso do Pilar: 20%"
-      }
-    },
-    {
-      key: "market_conditions",
-      title: "Condições de Mercado",
-      weight: 15,
-      score: marketPillarScore,
-      status: marketPillarStatus,
-      summary: "Metodologia de condições de mercado em evolução no modelo atual.",
-      sources: ["Agrisk", "Dados externos existentes"],
-      criteria: [
-        "Pilar preservado institucionalmente no motor de score",
-        "Metodologia ativa ainda em evolução"
-      ],
-      explanation: "O pilar permanece visível conforme política oficial, porém sem metodologia robusta ativa nesta fase.",
-      tooltip: {
-        title: "Condições de Mercado",
-        description: "Avalia fatores externos relacionados ao ambiente de atuação do cliente, como setor, mercado e condições macroeconômicas.",
-        source: "Dados externos e sinais de mercado disponíveis.",
-        note: "Metodologia em evolução no modelo atual.",
-        weightLabel: "Peso do Pilar: 15%"
-      }
-    },
-    {
-      key: "payment_history",
-      title: "Histórico de Pagamento",
-      weight: 5,
-      score: paymentPillarScore,
-      status: paymentPillarStatus,
-      summary: paymentPillarHelperText,
-      sources: ["AGRISK"],
-      criteria: [
-        `Scores restritivos considerados: ${agriskRestrictiveScoresNormalized.length}`,
-        agriskRestrictiveScoresNormalized.length > 0
-          ? `Média em escala 0-10: ${paymentPillarScore.toFixed(1)}`
-          : "Sem scores restritivos disponíveis no relatório"
-      ],
-      explanation: "A nota considera média simples dos scores restritivos AGRISK disponíveis, convertidos para escala 0-10.",
-      tooltip: {
-        title: "Histórico de Pagamento",
-        description: "Avalia o comportamento de crédito do cliente com base nos scores restritivos disponíveis no relatório AGRISK.",
-        source: "AGRISK — QUOD, Boa Vista e scores restritivos disponíveis.",
-        note: "Sem scores disponíveis, a nota do pilar permanece 0.0/10.",
-        weightLabel: "Peso do Pilar: 5%"
-      }
-    },
-    {
-      key: "relationship_history",
-      title: "Histórico de Relacionamento",
-      weight: 5,
-      score: relationshipPillarScore,
-      status: relationshipPillarStatus,
-      summary: relationshipPillarHelperText,
-      sources: ["Histórico interno", "Carteira interna"],
-      criteria: [
-        relationshipHasInternalBase ? "Cliente localizado na base interna" : "Cliente sem histórico interno consolidado",
-        relationshipHasActiveExposure ? `Exposição interna ativa: ${formatCurrencyBRL(String(relationshipExposure))}` : "Sem exposição interna ativa",
-        relationshipHasActiveExposure ? `Overdue interno: ${formatCurrencyBRL(String(relationshipOverdue))}` : "Overdue não aplicável sem exposição ativa"
-      ],
-      explanation: "A nota segue regra objetiva por presença em base interna, exposição ativa e proporção de overdue interno sobre a exposição.",
-      tooltip: {
-        title: "Histórico de Relacionamento",
-        description: "Avalia o relacionamento interno do cliente com a empresa, considerando presença na carteira corporativa, exposição atual e comportamento de pagamento interno.",
-        source: "Carteira Corporativa / AR Aging.",
-        note: "Regra objetiva aplicada com base em presença na carteira, exposição e overdue interno.",
-        weightLabel: "Peso do Pilar: 5%"
-      }
-    }
-  ];
+  const scorePillarsContract = workspaceDetailQuery.data?.score?.score_pillars ?? null;
+  const scorePillarsUnavailableReason = !hasValidActiveAnalysisId
+    ? "Não foi possível carregar a análise. Identificador da análise ausente."
+    : scorePillarsContract && !scorePillarsContract.available
+      ? scorePillarsContract.reason ?? "Score por pilares indisponível para esta análise."
+      : null;
+  const backendFinalScore = toNullableNumeric(workspaceDetailQuery.data?.score?.final_score);
+  const institutionalScore = scorePillarsContract?.available && backendFinalScore !== null
+    ? Math.max(0, Math.min(10, backendFinalScore / 100))
+    : null;
+  const policyPillars: PolicyPillar[] = scorePillarsContract?.available
+    ? SCORE_PILLAR_DEFINITIONS.map((definition) => {
+      const item = findScorePillarItem(scorePillarsContract, definition);
+      const score = toNullableNumeric(item?.score);
+      const weight = toNullableNumeric(item?.weight_percent) ?? definition.weight;
+      const reason = reasonFromScorePillarItem(item);
+      const warnings = (item?.warnings ?? [])
+        .map((warning) => {
+          if (typeof warning === "string") return warning;
+          try {
+            return JSON.stringify(warning) ?? String(warning);
+          } catch {
+            return String(warning);
+          }
+        })
+        .filter((warning) => warning.trim().length > 0);
+      return {
+        key: definition.key,
+        title: item?.name ?? definition.title,
+        weight,
+        score,
+        status: statusFromScorePillarItem(item, score),
+        summary: reason,
+        sources: [sourceLabelFromScorePillarItem(item)],
+        criteria: warnings.length > 0 ? warnings : [reason],
+        explanation: reason,
+        tooltip: {
+          title: item?.name ?? definition.title,
+          description: definition.description,
+          source: sourceLabelFromScorePillarItem(item),
+          note: score !== null ? `Score calculado pelo backend: ${score.toFixed(1)}/10.` : reason,
+          weightLabel: `Peso do Pilar: ${weight}%`
+        }
+      };
+    })
+    : [];
+  const guaranteeCoverageHelperText = policyPillars.find((pillar) => pillar.key === "guarantees")?.summary ?? "Pilar indisponível no contrato oficial do backend.";
+  const paymentPillarHelperText = policyPillars.find((pillar) => pillar.key === "payment_history")?.summary ?? "Pilar indisponível no contrato oficial do backend.";
+  const relationshipPillarHelperText = policyPillars.find((pillar) => pillar.key === "relationship_history")?.summary ?? "Pilar indisponível no contrato oficial do backend.";
   const institutionalScoreBreakdown: InstitutionalScoreBreakdownItem[] = policyPillars
-    .filter((pillar): pillar is PolicyPillar & { score: number } => pillar.score !== null)
     .map((pillar) => ({
       key: pillar.key,
       title: pillar.title,
       weight: pillar.weight,
       score: pillar.score,
-      weighted: pillar.score * pillar.weight,
+      weighted: pillar.score !== null ? toNullableNumeric(findScorePillarItem(scorePillarsContract, {
+        code: SCORE_PILLAR_DEFINITIONS.find((definition) => definition.key === pillar.key)?.code ?? pillar.key,
+        aliases: SCORE_PILLAR_DEFINITIONS.find((definition) => definition.key === pillar.key)?.aliases ?? [],
+        key: pillar.key,
+        title: pillar.title,
+        weight: pillar.weight,
+        description: pillar.tooltip.description,
+      })?.weighted_score) ?? pillar.score * pillar.weight : null,
       tooltip: pillar.tooltip
     }));
-  const institutionalTotalWeight = policyPillars.reduce((acc, pillar) => acc + pillar.weight, 0);
-  const hasInstitutionalScoreData = institutionalScoreBreakdown.length === policyPillars.length;
-  const institutionalScore = hasInstitutionalScoreData
-    ? institutionalTotalWeight > 0
-      ? institutionalScoreBreakdown.reduce((acc, item) => acc + item.weighted, 0) / institutionalTotalWeight
-      : null
-    : null;
   const institutionalRiskBand = institutionalScore !== null ? toScoreBand(institutionalScore) : "Informações insuficientes";
   const executiveScoreBand = institutionalRiskBand.toUpperCase();
   const institutionalBandVisual = getScoreBandVisualTokens(institutionalRiskBand);
@@ -2773,13 +2783,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           : institutionalScore >= 4
             ? "Leitura consolidada em atenção, com necessidade de reforço técnico."
             : "Avaliação preliminar crítica, com riscos relevantes na estrutura atual.";
-  const preliminaryRecommendedLimit = (() => {
-    if (institutionalScore === null || technicalRequestedLimit <= 0) return null;
-    const scoreFactor = institutionalScore >= 9 ? 1 : institutionalScore >= 8 ? 0.95 : institutionalScore >= 6 ? 0.8 : institutionalScore >= 4 ? 0.6 : 0.4;
-    const baseByScore = technicalRequestedLimit * scoreFactor;
-    const baseByCoverage = technicalCoverageValue !== null ? Math.min(baseByScore, technicalCoverageValue) : baseByScore * 0.7;
-    return Math.max(0, baseByCoverage);
-  })();
   const backendRecommendationClassification = (() => {
     const decisionMemory = workspaceDetailQuery.data?.analysis?.decision_memory_json;
     if (!decisionMemory || typeof decisionMemory !== "object") return null;
@@ -2792,16 +2795,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? Math.max(parsed, 0) : null;
   })();
-  const executiveCofaceCeilingApplied =
-    preliminaryRecommendedLimit !== null &&
-    technicalCoverageValue !== null &&
-    preliminaryRecommendedLimit > technicalCoverageValue;
-  const executiveDisplayedRecommendedLimit =
-    backendFinalSuggestedLimit !== null
-      ? backendFinalSuggestedLimit
-      : preliminaryRecommendedLimit === null
-        ? (technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : null)
-        : (technicalCoverageValue !== null ? Math.min(preliminaryRecommendedLimit, technicalCoverageValue) : preliminaryRecommendedLimit);
+  const executiveCofaceCeilingApplied = false;
+  const executiveDisplayedRecommendedLimit = backendFinalSuggestedLimit;
   const executiveCoverageAvailable = technicalCoverageValue !== null ? Math.max(technicalCoverageValue, 0) : 0;
   const executiveNetInternalExposure = executiveDisplayedRecommendedLimit !== null
     ? Math.max(executiveDisplayedRecommendedLimit - executiveCoverageAvailable, 0)
@@ -2815,11 +2810,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const dossierApprovalActions = Array.from(new Set([...(workspaceDetailQuery.data?.analysis?.available_actions ?? []), ...(approvalFlowSummary?.available_actions ?? [])]));
   const executiveExposureFullyCovered = executiveNetInternalExposure !== null && executiveNetInternalExposure === 0;
   const executiveExposureHasResidual = executiveNetInternalExposure !== null && executiveNetInternalExposure > 0;
-  const executiveInternalSuggestedLimit = (() => {
-    if (institutionalScore === null || technicalRequestedLimit <= 0) return null;
-    const scoreFactor = institutionalScore >= 9 ? 1 : institutionalScore >= 8 ? 0.95 : institutionalScore >= 6 ? 0.8 : institutionalScore >= 4 ? 0.6 : 0.4;
-    return Math.max(0, technicalRequestedLimit * scoreFactor);
-  })();
+  const executiveInternalSuggestedLimit = backendFinalSuggestedLimit;
   const recommendationClassification = backendRecommendationClassification;
   const step4RecommendationClassification = hasCanonicalTechnicalDecision ? recommendationClassification : null;
   const step4DisplayedRecommendedLimit = hasCanonicalTechnicalDecision ? executiveDisplayedRecommendedLimit : null;
@@ -3111,7 +3102,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
       return;
     }
-    const resolvedAnalysisId = await ensureStep1Workspace();
+    const resolvedAnalysisId = ensureStep1Workspace("A consulta do CNPJ ainda não preparou a solicitação para anexar documentos.");
     if (!resolvedAnalysisId) return;
     setDocumentUploadFeedback(null);
     await uploadStep1DocumentMutation.mutateAsync({ analysisId: resolvedAnalysisId, documentType, file });
@@ -3126,7 +3117,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setDocumentUploadFeedback({ type: "error", message: "Arquivo inválido ou ausente." });
       return;
     }
-    const resolvedAnalysisId = await ensureStep1Workspace();
+    const resolvedAnalysisId = ensureStep1Workspace("A consulta do CNPJ ainda não preparou a solicitação para anexar documentos.");
     if (!resolvedAnalysisId) return;
     setDocumentUploadFeedback(null);
     for (const file of files) {
@@ -3143,10 +3134,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   function handleAddCommercialReference() {
     if (isStep1ReadOnly) {
       setCommercialReferenceForm((prev) => ({ ...prev, error: "Esta solicitação já foi submetida para análise e não pode ser alterada nesta etapa." }));
-      return;
-    }
-    if (!hasStep1Workspace) {
-      setCommercialReferenceForm((prev) => ({ ...prev, error: "Clique em Avançar para criar a solicitação antes de incluir referências." }));
       return;
     }
     const name = commercialReferenceForm.name.trim();
@@ -3166,8 +3153,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       return;
     }
 
+    if (!hasStep1Workspace || !activeAnalysisId) {
+      setCommercialReferenceForm((prev) => ({ ...prev, error: "A consulta do CNPJ ainda não preparou a solicitação para incluir referências." }));
+      return;
+    }
+
+    const resolvedAnalysisId = activeAnalysisId;
+
     createCommercialReferenceMutation.mutate(
-      { name, phone: phone || null, email: email || null },
+      {
+        analysisId: resolvedAnalysisId,
+        payload: { name, phone: phone || null, email: email || null }
+      },
       {
         onSuccess: () => {
           setCommercialReferenceForm({ name: "", phone: "", email: "", error: "" });
@@ -4581,6 +4578,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               <InstitutionalScoreCard
                 score={institutionalScore}
                 breakdown={institutionalScoreBreakdown}
+                unavailableReason={scorePillarsUnavailableReason}
                 hasValidCofaceCoverage={hasValidCofaceCoverage}
                 guaranteeCoverageHelperText={guaranteeCoverageHelperText}
                 paymentPillarHelperText={paymentPillarHelperText}
@@ -4764,6 +4762,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               <InstitutionalScoreCard
                 score={institutionalScore}
                 breakdown={institutionalScoreBreakdown}
+                unavailableReason={scorePillarsUnavailableReason}
                 hasValidCofaceCoverage={hasValidCofaceCoverage}
                 guaranteeCoverageHelperText={guaranteeCoverageHelperText}
                 paymentPillarHelperText={paymentPillarHelperText}
@@ -5305,4 +5304,3 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     </section>
   );
 }
-

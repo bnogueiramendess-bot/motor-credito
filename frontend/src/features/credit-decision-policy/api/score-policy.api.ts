@@ -59,6 +59,34 @@ export type ScorePillarDto = {
   indicators_count: number;
 };
 
+export type PolicyMotorBindingDto = {
+  policy_id: number;
+  is_bound: boolean;
+  reason: string | null;
+  label: string;
+  published: boolean;
+  valid: boolean;
+  conflict: boolean;
+  selected_policy_id: number | null;
+  selected_policy_version: number | null;
+  publication_event: {
+    audit_log_id?: number | string | null;
+    action?: string | null;
+    resource?: string | null;
+    resource_id?: string | null;
+    created_at?: string | null;
+    actor_user_id?: number | null;
+    request_id?: number | string | null;
+    policy_id?: number | null;
+    publication_status?: string | null;
+    published_at?: string | null;
+    published_by_user_id?: number | null;
+    governance_request_id?: number | string | null;
+    metadata_json?: Record<string, unknown>;
+  } | null;
+  candidates: Array<Record<string, unknown>>;
+};
+
 export type ScorePolicyDto = {
   id: number;
   code: string;
@@ -71,6 +99,11 @@ export type ScorePolicyDto = {
   created_at?: string;
   updated_at?: string;
   activated_at?: string | null;
+  publication_status?: string | null;
+  published_at?: string | null;
+  published_by_user_id?: number | null;
+  governance_request_id?: number | null;
+  motor_binding?: PolicyMotorBindingDto | null;
 };
 
 export type CreatePolicyVersionPayload = {
@@ -183,6 +216,7 @@ export type ScoreStructureDto = {
     simulation_persists_result: boolean;
     connected_to_official_engine: boolean;
     configurable_score_policy_enabled: boolean;
+    motor_binding?: PolicyMotorBindingDto | null;
   };
 };
 

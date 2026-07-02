@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -7,6 +7,8 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.services.effective_credit_policy import get_effective_credit_policy
 
 from app.models.audit_log import AuditLog
 from app.models.credit_analysis import CreditAnalysis
@@ -143,14 +145,15 @@ def _validate_config_json(config_json: dict[str, Any]) -> None:
 
 
 def get_active_credit_decision_policy(db: Session) -> CreditDecisionPolicy:
-    policy = db.scalar(
-        select(CreditDecisionPolicy)
-        .where(CreditDecisionPolicy.status == "active")
-        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
-    )
-    if policy is None:
+    resolution = get_effective_credit_policy(db)
+    if resolution.conflict:
+        ids = ", ".join(str(item["policy_id"]) for item in resolution.candidates)
+        raise CreditDecisionPolicyNotFoundError(
+            f"Conflito de politicas ativas/vigentes: {ids}."
+        )
+    if resolution.policy is None:
         raise CreditDecisionPolicyNotFoundError("No active credit decision policy found.")
-    return policy
+    return resolution.policy
 
 
 def list_credit_decision_policies(db: Session) -> list[CreditDecisionPolicy]:
@@ -561,11 +564,11 @@ def _has_analysis_policy_snapshot(db: Session, policy_id: int) -> bool:
 def delete_credit_decision_policy_draft(db: Session, policy_id: int, current_user: User) -> None:
     target = get_credit_decision_policy(db, policy_id)
     if target.status != "draft":
-        raise CreditDecisionPolicyValidationError("Somente versões em rascunho podem ser excluídas.")
+        raise CreditDecisionPolicyValidationError("Somente versÃµes em rascunho podem ser excluÃ­das.")
     if _has_governance_request_for_policy(db, target.id):
-        raise CreditDecisionPolicyValidationError("Não é possível excluir rascunho com solicitação de governança em andamento.")
+        raise CreditDecisionPolicyValidationError("NÃ£o Ã© possÃ­vel excluir rascunho com solicitaÃ§Ã£o de governanÃ§a em andamento.")
     if _has_analysis_policy_snapshot(db, target.id):
-        raise CreditDecisionPolicyValidationError("Não é possível excluir rascunho utilizado por snapshot de análise.")
+        raise CreditDecisionPolicyValidationError("NÃ£o Ã© possÃ­vel excluir rascunho utilizado por snapshot de anÃ¡lise.")
 
     db.add(
         AuditLog(
@@ -585,14 +588,89 @@ def delete_credit_decision_policy_draft(db: Session, policy_id: int, current_use
     db.flush()
 
 
+
+
+def _archive_dev_versioning_policy_conflicts(db: Session) -> None:
+    now = datetime.now(timezone.utc)
+    dev_policies = list(
+        db.scalars(
+            select(CreditDecisionPolicy).where(
+                CreditDecisionPolicy.status == "active",
+                CreditDecisionPolicy.publication_status == "UNPUBLISHED",
+                CreditDecisionPolicy.code.like("versioning_%"),
+            )
+        ).all()
+    )
+    for policy in dev_policies:
+        policy.status = "archived"
+        policy.effective_to = policy.effective_to or now
+
+def _ensure_seed_policy_governed_publication(db: Session, policy: CreditDecisionPolicy) -> None:
+    if policy.code != "coface_first" or policy.status != "active" or policy.effective_to is not None:
+        return
+    if getattr(policy, "publication_status", "UNPUBLISHED") == "PUBLISHED":
+        return
+
+    from app.models.credit_decision_policy_governance_request_approval import (
+        CreditDecisionPolicyGovernanceRequestApproval,
+    )
+    from app.models.workflow_role import WorkflowRole
+    from app.services.credit_decision_policy_publication import execute_policy_publication
+
+    seed_user = db.scalar(select(User).where(User.is_active.is_(True)).order_by(User.id.asc()))
+    if seed_user is None:
+        return
+    approver_role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == "HEAD_FINANCE", WorkflowRole.is_active.is_(True)))
+    if approver_role is None:
+        return
+
+    request = None
+    if policy.governance_request_id is not None:
+        request = db.get(CreditDecisionPolicyGovernanceRequest, policy.governance_request_id)
+    if request is None or request.action_type != "policy_publish" or request.status != "approved":
+        request = CreditDecisionPolicyGovernanceRequest(
+            company_id=seed_user.company_id,
+            policy_id=policy.id,
+            action_type="policy_publish",
+            approval_item_type="CREDIT_POLICY",
+            requested_by_user_id=seed_user.id,
+            status="approved",
+            justification="Publicacao governada automatica da politica seed em ambiente dev.",
+            metadata_json={"source": "credit_decision_policy_seed", "dev_publication": True},
+            approved_at=datetime.now(timezone.utc),
+        )
+        db.add(request)
+        db.flush()
+        db.add(
+            CreditDecisionPolicyGovernanceRequestApproval(
+                request_id=request.id,
+                workflow_role_id=approver_role.id,
+                approved_by_user_id=seed_user.id,
+                decision="approved",
+                justification="Aprovacao seed/dev para politica padrao.",
+                decided_at=datetime.now(timezone.utc),
+            )
+        )
+        db.flush()
+
+    execute_policy_publication(
+        db,
+        company_id=seed_user.company_id,
+        policy_id=policy.id,
+        request_id=request.id,
+        current_user=seed_user,
+    )
+
 def ensure_active_credit_decision_policy_seed(db: Session) -> CreditDecisionPolicy:
+    _archive_dev_versioning_policy_conflicts(db)
     active = db.scalar(
         select(CreditDecisionPolicy)
-        .where(CreditDecisionPolicy.status == "active")
+        .where(CreditDecisionPolicy.code == "coface_first", CreditDecisionPolicy.status == "active")
         .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
     )
     if active is not None:
         ensure_default_score_structure(db, active)
+        _ensure_seed_policy_governed_publication(db, active)
         return active
 
     policy = CreditDecisionPolicy(
@@ -608,4 +686,8 @@ def ensure_active_credit_decision_policy_seed(db: Session) -> CreditDecisionPoli
     db.add(policy)
     db.flush()
     ensure_default_score_structure(db, policy)
+    _ensure_seed_policy_governed_publication(db, policy)
     return policy
+
+
+

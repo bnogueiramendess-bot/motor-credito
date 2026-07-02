@@ -6,15 +6,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.models.audit_log import AuditLog
 from app.models.credit_analysis import CreditAnalysis
 from app.models.credit_decision_policy import CreditDecisionPolicy
-from app.models.credit_decision_policy_governance_request import CreditDecisionPolicyGovernanceRequest
 from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.enums import ScoreBand
 from app.models.external_data_entry import ExternalDataEntry
 from app.models.score_result import ScoreResult
+from app.models.user import User
 from app.services.credit_decision_policy_score_structure import (
     PLANNED_NO_EFFECT_PILLARS,
     get_score_structure,
@@ -29,12 +27,24 @@ from app.services.credit_policy import (
     build_runtime_policy_from_entity,
     ensure_active_policy,
 )
+from app.services.effective_credit_policy import (
+    CONFIGURABLE_EFFECTIVE_WEIGHT,
+    get_effective_credit_policy,
+    has_pending_publication_or_archive_request,
+    is_policy_published,
+    publication_state_diagnostics,
+)
 
 logger = logging.getLogger(__name__)
-CONFIGURABLE_EFFECTIVE_WEIGHT = Decimal("85")
 CONFIGURABLE_SCORE_SOURCE = "configurable_policy"
 LEGACY_SCORE_SOURCE = "legacy_policy"
 POLICY_SNAPSHOT_KEY = "policy_snapshot"
+BLOCKING_CONFIGURABLE_POLICY_REASONS = {
+    "active_effective_policy_conflict",
+    "active_policy_without_governed_publication",
+    "policy_not_activated",
+    "policy_has_pending_governance_request",
+}
 
 
 class ScoreCalculationError(Exception):
@@ -42,11 +52,43 @@ class ScoreCalculationError(Exception):
 
 
 class ConfigurableScorePolicyUnavailable(ScoreCalculationError):
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, details: dict[str, Any] | None = None):
         super().__init__(reason)
         self.reason = reason
+        self.details = details or {}
 
 
+def _policy_unavailable_message(reason: str, details: dict[str, Any] | None = None) -> str:
+    labels = {
+        "active_effective_policy_conflict": "Conflito de politicas ativas/vigentes: existe mais de uma politica elegivel para a data da analise.",
+        "active_policy_without_governed_publication": "Politica ativa encontrada, mas ainda nao publicada via governanca.",
+        "policy_not_activated": "Politica ativa sem data de ativacao/publicacao.",
+        "policy_has_pending_governance_request": "Politica ativa possui solicitacao de publicacao ou arquivamento pendente.",
+        "policy_not_found": "Nenhuma politica configuravel ativa/vigente encontrada.",
+        "policy_not_operationally_configured": "Politica configuravel ativa nao esta operacionalmente configurada.",
+        "invalid_effective_weight": "Politica configuravel ativa possui peso efetivo invalido.",
+        "pillar_three_must_remain_planned": "Politica configuravel invalida: o pilar de condicoes de mercado deve permanecer planejado e sem efeito.",
+    }
+    if reason == "active_policy_without_governed_publication" and details:
+        return (
+            f"Politica id={details.get('policy_id')} status={details.get('status')}, "
+            f"mas publication_status={details.get('publication_status')}."
+        )
+    return labels.get(reason, reason)
+
+
+
+def _resolve_analysis_company_id(db: Session, analysis: CreditAnalysis | None, explicit_company_id: int | None = None) -> int | None:
+    if explicit_company_id is not None:
+        return explicit_company_id
+    if analysis is None:
+        return None
+    owner_user_id = getattr(analysis, "current_owner_user_id", None)
+    if owner_user_id is not None:
+        owner = db.get(User, owner_user_id)
+        if owner is not None:
+            return owner.company_id
+    return None
 def _json_safe_datetime(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -56,6 +98,12 @@ def _get_policy_snapshot(analysis: CreditAnalysis | None) -> dict[str, Any] | No
         return None
     snapshot = analysis.decision_memory_json.get(POLICY_SNAPSHOT_KEY)
     return snapshot if isinstance(snapshot, dict) else None
+
+
+def _set_policy_snapshot(analysis: CreditAnalysis, snapshot: dict[str, Any]) -> None:
+    memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+    memory[POLICY_SNAPSHOT_KEY] = snapshot
+    analysis.decision_memory_json = memory
 
 
 def _build_legacy_policy_snapshot(
@@ -88,11 +136,34 @@ def _build_configurable_policy_snapshot(
         "policy_code": policy.code,
         "policy_name": policy.name,
         "policy_version": policy.version,
+        "policy_status": getattr(policy, "status", None),
         "captured_at": captured_at.isoformat(),
-        "published_at": _json_safe_datetime(policy.activated_at),
+        "published_at": _json_safe_datetime(getattr(policy, "published_at", None)),
+        "publication_status": getattr(policy, "publication_status", "UNPUBLISHED"),
+        "governance_request_id": getattr(policy, "governance_request_id", None),
+        "effective_from": _json_safe_datetime(getattr(policy, "effective_from", None)),
+        "effective_to": _json_safe_datetime(getattr(policy, "effective_to", None)),
         "effective_weight": int(CONFIGURABLE_EFFECTIVE_WEIGHT),
+        "valid": True,
         "fallback_used": False,
         "fallback_reason": None,
+    }
+
+
+def _build_blocked_configurable_policy_snapshot(
+    *,
+    captured_at: datetime,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "engine": CONFIGURABLE_SCORE_SOURCE,
+        "policy_id": None,
+        "policy_version": None,
+        "captured_at": captured_at.isoformat(),
+        "valid": False,
+        "blocked": True,
+        "fallback_used": False,
+        "fallback_reason": reason,
     }
 
 
@@ -107,23 +178,37 @@ def capture_analysis_policy_snapshot(
         return existing
 
     captured_at = captured_at or datetime.now(timezone.utc)
-    if settings.configurable_score_policy_enabled:
-        try:
-            policy = _load_active_configurable_policy(db)
-            _validate_configurable_policy_ready(db, policy)
-            snapshot = _build_configurable_policy_snapshot(policy, captured_at=captured_at)
-        except Exception as exc:
-            reason = exc.reason if isinstance(exc, ConfigurableScorePolicyUnavailable) else exc.__class__.__name__
-            legacy_policy = ensure_active_policy(db)
-            snapshot = _build_legacy_policy_snapshot(
-                legacy_policy,
-                captured_at=captured_at,
-                fallback_used=True,
-                fallback_reason=reason,
-            )
-    else:
+    try:
+        company_id = _resolve_analysis_company_id(db, analysis)
+        policy = _load_active_configurable_policy(
+            db, analysis_date=getattr(analysis, "created_at", None) or captured_at, company_id=company_id
+        )
+        _validate_configurable_policy_ready(db, policy, company_id=company_id)
+        snapshot = _build_configurable_policy_snapshot(policy, captured_at=captured_at)
+    except ConfigurableScorePolicyUnavailable as exc:
+        if exc.reason in BLOCKING_CONFIGURABLE_POLICY_REASONS:
+            snapshot = _build_blocked_configurable_policy_snapshot(captured_at=captured_at, reason=exc.reason)
+            memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+            memory[POLICY_SNAPSHOT_KEY] = snapshot
+            analysis.decision_memory_json = memory
+            return snapshot
+        reason = exc.reason
         legacy_policy = ensure_active_policy(db)
-        snapshot = _build_legacy_policy_snapshot(legacy_policy, captured_at=captured_at)
+        snapshot = _build_legacy_policy_snapshot(
+            legacy_policy,
+            captured_at=captured_at,
+            fallback_used=True,
+            fallback_reason=reason,
+        )
+    except Exception as exc:
+        reason = exc.reason if isinstance(exc, ConfigurableScorePolicyUnavailable) else exc.__class__.__name__
+        legacy_policy = ensure_active_policy(db)
+        snapshot = _build_legacy_policy_snapshot(
+            legacy_policy,
+            captured_at=captured_at,
+            fallback_used=True,
+            fallback_reason=reason,
+        )
 
     memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
     memory[POLICY_SNAPSHOT_KEY] = snapshot
@@ -210,9 +295,9 @@ def _resolve_score_band_with_explanations(
                 impact_points=0,
                 impact_type="score_band_threshold",
                 reason=(
-                    f"Score {score} atende o mínimo da faixa {band.value}."
+                    f"Score {score} atende o mÃ­nimo da faixa {band.value}."
                     if min_ok
-                    else f"Score {score} não atinge o mínimo da faixa {band.value}."
+                    else f"Score {score} nÃ£o atinge o mÃ­nimo da faixa {band.value}."
                 ),
             )
         )
@@ -225,9 +310,9 @@ def _resolve_score_band_with_explanations(
                 impact_points=0,
                 impact_type="score_band_threshold",
                 reason=(
-                    f"Score {score} atende o máximo da faixa {band.value}."
+                    f"Score {score} atende o mÃ¡ximo da faixa {band.value}."
                     if max_ok
-                    else f"Score {score} excede o máximo da faixa {band.value}."
+                    else f"Score {score} excede o mÃ¡ximo da faixa {band.value}."
                 ),
             )
         )
@@ -294,7 +379,7 @@ def _calculate_and_upsert_legacy_score(
             matched=True,
             impact_points=0,
             impact_type="score_base",
-            reason="Pontuação base da política aplicada.",
+            reason="PontuaÃ§Ã£o base da polÃ­tica aplicada.",
         )
     )
 
@@ -309,7 +394,7 @@ def _calculate_and_upsert_legacy_score(
             score,
             restrictions_impact,
             "has_restrictions",
-            "Restrições ativas identificadas",
+            "RestriÃ§Ãµes ativas identificadas",
         )
     rules_explanation.append(
         _rule_explanation_item(
@@ -320,9 +405,9 @@ def _calculate_and_upsert_legacy_score(
             impact_points=restrictions_impact,
             impact_type="score_penalty",
             reason=(
-                "Sem restrições ativas, sem penalidade."
+                "Sem restriÃ§Ãµes ativas, sem penalidade."
                 if restrictions_matched
-                else "Restrições ativas encontradas, penalidade aplicada."
+                else "RestriÃ§Ãµes ativas encontradas, penalidade aplicada."
             ),
         )
     )
@@ -367,7 +452,7 @@ def _calculate_and_upsert_legacy_score(
             score,
             lawsuits_impact,
             "lawsuits_count",
-            f"{source_entry.lawsuits_count} ação(ões) judicial(is) encontrada(s)",
+            f"{source_entry.lawsuits_count} aÃ§Ã£o(Ãµes) judicial(is) encontrada(s)",
         )
     rules_explanation.append(
         _rule_explanation_item(
@@ -378,9 +463,9 @@ def _calculate_and_upsert_legacy_score(
             impact_points=lawsuits_impact,
             impact_type="score_penalty",
             reason=(
-                "Sem ações judiciais, sem penalidade."
+                "Sem aÃ§Ãµes judiciais, sem penalidade."
                 if lawsuits_matched
-                else "Ações judiciais encontradas, penalidade proporcional aplicada."
+                else "AÃ§Ãµes judiciais encontradas, penalidade proporcional aplicada."
             ),
         )
     )
@@ -442,7 +527,7 @@ def _calculate_and_upsert_legacy_score(
                     score,
                     impact,
                     "debt_ratio",
-                    f"Índice de endividamento {debt_ratio:.4f} acima de {penalty.threshold}",
+                    f"Ãndice de endividamento {debt_ratio:.4f} acima de {penalty.threshold}",
                 )
                 rules_explanation.append(
                     _rule_explanation_item(
@@ -452,7 +537,7 @@ def _calculate_and_upsert_legacy_score(
                         matched=False,
                         impact_points=impact,
                         impact_type="score_penalty",
-                        reason=f"Índice de endividamento acima do limite {penalty.threshold}, penalidade aplicada.",
+                        reason=f"Ãndice de endividamento acima do limite {penalty.threshold}, penalidade aplicada.",
                     )
                 )
                 break
@@ -465,7 +550,7 @@ def _calculate_and_upsert_legacy_score(
                     matched=matched,
                     impact_points=0,
                     impact_type="score_penalty",
-                    reason=f"Índice de endividamento dentro do limite {penalty.threshold}.",
+                    reason=f"Ãndice de endividamento dentro do limite {penalty.threshold}.",
                 )
             )
     else:
@@ -499,9 +584,9 @@ def _calculate_and_upsert_legacy_score(
             impact_points=final_score - pre_clamp_score if pre_clamp_score < policy.score.min_final_score else 0,
             impact_type="score_bound",
             reason=(
-                "Score respeitou o limite mínimo."
+                "Score respeitou o limite mÃ­nimo."
                 if min_matched
-                else f"Score ajustado para o mínimo permitido ({policy.score.min_final_score})."
+                else f"Score ajustado para o mÃ­nimo permitido ({policy.score.min_final_score})."
             ),
         )
     )
@@ -514,9 +599,9 @@ def _calculate_and_upsert_legacy_score(
             impact_points=final_score - pre_clamp_score if pre_clamp_score > policy.score.max_final_score else 0,
             impact_type="score_bound",
             reason=(
-                "Score respeitou o limite máximo."
+                "Score respeitou o limite mÃ¡ximo."
                 if max_matched
-                else f"Score ajustado para o máximo permitido ({policy.score.max_final_score})."
+                else f"Score ajustado para o mÃ¡ximo permitido ({policy.score.max_final_score})."
             ),
         )
     )
@@ -550,7 +635,7 @@ def _calculate_and_upsert_legacy_score(
         "fallback_reason": None,
         "summary": (
             f"Score final {final_score} na faixa {score_band.value}. "
-            f"Foram avaliadas {summary['evaluated_rules']} regras da política ativa."
+            f"Foram avaliadas {summary['evaluated_rules']} regras da polÃ­tica ativa."
         ),
         "explainability": {
             "policy": {
@@ -619,39 +704,19 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _has_pending_publication_or_archive_request(db: Session, policy_id: int) -> bool:
-    return db.scalar(
-        select(CreditDecisionPolicyGovernanceRequest.id)
-        .where(
-            CreditDecisionPolicyGovernanceRequest.policy_id == policy_id,
-            CreditDecisionPolicyGovernanceRequest.action_type.in_(["policy_publish", "policy_archive"]),
-            CreditDecisionPolicyGovernanceRequest.status == "pending",
+def _load_active_configurable_policy(
+    db: Session,
+    *,
+    analysis_date: datetime | None = None,
+    company_id: int | None = None,
+) -> CreditDecisionPolicy:
+    resolution = get_effective_credit_policy(db, company_id=company_id, analysis_date=analysis_date)
+    if resolution.conflict or resolution.policy is None:
+        raise ConfigurableScorePolicyUnavailable(
+            resolution.reason or "policy_not_found",
+            publication_state_diagnostics(resolution.policy, company_id=company_id),
         )
-        .limit(1)
-    ) is not None
-
-
-def _has_governed_publication(db: Session, policy_id: int) -> bool:
-    return db.scalar(
-        select(AuditLog.id)
-        .where(
-            AuditLog.action == "policy_publication_executed",
-            AuditLog.resource == "credit_decision_policy",
-            AuditLog.resource_id == str(policy_id),
-        )
-        .limit(1)
-    ) is not None
-
-
-def _load_active_configurable_policy(db: Session) -> CreditDecisionPolicy:
-    policy = db.scalar(
-        select(CreditDecisionPolicy)
-        .where(CreditDecisionPolicy.status == "active")
-        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
-    )
-    if policy is None:
-        raise ConfigurableScorePolicyUnavailable("policy_not_found")
-    return policy
+    return resolution.policy
 
 
 def _validate_configurable_policy_ready(
@@ -659,15 +724,19 @@ def _validate_configurable_policy_ready(
     policy: CreditDecisionPolicy,
     *,
     allow_inactive_snapshot: bool = False,
+    company_id: int | None = None,
 ) -> dict[str, Any]:
     if not allow_inactive_snapshot:
         if policy.status != "active":
             raise ConfigurableScorePolicyUnavailable("policy_not_active")
         if policy.activated_at is None:
-            raise ConfigurableScorePolicyUnavailable("policy_not_published")
-        if not _has_governed_publication(db, policy.id):
-            raise ConfigurableScorePolicyUnavailable("policy_not_published")
-        if _has_pending_publication_or_archive_request(db, policy.id):
+            raise ConfigurableScorePolicyUnavailable("policy_not_activated")
+        if not is_policy_published(policy):
+            raise ConfigurableScorePolicyUnavailable(
+                "active_policy_without_governed_publication",
+                publication_state_diagnostics(policy, company_id=company_id),
+            )
+        if has_pending_publication_or_archive_request(db, policy.id):
             raise ConfigurableScorePolicyUnavailable("policy_has_pending_governance_request")
 
     validation = validate_score_structure(db, policy.id)
@@ -697,18 +766,32 @@ def _validate_configurable_policy_ready(
 def _resolve_configurable_policy_for_analysis(
     db: Session,
     analysis: CreditAnalysis,
+    *,
+    company_id: int | None = None,
 ) -> tuple[CreditDecisionPolicy, dict[str, Any], dict[str, Any] | None]:
     snapshot = _get_policy_snapshot(analysis)
     if snapshot is not None and snapshot.get("engine") == CONFIGURABLE_SCORE_SOURCE:
+        if snapshot.get("blocked") is True or snapshot.get("valid") is False:
+            policy = _load_active_configurable_policy(
+                db, analysis_date=getattr(analysis, "created_at", None), company_id=company_id
+            )
+            structure = _validate_configurable_policy_ready(db, policy, company_id=company_id)
+            refreshed_snapshot = _build_configurable_policy_snapshot(policy, captured_at=datetime.now(timezone.utc))
+            _set_policy_snapshot(analysis, refreshed_snapshot)
+            return policy, structure, refreshed_snapshot
         policy_id = snapshot.get("policy_id")
         policy = db.get(CreditDecisionPolicy, policy_id) if policy_id is not None else None
         if policy is None:
             raise ConfigurableScorePolicyUnavailable("snapshot_policy_not_found")
-        structure = _validate_configurable_policy_ready(db, policy, allow_inactive_snapshot=True)
+        structure = _validate_configurable_policy_ready(db, policy, allow_inactive_snapshot=True, company_id=company_id)
         return policy, structure, snapshot
 
-    policy = _load_active_configurable_policy(db)
-    structure = _validate_configurable_policy_ready(db, policy)
+    policy = _load_active_configurable_policy(
+        db, analysis_date=getattr(analysis, "created_at", None), company_id=company_id
+    )
+    structure = _validate_configurable_policy_ready(db, policy, company_id=company_id)
+    snapshot = _build_configurable_policy_snapshot(policy, captured_at=datetime.now(timezone.utc))
+    _set_policy_snapshot(analysis, snapshot)
     return policy, structure, snapshot
 
 
@@ -743,7 +826,7 @@ def _calculate_configurable_pillar_results(
 
 
 def _calculate_and_upsert_configurable_score(
-    db: Session, analysis_id: int
+    db: Session, analysis_id: int, *, company_id: int | None = None
 ) -> tuple[ScoreResult, ExternalDataEntry, bool]:
     analysis = db.get(CreditAnalysis, analysis_id)
     if analysis is None:
@@ -757,7 +840,10 @@ def _calculate_and_upsert_configurable_score(
     if source_entry is None:
         raise ScoreCalculationError("No external data found for this analysis.")
 
-    policy, structure, policy_snapshot = _resolve_configurable_policy_for_analysis(db, analysis)
+    resolved_company_id = _resolve_analysis_company_id(db, analysis, company_id)
+    policy, structure, policy_snapshot = _resolve_configurable_policy_for_analysis(
+        db, analysis, company_id=resolved_company_id
+    )
     pillar_results = _calculate_configurable_pillar_results(db, policy=policy, analysis=analysis)
     safe_pillar_results = _json_safe(pillar_results)
     weighted_score = sum((_decimal_from_result(result, "weighted_score") for result in pillar_results), Decimal("0"))
@@ -789,8 +875,10 @@ def _calculate_and_upsert_configurable_score(
                 "policy_code": policy.code,
                 "policy_name": policy.name,
                 "policy_version": policy.version,
-                "policy_status": policy.status,
-                "published_at": policy.activated_at.isoformat() if policy.activated_at else None,
+                "policy_status": getattr(policy, "status", None),
+                "published_at": policy.published_at.isoformat() if getattr(policy, "published_at", None) else None,
+                "publication_status": getattr(policy, "publication_status", "UNPUBLISHED"),
+                "governance_request_id": getattr(policy, "governance_request_id", None),
             },
             "score_summary": {
                 "base_score": 0,
@@ -849,6 +937,72 @@ def _calculate_and_upsert_configurable_score(
     return score_result, source_entry, recalculated
 
 
+def _policy_payload_from_memory(memory: dict[str, Any]) -> dict[str, Any]:
+    explainability = memory.get("explainability") if isinstance(memory.get("explainability"), dict) else {}
+    policy = explainability.get("policy") if isinstance(explainability.get("policy"), dict) else {}
+    return policy if isinstance(policy, dict) else {}
+
+
+def _engine_trace_from_memory(memory: dict[str, Any]) -> dict[str, Any]:
+    trace = memory.get("engine_trace") if isinstance(memory.get("engine_trace"), dict) else {}
+    return trace if isinstance(trace, dict) else {}
+
+
+def build_score_pillars_contract(score_result: ScoreResult) -> dict[str, Any]:
+    memory = score_result.calculation_memory_json if isinstance(score_result.calculation_memory_json, dict) else {}
+    explainability = memory.get("explainability") if isinstance(memory.get("explainability"), dict) else {}
+    pillars = explainability.get("pillars_evaluated") if isinstance(explainability.get("pillars_evaluated"), list) else None
+    policy = _policy_payload_from_memory(memory)
+    trace = _engine_trace_from_memory(memory)
+    engine = str(memory.get("score_source") or trace.get("engine") or "unknown")
+
+    if not pillars:
+        fallback_reason = memory.get("fallback_reason") or trace.get("fallback_reason")
+        return {
+            "engine": engine,
+            "available": False,
+            "policy_id": policy.get("policy_id") or trace.get("policy_id") or memory.get("policy_id"),
+            "policy_code": policy.get("policy_code") or trace.get("policy_code") or memory.get("policy_code"),
+            "policy_version": policy.get("policy_version") or trace.get("policy_version") or memory.get("policy_version"),
+            "reason": (
+                _policy_unavailable_message(str(fallback_reason))
+                if fallback_reason
+                else "Score calculado pelo motor legado. Detalhamento por pilares configuraveis indisponivel."
+                if engine == LEGACY_SCORE_SOURCE
+                else "Detalhamento por pilares indisponivel na memoria de calculo do score."
+            ),
+            "items": [],
+        }
+
+    items: list[dict[str, Any]] = []
+    for item in pillars:
+        if not isinstance(item, dict):
+            continue
+        items.append({
+            "code": item.get("pillar_code"),
+            "name": item.get("pillar_name"),
+            "score": item.get("score"),
+            "max_score": 10,
+            "weighted_score": item.get("weighted_score"),
+            "weight_percent": item.get("weight_percent"),
+            "status": item.get("status"),
+            "source": item.get("source"),
+            "reason": item.get("reason"),
+            "warnings": item.get("warnings") if isinstance(item.get("warnings"), list) else [],
+            "calculation_trace": item.get("calculation_trace") if isinstance(item.get("calculation_trace"), list) else [],
+        })
+
+    return {
+        "engine": CONFIGURABLE_SCORE_SOURCE,
+        "available": True,
+        "policy_id": policy.get("policy_id") or memory.get("policy_id"),
+        "policy_code": policy.get("policy_code") or memory.get("policy_code"),
+        "policy_version": policy.get("policy_version") or memory.get("policy_version"),
+        "reason": None,
+        "items": items,
+    }
+
+
 def _apply_configurable_fallback_memory(
     score_result: ScoreResult,
     *,
@@ -876,19 +1030,28 @@ def _apply_configurable_fallback_memory(
 
 
 def calculate_and_upsert_score(
-    db: Session, analysis_id: int
+    db: Session, analysis_id: int, *, company_id: int | None = None
 ) -> tuple[ScoreResult, ExternalDataEntry, bool]:
     analysis = db.get(CreditAnalysis, analysis_id)
     snapshot = _get_policy_snapshot(analysis)
     if snapshot is not None and snapshot.get("engine") == LEGACY_SCORE_SOURCE:
         return _calculate_and_upsert_legacy_score(db, analysis_id)
-    if snapshot is None and not settings.configurable_score_policy_enabled:
+    existing_score = db.scalar(select(ScoreResult).where(ScoreResult.credit_analysis_id == analysis_id))
+    existing_memory = existing_score.calculation_memory_json if existing_score is not None else None
+    if snapshot is None and isinstance(existing_memory, dict) and existing_memory.get("score_source") == LEGACY_SCORE_SOURCE:
         return _calculate_and_upsert_legacy_score(db, analysis_id)
 
     try:
-        return _calculate_and_upsert_configurable_score(db, analysis_id)
+        return _calculate_and_upsert_configurable_score(db, analysis_id, company_id=company_id)
     except Exception as exc:
         reason = exc.reason if isinstance(exc, ConfigurableScorePolicyUnavailable) else exc.__class__.__name__
+        if reason in BLOCKING_CONFIGURABLE_POLICY_REASONS:
+            logger.error(
+                "configurable_score_policy_blocked",
+                extra={"analysis_id": analysis_id, "reason": reason},
+            )
+            details = exc.details if isinstance(exc, ConfigurableScorePolicyUnavailable) else {}
+            raise ScoreCalculationError(_policy_unavailable_message(reason, details)) from exc
         logger.warning(
             "configurable_score_policy_fallback",
             extra={"analysis_id": analysis_id, "fallback_reason": reason},

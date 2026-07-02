@@ -15,6 +15,7 @@ class ScoreResultResponse(BaseModel):
     final_score: int
     score_band: ScoreBand
     calculation_memory_json: dict[str, Any]
+    score_pillars: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 

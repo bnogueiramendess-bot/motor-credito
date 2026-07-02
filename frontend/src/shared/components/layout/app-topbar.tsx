@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -27,12 +27,14 @@ type NavGroup = {
   items: NavItem[];
 };
 
+type AdminMenuItem = { href?: string; label: string; tone?: "default" | "danger"; action?: "reset" | "logout" };
+
 type AdminMenuGroup = {
   id: "system-admin" | "credit-governance" | "settings";
   label: string;
   title: string;
   icon: typeof Building2;
-  items: Array<{ href?: string; label: string; tone?: "default" | "danger"; action?: "reset" | "logout" }>;
+  items: AdminMenuItem[];
 };
 
 const navGroups: NavGroup[] = [
@@ -279,15 +281,17 @@ export function AppTopbar() {
       });
     }
 
+    const settingsItems: AdminMenuItem[] = [{ label: isLoggingOut ? "Saindo..." : "Logoff", action: "logout" }];
+    if (canResetBase) {
+      settingsItems.push({ label: "Reset Operacional", action: "reset", tone: "danger" });
+    }
+
     groups.push({
       id: "settings",
       label: "Configuracoes",
       title: "Configuracoes",
       icon: Settings,
-      items: [
-        { label: isLoggingOut ? "Saindo..." : "Logoff", action: "logout" },
-        ...(canResetBase ? [{ label: "Reset Operacional", action: "reset", tone: "danger" as const }] : [])
-      ]
+      items: settingsItems
     });
 
     return groups;
@@ -514,3 +518,5 @@ export function AppTopbar() {
     </header>
   );
 }
+
+

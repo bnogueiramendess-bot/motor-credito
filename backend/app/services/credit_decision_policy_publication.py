@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -35,6 +36,7 @@ def _audit_policy_action(
     request_id: int,
     actor_user_id: int,
     justification: str | None = None,
+    company_id: int | None = None,
 ) -> None:
     db.add(
         AuditLog(
@@ -44,9 +46,12 @@ def _audit_policy_action(
             resource_id=str(policy.id),
             metadata_json={
                 "policy_id": policy.id,
+                "company_id": company_id,
                 "request_id": request_id,
                 "action_type": "policy_publish" if "publication" in action else "policy_archive",
                 "approval_item_type": APPROVAL_ITEM_TYPE_CREDIT_POLICY,
+                "entity_type": "credit_decision_policy",
+                "entity_id": policy.id,
             },
             notes=justification,
         )
@@ -82,6 +87,7 @@ def _request_policy_action(
         request_id=request["request_id"],
         actor_user_id=current_user.id,
         justification=justification,
+        company_id=company_id,
     )
     db.flush()
     return request
@@ -239,6 +245,11 @@ def _execute_policy_action(
 
     if action_type == "policy_publish":
         policy = activate_credit_decision_policy(db, policy_id, current_user)
+        published_at = datetime.now(timezone.utc)
+        policy.publication_status = "PUBLISHED"
+        policy.published_at = published_at
+        policy.published_by_user_id = current_user.id
+        policy.governance_request_id = int(request_id)
         audit_action = "policy_publication_executed"
     else:
         policy = archive_credit_decision_policy(db, policy_id, current_user)
@@ -249,6 +260,7 @@ def _execute_policy_action(
         policy=policy,
         request_id=int(request_id),
         actor_user_id=current_user.id,
+        company_id=company_id,
     )
     db.flush()
     return policy

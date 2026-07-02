@@ -17,36 +17,36 @@ const permissionGroups: PermissionGroup[] = [
   { id: "clientes", title: "Clientes", items: [
     { key: "clients.dashboard.view", label: "Visualizar Dashboard de Clientes" },
     { key: "clients.portfolio.view", label: "Visualizar Carteira de Clientes" },
-    { key: "clients.portfolio.evolution.view", label: "Visualizar EvoluÃ§Ã£o da Carteira" },
-    { key: "clients.dossier.view", label: "Abrir detalhe/dossiÃª do cliente" },
-    { key: "clients.aging.import", label: "Importar AR Aging", hint: "PermissÃ£o sensÃ­vel de carga de dados." },
-    { key: "clients.imports.history.view", label: "Visualizar histÃ³rico de importaÃ§Ãµes" }
+    { key: "clients.portfolio.evolution.view", label: "Visualizar Evolução da Carteira" },
+    { key: "clients.dossier.view", label: "Abrir detalhe/dossiê do cliente" },
+    { key: "clients.aging.import", label: "Importar AR Aging", hint: "Permissão sensível de carga de dados." },
+    { key: "clients.imports.history.view", label: "Visualizar histórico de importações" }
   ]},
-  { id: "credito", title: "CrÃ©dito", items: [
-    { key: "credit.dashboard.view", label: "Visualizar Dashboard de CrÃ©dito" },
-    { key: "credit.request.create", label: "Criar SolicitaÃ§Ã£o de CrÃ©dito" },
-    { key: "credit.requests.view", label: "Visualizar SolicitaÃ§Ãµes" },
-    { key: "credit.analysis.execute", label: "Executar AnÃ¡lise" },
-    { key: "credit.dossier.edit", label: "Editar DossiÃª" },
-    { key: "credit.request.submit", label: "Submeter para AprovaÃ§Ã£o" },
-    { key: "credit.approval.approve", label: "Aprovar CrÃ©dito", hint: "Concede papel de aprovador no fluxo." },
-    { key: "credit.approval.reject", label: "Reprovar CrÃ©dito", hint: "Concede papel de aprovador no fluxo." },
-    { key: "credit.policy.view", label: "Visualizar PolÃ­tica de CrÃ©dito" },
-    { key: "credit.policy.manage", label: "Gerenciar PolÃ­tica de CrÃ©dito", hint: "PermissÃ£o crÃ­tica de administraÃ§Ã£o." },
-    { key: "committees:view", label: "Visualizar ComitÃªs" },
-    { key: "committees:manage", label: "Gerenciar ComitÃªs", hint: "PermissÃ£o crÃ­tica de governanÃ§a corporativa." }
+  { id: "credito", title: "Crédito", items: [
+    { key: "credit.dashboard.view", label: "Visualizar Dashboard de Crédito" },
+    { key: "credit.request.create", label: "Criar Solicitação de Crédito" },
+    { key: "credit.requests.view", label: "Visualizar Solicitações" },
+    { key: "credit.analysis.execute", label: "Executar Análise" },
+    { key: "credit.dossier.edit", label: "Editar Dossiê" },
+    { key: "credit.request.submit", label: "Submeter para Aprovação" },
+    { key: "credit.approval.approve", label: "Aprovar Crédito", hint: "Concede papel de aprovador no fluxo." },
+    { key: "credit.approval.reject", label: "Reprovar Crédito", hint: "Concede papel de aprovador no fluxo." },
+    { key: "credit.policy.view", label: "Visualizar Política de Crédito" },
+    { key: "credit.policy.manage", label: "Gerenciar Política de Crédito", hint: "Permissão crítica de administração." },
+    { key: "committees:view", label: "Visualizar Comitês" },
+    { key: "committees:manage", label: "Gerenciar Comitês", hint: "Permissão crítica de governança corporativa." }
   ]},
-  { id: "administracao", title: "AdministraÃ§Ã£o", items: [
+  { id: "administracao", title: "Administração", items: [
     { key: "company:view", label: "Visualizar Empresa" },
     { key: "company:manage", label: "Gerenciar Empresa" },
     { key: "bu:manage", label: "Gerenciar BU's" },
-    { key: "users:view", label: "Visualizar UsuÃ¡rios" },
-    { key: "users:manage", label: "Gerenciar UsuÃ¡rios" },
+    { key: "users:view", label: "Visualizar Usuários" },
+    { key: "users:manage", label: "Gerenciar Usuários" },
     { key: "profiles:view", label: "Visualizar Perfis" },
     { key: "profiles:manage", label: "Gerenciar Perfis" },
     { key: "audit:view", label: "Visualizar Auditoria" }
   ]},
-  { id: "escopo", title: "Escopo", items: [{ key: "scope:all_bu", label: "Acesso total Ã s BU's", hint: "Escopo especÃ­fico por BU continua no cadastro do usuÃ¡rio." }] }
+  { id: "escopo", title: "Escopo", items: [{ key: "scope:all_bu", label: "Acesso total às BU's", hint: "Escopo específico por BU continua no cadastro do usuário." }] }
 ];
 
 function readPermissionsFromCookie() {
@@ -111,8 +111,8 @@ export function AdminProfilesPageView() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFeedback(null);
-    if (!name.trim()) return setFeedback("Informe um nome vÃ¡lido para o perfil.");
-    if (permissionKeys.length === 0) return setFeedback("Selecione ao menos uma permissÃ£o.");
+    if (!name.trim()) return setFeedback("Informe um nome válido para o perfil.");
+    if (permissionKeys.length === 0) return setFeedback("Selecione ao menos uma permissão.");
 
     const payload: UpsertAdminProfilePayload = {
       name: name.trim(),
@@ -130,7 +130,7 @@ export function AdminProfilesPageView() {
       }
       setOpenEditor(false);
     } catch (error) {
-      setFeedback(error instanceof ApiError ? error.message : "NÃ£o foi possÃ­vel salvar o perfil. Tente novamente.");
+      setFeedback(error instanceof ApiError ? error.message : "Não foi possível salvar o perfil. Tente novamente.");
     }
   }
 
@@ -141,7 +141,7 @@ export function AdminProfilesPageView() {
       await updateStatusMutation.mutateAsync({ id: profile.id, status: nextStatus });
       setFeedback(nextStatus === "active" ? "Perfil ativado com sucesso." : "Perfil desativado com sucesso.");
     } catch (error) {
-      setFeedback(error instanceof ApiError ? error.message : "NÃ£o foi possÃ­vel salvar o perfil. Tente novamente.");
+      setFeedback(error instanceof ApiError ? error.message : "Não foi possível salvar o perfil. Tente novamente.");
     }
   }
 
@@ -150,8 +150,8 @@ export function AdminProfilesPageView() {
   return (
     <section className="space-y-5">
       <header className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">AdministraÃ§Ã£o</p>
-        <h1 className="mt-1 text-2xl font-semibold text-slate-900">GestÃ£o de Perfis</h1>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Administração</p>
+        <h1 className="mt-1 text-2xl font-semibold text-slate-900">Gestão de Perfis</h1>
         <p className="mt-2 text-sm text-slate-600">Cadastre e gerencie os perfis de acesso utilizados na plataforma.</p>
       </header>
 
@@ -162,12 +162,12 @@ export function AdminProfilesPageView() {
         </div>
         {feedback ? <p className={cn("mb-3 text-sm", feedback.includes("sucesso") ? "text-emerald-700" : "text-rose-700")}>{feedback}</p> : null}
         {profileQuery.isLoading ? <p className="text-sm text-slate-500">Carregando perfis...</p> : null}
-        {profileQuery.isError ? <p className="text-sm text-rose-700">NÃ£o foi possÃ­vel carregar os perfis.</p> : null}
+        {profileQuery.isError ? <p className="text-sm text-rose-700">Não foi possível carregar os perfis.</p> : null}
         {!profileQuery.isLoading && !profileQuery.isError ? (
           <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-[0.06em] text-slate-500">
-                <tr><th className="px-3 py-2">CÃ³digo</th><th className="px-3 py-2">Nome do Perfil</th><th className="px-3 py-2">Tipo</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">PermissÃµes</th><th className="px-3 py-2">AÃ§Ãµes</th></tr>
+                <tr><th className="px-3 py-2">Código</th><th className="px-3 py-2">Nome do Perfil</th><th className="px-3 py-2">Tipo</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Permissões</th><th className="px-3 py-2">Ações</th></tr>
               </thead>
               <tbody>
                 {profiles.map((profile) => (
@@ -189,22 +189,22 @@ export function AdminProfilesPageView() {
       </article>
 
       <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-slate-700" /><h2 className="text-base font-semibold text-slate-900">VisÃ£o de AprovaÃ§Ã£o (DOA)</h2></div>
-        {matrixQuery.isLoading ? <p className="text-sm text-slate-500">Carregando visÃ£o de aprovaÃ§Ã£o...</p> : null}
-        {matrixQuery.isError ? <p className="text-sm text-slate-500">Matriz tÃ©cnica indisponÃ­vel.</p> : null}
-        {!matrixQuery.isLoading && !matrixQuery.isError && allPermissions.length > 0 ? <p className="text-sm text-slate-600">Matriz tÃ©cnica mantida como apoio. O cadastro operacional permanece na seÃ§Ã£o principal.</p> : null}
+        <div className="mb-3 flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-slate-700" /><h2 className="text-base font-semibold text-slate-900">Visão de Aprovação (DOA)</h2></div>
+        {matrixQuery.isLoading ? <p className="text-sm text-slate-500">Carregando visão de aprovação...</p> : null}
+        {matrixQuery.isError ? <p className="text-sm text-slate-500">Matriz técnica indisponível.</p> : null}
+        {!matrixQuery.isLoading && !matrixQuery.isError && allPermissions.length > 0 ? <p className="text-sm text-slate-600">Matriz técnica mantida como apoio. O cadastro operacional permanece na seção principal.</p> : null}
       </article>
 
       {openEditor ? (
         <div className="fixed inset-0 z-40 bg-slate-900/40 p-4">
           <div className="mx-auto max-h-[95vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white p-6">
-            <div className="mb-4 flex items-start justify-between"><div><h3 className="text-xl font-semibold text-slate-900">{mode === "create" ? "Novo Perfil" : mode === "edit" ? "Editar Perfil" : "Visualizar Perfil"}</h3><p className="text-sm text-slate-600">CÃ³digo do Perfil: <span className="rounded bg-slate-100 px-2 py-1 font-semibold">{selectedCode}</span></p></div><button onClick={() => setOpenEditor(false)} className="text-sm text-slate-600">Fechar</button></div>
+            <div className="mb-4 flex items-start justify-between"><div><h3 className="text-xl font-semibold text-slate-900">{mode === "create" ? "Novo Perfil" : mode === "edit" ? "Editar Perfil" : "Visualizar Perfil"}</h3><p className="text-sm text-slate-600">Código do Perfil: <span className="rounded bg-slate-100 px-2 py-1 font-semibold">{selectedCode}</span></p></div><button onClick={() => setOpenEditor(false)} className="text-sm text-slate-600">Fechar</button></div>
             <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="space-y-1"><span className="text-sm font-medium text-slate-700">Nome do Perfil</span><input value={name} onChange={(event) => setName(event.target.value)} disabled={mode === "view"} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm" /></label>
                 <label className="space-y-1"><span className="text-sm font-medium text-slate-700">Status</span><select value={status} onChange={(event) => setStatus(event.target.value as ProfileStatus)} disabled={mode === "view"} className="h-10 w-full rounded-lg border border-slate-300 px-3 text-sm"><option value="active">Ativo</option><option value="inactive">Inativo</option></select></label>
               </div>
-              <label className="space-y-1"><span className="text-sm font-medium text-slate-700">DescriÃ§Ã£o</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} disabled={mode === "view"} className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+              <label className="space-y-1"><span className="text-sm font-medium text-slate-700">Descrição</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} disabled={mode === "view"} className="min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
               <div className="space-y-3">
                 {permissionGroups.map((group) => {
                   const count = group.items.filter((item) => permissionKeys.includes(item.key)).length;
@@ -224,7 +224,7 @@ export function AdminProfilesPageView() {
                 })}
               </div>
               {feedback ? <p className={cn("text-sm", feedback.includes("sucesso") ? "text-emerald-700" : "text-rose-700")}>{feedback}</p> : null}
-              {mode !== "view" ? <button type="submit" disabled={createMutation.isPending || updateMutation.isPending} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">{mode === "edit" ? "Salvar alteraÃ§Ãµes" : "Criar perfil"}</button> : null}
+              {mode !== "view" ? <button type="submit" disabled={createMutation.isPending || updateMutation.isPending} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">{mode === "edit" ? "Salvar alterações" : "Criar perfil"}</button> : null}
             </form>
           </div>
         </div>

@@ -11,7 +11,7 @@ type InstitutionalScoreTooltip = {
 type InstitutionalScoreBreakdownItem = {
   key: string;
   title: string;
-  score: number;
+  score: number | null;
   tooltip: InstitutionalScoreTooltip;
 };
 
@@ -22,6 +22,7 @@ type InstitutionalScoreCardProps = {
   guaranteeCoverageHelperText: string;
   paymentPillarHelperText: string;
   relationshipPillarHelperText: string;
+  unavailableReason?: string | null;
 };
 
 type ScoreGaugeBand = "Crítico" | "Atenção" | "Moderado" | "Favorável";
@@ -148,6 +149,7 @@ export function InstitutionalScoreCard({
   guaranteeCoverageHelperText,
   paymentPillarHelperText,
   relationshipPillarHelperText,
+  unavailableReason,
 }: InstitutionalScoreCardProps) {
   return (
     <article className="rounded-[24px] border border-[#D7E1EC] bg-white p-5 shadow-[0_10px_32px_rgba(15,23,42,0.06)]">
@@ -155,6 +157,11 @@ export function InstitutionalScoreCard({
       <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
         <InstitutionalScoreGauge score={score} />
         <div>
+          {breakdown.length === 0 ? (
+            <div className="rounded-[14px] border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-[12px] leading-5 text-[#64748b]">
+              {unavailableReason ?? "Score por pilares indisponivel para esta analise."}
+            </div>
+          ) : null}
           <div className="space-y-3">
             {breakdown.map((item) => (
               <div key={item.key}>
@@ -175,10 +182,10 @@ export function InstitutionalScoreCard({
                     {item.key === "financial_liquidity" && !hasValidCofaceCoverage && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Não avaliado</span> : null}
                     {item.key === "market_conditions" && item.score === 0 ? <span className="inline-flex rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[10px] font-semibold text-[#64748b]">Em evolução</span> : null}
                   </span>
-                  <span>{item.score.toFixed(1)}/10</span>
+                  <span>{item.score !== null ? `${item.score.toFixed(1)}/10` : "Sem nota"}</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full border border-[#E2E8F0] bg-[#F1F5F9]">
-                  <div className={`h-full rounded-full ${item.key === "financial_liquidity" ? "bg-[#94a3b8]" : "bg-[#2563eb]"}`} style={{ width: `${Math.max(0, Math.min(100, item.score * 10))}%` }} />
+                  <div className={`h-full rounded-full ${item.key === "financial_liquidity" ? "bg-[#94a3b8]" : "bg-[#2563eb]"}`} style={{ width: `${item.score !== null ? Math.max(0, Math.min(100, item.score * 10)) : 0}%` }} />
                 </div>
                 {item.key === "financial_liquidity" && !hasValidCofaceCoverage && item.score === 0 ? <p className="mt-1 text-[11px] text-[#64748b]">Impacta o score por ausência de demonstrações financeiras estruturadas.</p> : null}
                 {item.key === "guarantees" ? <p className="mt-1 text-[11px] text-[#64748b]">{guaranteeCoverageHelperText}</p> : null}
