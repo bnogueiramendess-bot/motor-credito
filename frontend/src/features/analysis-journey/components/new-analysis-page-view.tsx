@@ -920,8 +920,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const [isCofaceDataDrawerOpen, setIsCofaceDataDrawerOpen] = useState(false);
   const [manualPanel, setManualPanel] = useState({
     scoreSource: "Serasa",
-    scoreValue: 610,
-    cofaceDra: 6.5,
+    scoreValue: 0,
+    cofaceDra: 0,
     internalRevenue12m: "",
     outstandingValue: "",
     pmrContractual: "",
@@ -1085,6 +1085,10 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   const hasAgriskImported = agriskImport.status === "valid" || agriskImport.status === "valid_with_warnings";
   const hasInvalidAgriskImport = agriskImport.files.length > 0 && (agriskImport.status === "invalid" || agriskImport.status === "error");
+  const importedAgriskScoreValue = hasAgriskImported ? toNullableNumeric(agriskImport.agriskReadPayload?.credit?.score) : null;
+  const effectiveScoreValue = hasAgriskImported ? importedAgriskScoreValue ?? 0 : Number(manualPanel.scoreValue ?? 0);
+  const currentScoreSourceLabel = hasAgriskImported ? "Agrisk Score/Risco" : "Manual";
+  const scoreFieldLocked = hasAgriskImported;
   const hasAgriskFinancialImported = isAgriskValidatedImport(agriskFinancialImport);
   const agriskFinancialPayload = agriskFinancialImport.agriskReadPayload as Record<string, unknown> | null | undefined;
   const agriskFinancialIndicators = agriskFinancialImport.agriskReadPayload?.financial_indicators;
@@ -1168,6 +1172,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   })).filter((group) => group.rows.length > 0);
   const hasInvalidAgriskFinancialImport = agriskFinancialImport.files.length > 0 && (agriskFinancialImport.status === "invalid" || agriskFinancialImport.status === "error");
   const hasCofaceImported = isCofaceValidatedStatus(cofaceImport.status);
+  const importedCofaceDraValue = hasCofaceImported ? toNullableNumeric(cofaceImport.cofaceReadPayload?.coface?.dra) : null;
+  const effectiveCofaceDraValue = hasCofaceImported ? importedCofaceDraValue ?? 0 : Number(manualPanel.cofaceDra ?? 0);
+  const currentCofaceSourceLabel = hasCofaceImported ? "COFACE" : "Manual";
+  const cofaceDraFieldLocked = hasCofaceImported;
+  const hasLockedExternalReferences = scoreFieldLocked || cofaceDraFieldLocked;
   const cofaceDecisionAmount = hasCofaceImported ?cofaceImport.cofaceReadPayload?.coface?.decision_amount ?? null : null;
   const hasCofaceCoverageImported = hasCofaceImported && cofaceDecisionAmount !== null;
   const hasInternalDataAvailable = Boolean(triageResult?.found_in_portfolio || (isWorkspaceMode && triageSelectedBusinessUnit.trim().length > 0));
@@ -1431,7 +1440,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }));
     setManualPanel((prev) => ({
       ...prev,
-      scoreValue: detail.score?.final_score ?? prev.scoreValue,
       analystNotes: analysisRecord.analyst_notes ?? prev.analystNotes
     }));
     if (savedManualPanel) {
@@ -2262,8 +2270,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   }
 
   function saveManualDrawer() {
-    const scoreIsFromImportedAgrisk = hasAgriskImported && manualPanel.scoreSource === "Agrisk";
-    const cofaceIsFromImportedReport = hasCofaceImported;
+    const scoreIsFromImportedAgrisk = hasAgriskImported;
     const manualFinancialStatements = {
       dre: {
         net_revenue: toNullableNumberInput(manualPanel.netRevenue),
@@ -2292,9 +2299,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       commercial_note: manualPanel.commercialNote || null,
     };
     const externalReferences = {
-      score_source: scoreIsFromImportedAgrisk ? "Agrisk (importado)" : manualPanel.scoreSource,
-      score_value: scoreIsFromImportedAgrisk ? null : manualPanel.scoreValue,
-      coface_dra: cofaceIsFromImportedReport ? null : manualPanel.cofaceDra,
+      score_source: scoreIsFromImportedAgrisk ? "Agrisk Score/Risco" : manualPanel.scoreSource,
+      score_value: effectiveScoreValue,
+      coface_dra: effectiveCofaceDraValue,
     };
     const observations = { analyst_notes: manualPanel.analystNotes || null };
 
@@ -2302,7 +2309,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const nextManual = {
       ...manual,
       comments: manualPanel.analystNotes,
-      observations: `Fonte do score: ${externalReferences.score_source}; Score: ${externalReferences.score_value ?? "informado por relatório importado"}; DRA COFACE: ${cofaceIsFromImportedReport ? "informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}`
+      observations: `Fonte do score: ${externalReferences.score_source}; Score: ${effectiveScoreValue}; DRA COFACE: ${effectiveCofaceDraValue}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}`
     };
     setManual(nextManual);
     persistWorkspaceStatePatch({
@@ -2415,8 +2422,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
           source_type: hasAgriskImported ?"agrisk" : hasCofaceImported ?"other" : "agrisk",
           coface_read_id: hasCofaceImported ?cofaceImport.cofaceReadId : null,
           coface_decision_amount: hasCofaceCoverageImported ?cofaceDecisionAmount : null,
-          source_score: manualConfigured ?manualPanel.scoreValue : null,
-          source_rating: manualConfigured ?`Fonte manual: ${manualPanel.scoreSource}` : "",
+          source_score: manualConfigured || hasAgriskImported ? effectiveScoreValue : null,
+          source_rating: hasAgriskImported ? "Fonte: Agrisk Score/Risco" : manualConfigured ?`Fonte manual: ${manualPanel.scoreSource}` : "",
           negativations_count: Number(manual.negativationsCount || 0),
           protests_count: Number(manual.protestsCount || 0),
           lawsuits_count: manual.activeLawsuits ?1 : 0,
@@ -2430,7 +2437,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               : "",
             hasCofaceImported ?"COFACE importado" : "",
             hasCofaceCoverageImported && cofaceDecisionAmount !== null ?`Valor de cobertura COFACE: ${currencyFormatter.format(cofaceDecisionAmount)}` : "",
-            manualConfigured && !hasCofaceImported ?`DRA COFACE manual: ${manualPanel.cofaceDra || "não informado"}` : ""
+            hasCofaceImported ?`DRA COFACE importado: ${effectiveCofaceDraValue}` : manualConfigured ?`DRA COFACE manual: ${manualPanel.cofaceDra || "não informado"}` : ""
           ]
             .filter(Boolean)
             .join(" · "),
@@ -2506,7 +2513,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       entry_method: "upload" as const,
       source_type: hasAgriskImported ? ("agrisk" as const) : ("other" as const),
       report_date: toIsoDate(agriskImport.importedAt ?? cofaceImport.importedAt ?? null),
-      source_score: hasAgriskImported ? Number(agriskImport.agriskReadPayload?.credit?.score ?? 0) : Number(manualPanel.scoreValue ?? 0),
+      source_score: effectiveScoreValue,
       source_rating: hasAgriskImported
         ? (agriskImport.agriskReadPayload?.credit?.rating ?? null)
         : (manualPanel.scoreSource ? `Manual:${manualPanel.scoreSource}` : null),
@@ -4570,23 +4577,38 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                     </div>
 
                     <section className="rounded-[8px] border border-[#D7E1EC] bg-white p-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#295B9A]">Scores e refer?ncias externas</p>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#295B9A]">Scores e refer?ncias externas</p>
+                          <p className="mt-0.5 text-[11px] text-[#8FA3B4]">Prioridade: relatorio externo valido, manual, 0.</p>
+                        </div>
+                        {hasLockedExternalReferences ? <span className="inline-flex items-center gap-1 rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-2 py-0.5 text-[10px] font-semibold text-[#1D4ED8]"><Lock className="h-3 w-3" />Edicao bloqueada</span> : null}
+                      </div>
                       <div className="mt-3 grid gap-3 sm:grid-cols-3">
                         <label className="text-[11px] font-medium text-[#4F647A]">Fonte do score
-                          <select value={manualPanel.scoreSource} onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreSource: event.target.value }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]">
-                            <option value="Agrisk" disabled={hasAgriskImported}>{hasAgriskImported ? "Agrisk indisponível" : "Agrisk"}</option>
+                          <select value={manualPanel.scoreSource} onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreSource: event.target.value }))} disabled={scoreFieldLocked} className={`mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] px-2.5 text-[12px] text-[#102033] ${scoreFieldLocked ? "cursor-not-allowed bg-[#F8FAFC] text-[#64748B]" : "bg-white"}`}>
+                            <option value="Agrisk" disabled={hasAgriskImported}>{hasAgriskImported ? "Agrisk indisponivel" : "Agrisk"}</option>
                             <option value="Serasa">Serasa</option>
                             <option value="SCR/Bacen">SCR/Bacen</option>
                             <option value="Outro">Outro</option>
                           </select>
+                          <span className="mt-1 block text-[10px] font-medium text-[#8FA3B4]">Fonte atual: {currentScoreSourceLabel}</span>
                         </label>
                         <label className="text-[11px] font-medium text-[#4F647A]">Score
-                          <input type="number" min={0} max={1000} value={manualPanel.scoreValue} onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreValue: Number(event.target.value) }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]" />
+                          <input type="number" min={0} max={1000} value={effectiveScoreValue} onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreValue: Number(event.target.value || 0) }))} disabled={scoreFieldLocked} className={`mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] px-2.5 text-[12px] text-[#102033] ${scoreFieldLocked ? "cursor-not-allowed bg-[#F8FAFC] text-[#64748B]" : "bg-white"}`} />
+                          {scoreFieldLocked ? <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#EEF3F8] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.04em] text-[#64748B]">Edicao bloqueada</span> : null}
                         </label>
                         <label className="text-[11px] font-medium text-[#4F647A]">DRA COFACE
-                          <input type="number" min={0} max={10} step={0.1} value={manualPanel.cofaceDra} onChange={(event) => setManualPanel((prev) => ({ ...prev, cofaceDra: Number(event.target.value) }))} disabled={hasCofaceImported} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033] disabled:bg-[#F3F4F6]" />
+                          <input type="number" min={0} max={10} step={0.1} value={effectiveCofaceDraValue} onChange={(event) => setManualPanel((prev) => ({ ...prev, cofaceDra: Number(event.target.value || 0) }))} disabled={cofaceDraFieldLocked} className={`mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] px-2.5 text-[12px] text-[#102033] ${cofaceDraFieldLocked ? "cursor-not-allowed bg-[#F8FAFC] text-[#64748B]" : "bg-white"}`} />
+                          <span className="mt-1 block text-[10px] font-medium text-[#8FA3B4]">Fonte atual: {currentCofaceSourceLabel}</span>
+                          {cofaceDraFieldLocked ? <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#EEF3F8] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.04em] text-[#64748B]">Edicao bloqueada</span> : null}
                         </label>
                       </div>
+                      {hasLockedExternalReferences ? (
+                        <div className="mt-3 rounded-[8px] border border-[#BFDBFE] bg-[#F8FBFF] px-3 py-2 text-[11px] leading-relaxed text-[#1E3A8A]">
+                          Campos manuais preservados, porem ignorados enquanto houver relatorio externo valido.
+                        </div>
+                      ) : null}
                     </section>
 
                     <section className="rounded-[8px] border border-[#D7E1EC] bg-white p-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
