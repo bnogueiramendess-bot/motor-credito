@@ -13,11 +13,13 @@ from app.models.credit_decision_policy_score_structure import (
     CreditDecisionPolicySubgroup,
 )
 from app.services.credit_decision_policy_score_seed import PILLAR_CODE
+from app.services.manual_financial_statements import (
+    DIVISION_BY_ZERO_OR_MISSING_BASE_REASON,
+    FINANCIAL_DATA_NOT_AVAILABLE_MESSAGE,
+)
 
 PILLAR_ONE_COFACE_REASON = "Cobertura COFACE válida: Pilar 1 atribuído como 10/10."
-PILLAR_ONE_NOT_AVAILABLE_REASON = (
-    "Relatório Agrisk de Análise Financeira não disponibilizado e ausência de cobertura COFACE válida."
-)
+PILLAR_ONE_NOT_AVAILABLE_REASON = FINANCIAL_DATA_NOT_AVAILABLE_MESSAGE
 NET_REVENUE_MISSING_WARNING = (
     "Receita Líquida não informada. Não foi possível calcular margem percentual de EBITDA, Fluxo de Caixa e Resultado DRE."
 )
@@ -123,6 +125,21 @@ def _find_matching_range(value: Decimal, ranges: list[CreditDecisionPolicyScoreR
     return None
 
 
+def _indicator_reason_from_payload(payload: Any, indicator: CreditDecisionPolicyIndicator) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    indicator_reasons = payload.get("indicator_reasons")
+    if not isinstance(indicator_reasons, dict):
+        return None
+
+    candidates = [indicator.code, indicator.source_key, indicator.source_key.split(".")[-1]]
+    for key in candidates:
+        value = indicator_reasons.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
 def _resolve_net_revenue(payload: Any) -> tuple[Any, Decimal | None]:
     candidates = [
         _get_path_value(payload, "net_revenue"),
@@ -158,9 +175,11 @@ def _normalize_indicator_value(
         "calculation": PERCENT_MARGIN_INDICATORS[indicator.code],
     }
     if net_revenue_raw is None:
-        return None, NET_REVENUE_MISSING_WARNING, trace, NET_REVENUE_MISSING_WARNING
+        trace["reason_detail"] = NET_REVENUE_MISSING_WARNING
+        return None, NET_REVENUE_MISSING_WARNING, trace, DIVISION_BY_ZERO_OR_MISSING_BASE_REASON
     if net_revenue is None or net_revenue <= Decimal("0"):
-        return None, NET_REVENUE_INVALID_WARNING, trace, NET_REVENUE_INVALID_WARNING
+        trace["reason_detail"] = NET_REVENUE_INVALID_WARNING
+        return None, NET_REVENUE_INVALID_WARNING, trace, DIVISION_BY_ZERO_OR_MISSING_BASE_REASON
     if numeric_value is None:
         return None, None, trace, None
 
@@ -224,6 +243,8 @@ def calculate_pillar_one_score(
     policy_id: int,
     has_valid_coface: bool,
     agrisk_financial_data: Any | None = None,
+    financial_data_source: str = "agrisk_financial_analysis",
+    not_available_reason_code: str | None = None,
     analysis_id: int | None = None,
 ) -> dict[str, Any]:
     pillar = _load_pillar_one(db, policy_id)
@@ -256,6 +277,7 @@ def calculate_pillar_one_score(
             calculation_trace=[
                 {
                     "step": "missing_agrisk_financial_analysis",
+                    "reason_code": not_available_reason_code,
                     "reason": PILLAR_ONE_NOT_AVAILABLE_REASON,
                     "score": Decimal("0"),
                 }
@@ -292,15 +314,20 @@ def calculate_pillar_one_score(
                 warning_messages.add(margin_warning)
             sorted_ranges = sorted(indicator.score_ranges, key=lambda item: (item.sort_order, item.id))
             matched_range = _find_matching_range(numeric_value, sorted_ranges) if numeric_value is not None else None
+            payload_reason = _indicator_reason_from_payload(agrisk_financial_data, indicator)
 
             if margin_reason is not None:
                 indicator_score = Decimal("0")
                 status = "not_available"
                 reason = margin_reason
+            elif numeric_value is None and payload_reason is not None:
+                indicator_score = Decimal("0")
+                status = "not_available"
+                reason = payload_reason
             elif numeric_value is None:
                 indicator_score = Decimal("0")
                 status = "missing_value"
-                reason = "Indicador sem valor disponível no Agrisk Financeiro."
+                reason = "Indicador sem valor disponivel na fonte financeira."
             elif matched_range is None:
                 indicator_score = Decimal("0")
                 status = "range_not_found"
@@ -382,7 +409,7 @@ def calculate_pillar_one_score(
         pillar=pillar,
         score=pillar_score,
         status="calculated",
-        source="agrisk_financial_analysis",
+        source=financial_data_source,
         reason=None,
         analysis_id=analysis_id,
         subgroups=subgroup_results,

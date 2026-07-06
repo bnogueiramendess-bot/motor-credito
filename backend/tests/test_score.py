@@ -225,3 +225,48 @@ def test_missing_governed_publication_message_includes_lookup_context():
     assert "id=84" in message
     assert "status=active" in message
     assert "publication_status=UNPUBLISHED" in message
+
+
+def test_build_score_pillars_contract_remains_available_when_pillar_one_is_zeroed_for_missing_financial_data():
+    score_result = SimpleNamespace(
+        calculation_memory_json={
+            "score_source": "configurable_policy",
+            "policy_id": 12,
+            "policy_code": "coface_first",
+            "policy_version": 3,
+            "explainability": {
+                "policy": {
+                    "policy_id": 12,
+                    "policy_code": "coface_first",
+                    "policy_version": 3,
+                },
+                "pillars_evaluated": [
+                    {
+                        "pillar_code": "financial_stability_liquidity",
+                        "pillar_name": "Pilar 1",
+                        "score": Decimal("0.00"),
+                        "weighted_score": Decimal("0.0000"),
+                        "weight_percent": 55,
+                        "status": "not_available",
+                        "source": "not_available",
+                        "reason": "Pilar 1 zerado por ausencia de dados financeiros suficientes.",
+                        "warnings": [{"reason": "financial_data_not_available"}],
+                        "calculation_trace": [
+                            {
+                                "step": "missing_agrisk_financial_analysis",
+                                "reason_code": "financial_data_not_available",
+                            }
+                        ],
+                    }
+                ],
+            },
+            "engine_trace": {"engine": "configurable_policy"},
+        }
+    )
+
+    contract = score.build_score_pillars_contract(score_result)
+
+    assert contract["available"] is True
+    assert contract["items"][0]["status"] == "not_available"
+    assert contract["items"][0]["source"] == "not_available"
+    assert contract["items"][0]["calculation_trace"][0]["reason_code"] == "financial_data_not_available"

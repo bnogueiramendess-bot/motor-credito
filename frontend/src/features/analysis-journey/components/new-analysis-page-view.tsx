@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Building2, Check, ChevronLeft, ChevronRight, CircleAlert, CreditCard, FileText, FolderOpen, Info, Lock, Search, ShieldCheck, Upload, X } from "lucide-react";
+import { AlertTriangle, Banknote, BarChart3, Building2, CalendarDays, Check, ChevronLeft, ChevronRight, CircleAlert, CreditCard, FileText, FolderOpen, Info, LineChart, Lock, ReceiptText, Search, ShieldCheck, Upload, X } from "lucide-react";
 
 import { checkExistingCreditAnalysis, createCommercialReference, createCreditAnalysisDraft, deleteAnalysisDocument, deleteCommercialReference, discardCreditAnalysisDraft, downloadAnalysisDocument, getAgriskReportRead, getAnalysisRequestMetadata, getCofaceReportRead, listAnalysisDocuments, listAnalysisReportReads, listCommercialReferences, lookupExternalCnpj, readAgriskReport, readCofaceReport, recoverCreditAnalysisDraft, saveAnalysisRequestMetadata, submitAnalysisJourney, submitTriageCreditRequest, triageCreditRequest, uploadAnalysisDocument } from "@/features/analysis-journey/api/analysis-journey.api";
 import { AgriskImportStatus, AgriskReportReadResponse, AgriskReportType, AnalysisDocumentDto, AnalysisJourneySubmitRequest, AnalysisReportReadSummaryDto, CofaceReportReadResponse, CommercialReference, CreditAnalysisDraftRecoveryResponse, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageSubmitRequest, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
@@ -490,6 +490,26 @@ function pickNumberFromSources(
   return null;
 }
 
+
+
+type ManualIndicatorRow = {
+  label: string;
+  value: number | null;
+  suffix?: string;
+  source: "Agrisk Financeiro" | "Manual" | "Não disponível";
+};
+
+function safeRatio(numerator: number | null, denominator: number | null, percent = false): number | null {
+  if (numerator === null || denominator === null || denominator === 0) return null;
+  const value = numerator / denominator;
+  return percent ? value * 100 : value;
+}
+
+function formatManualIndicator(value: number | null, suffix = "") {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return `${value.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}${suffix}`;
+}
+
 function normalizePillarCode(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -903,10 +923,22 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     scoreValue: 610,
     cofaceDra: 6.5,
     internalRevenue12m: "",
-    netRevenue: "",
     outstandingValue: "",
     pmrContractual: "",
     pmrEffective: "",
+    commercialNote: "",
+    netRevenue: "",
+    grossProfit: "",
+    ebitda: "",
+    netIncome: "",
+    currentAssets: "",
+    totalAssets: "",
+    cashAndEquivalents: "",
+    inventory: "",
+    currentLiabilities: "",
+    totalLiabilities: "",
+    equity: "",
+    operatingCashFlow: "",
     analystNotes: ""
   });
 
@@ -1054,6 +1086,86 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const hasAgriskImported = agriskImport.status === "valid" || agriskImport.status === "valid_with_warnings";
   const hasInvalidAgriskImport = agriskImport.files.length > 0 && (agriskImport.status === "invalid" || agriskImport.status === "error");
   const hasAgriskFinancialImported = isAgriskValidatedImport(agriskFinancialImport);
+  const agriskFinancialPayload = agriskFinancialImport.agriskReadPayload as Record<string, unknown> | null | undefined;
+  const agriskFinancialIndicators = agriskFinancialImport.agriskReadPayload?.financial_indicators;
+  const agriskFinancialNetRevenue = toNullableNumeric(agriskFinancialPayload?.net_revenue);
+  const manualNetRevenue = toNullableNumberInput(manualPanel.netRevenue);
+  const manualGrossProfit = toNullableNumberInput(manualPanel.grossProfit);
+  const manualEbitda = toNullableNumberInput(manualPanel.ebitda);
+  const manualNetIncome = toNullableNumberInput(manualPanel.netIncome);
+  const manualCurrentAssets = toNullableNumberInput(manualPanel.currentAssets);
+  const manualTotalAssets = toNullableNumberInput(manualPanel.totalAssets);
+  const manualCash = toNullableNumberInput(manualPanel.cashAndEquivalents);
+  const manualInventory = toNullableNumberInput(manualPanel.inventory);
+  const manualCurrentLiabilities = toNullableNumberInput(manualPanel.currentLiabilities);
+  const manualTotalLiabilities = toNullableNumberInput(manualPanel.totalLiabilities);
+  const manualEquity = toNullableNumberInput(manualPanel.equity);
+  const manualOperatingCashFlow = toNullableNumberInput(manualPanel.operatingCashFlow);
+  const hasManualFinancialStatementsSaved = [
+    manualPanel.netRevenue,
+    manualPanel.grossProfit,
+    manualPanel.ebitda,
+    manualPanel.netIncome,
+    manualPanel.currentAssets,
+    manualPanel.totalAssets,
+    manualPanel.cashAndEquivalents,
+    manualPanel.inventory,
+    manualPanel.currentLiabilities,
+    manualPanel.totalLiabilities,
+    manualPanel.equity,
+    manualPanel.operatingCashFlow,
+  ].some((value) => String(value ?? "").trim().length > 0);
+  const financialStatementsLocked = hasAgriskFinancialImported;
+  const currentFinancialSourceLabel = hasAgriskFinancialImported ? "Agrisk Financeiro" : "Manual";
+  const manualFinancialInputClassName = `mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] px-2.5 text-[12px] text-[#102033] ${financialStatementsLocked ? "cursor-not-allowed bg-[#F8FAFC] text-[#64748B]" : "bg-white"}`;
+  const agriskIndicatorRows: ManualIndicatorRow[] = [
+    { label: "Margem Bruta", value: toNullableNumeric(agriskFinancialIndicators?.gross_margin), suffix: "%", source: "Agrisk Financeiro" },
+    { label: "Margem EBITDA", value: safeRatio(toNullableNumeric(agriskFinancialIndicators?.ebitda), agriskFinancialNetRevenue, true), suffix: "%", source: "Agrisk Financeiro" },
+    { label: "Resultado DRE %", value: safeRatio(toNullableNumeric(agriskFinancialIndicators?.dre_result), agriskFinancialNetRevenue, true), suffix: "%", source: "Agrisk Financeiro" },
+    { label: "Fluxo de Caixa %", value: safeRatio(toNullableNumeric(agriskFinancialIndicators?.cash_flow), agriskFinancialNetRevenue, true), suffix: "%", source: "Agrisk Financeiro" },
+    { label: "Liquidez Geral", value: toNullableNumeric(agriskFinancialIndicators?.liquidity_general), source: "Agrisk Financeiro" },
+    { label: "Liquidez Corrente", value: toNullableNumeric(agriskFinancialIndicators?.liquidity_current), source: "Agrisk Financeiro" },
+    { label: "Liquidez Seca", value: toNullableNumeric(agriskFinancialIndicators?.liquidity_quick), source: "Agrisk Financeiro" },
+    { label: "Liquidez Imediata", value: toNullableNumeric(agriskFinancialIndicators?.liquidity_immediate), source: "Agrisk Financeiro" },
+    { label: "Endividamento", value: toNullableNumeric(agriskFinancialIndicators?.indebtedness), source: "Agrisk Financeiro" },
+    { label: "Alavancagem Financeira", value: toNullableNumeric(agriskFinancialIndicators?.financial_leverage), source: "Agrisk Financeiro" },
+    { label: "Índice Operacional", value: toNullableNumeric(agriskFinancialIndicators?.operational_index), suffix: "%", source: "Agrisk Financeiro" },
+  ];
+  const manualIndicatorRowsRaw: ManualIndicatorRow[] = [
+    { label: "Margem Bruta", value: safeRatio(manualGrossProfit, manualNetRevenue, true), suffix: "%", source: "Manual" },
+    { label: "Margem EBITDA", value: safeRatio(manualEbitda, manualNetRevenue, true), suffix: "%", source: "Manual" },
+    { label: "Resultado DRE %", value: safeRatio(manualNetIncome, manualNetRevenue, true), suffix: "%", source: "Manual" },
+    { label: "Fluxo de Caixa %", value: safeRatio(manualOperatingCashFlow, manualNetRevenue, true), suffix: "%", source: "Manual" },
+    { label: "Liquidez Geral", value: safeRatio(manualTotalAssets, manualTotalLiabilities), source: "Manual" },
+    { label: "Liquidez Corrente", value: safeRatio(manualCurrentAssets, manualCurrentLiabilities), source: "Manual" },
+    { label: "Liquidez Seca", value: manualCurrentAssets !== null && manualInventory !== null ? safeRatio(manualCurrentAssets - manualInventory, manualCurrentLiabilities) : null, source: "Manual" },
+    { label: "Liquidez Imediata", value: safeRatio(manualCash, manualCurrentLiabilities), source: "Manual" },
+    { label: "Endividamento", value: safeRatio(manualTotalLiabilities, manualTotalAssets), source: "Manual" },
+    { label: "Alavancagem Financeira", value: safeRatio(manualTotalAssets, manualEquity), source: "Manual" },
+    { label: "Índice Operacional", value: null, source: "Não disponível" },
+  ];
+  const manualIndicatorRows: ManualIndicatorRow[] = hasAgriskFinancialImported
+    ? agriskIndicatorRows
+    : manualIndicatorRowsRaw.map((row) => ({
+        ...row,
+        source: row.value !== null && Number.isFinite(row.value) ? row.source : "Não disponível",
+      }));
+  const currentIndicatorSourceLabel = hasAgriskFinancialImported
+    ? "Agrisk"
+    : manualIndicatorRows.some((row) => row.source === "Manual")
+      ? "Manual"
+      : "Não disponível";
+  const manualIndicatorGroups = [
+    { title: "Rentabilidade", labels: ["Margem Bruta", "Margem EBITDA", "Resultado DRE %", "Fluxo de Caixa %"] },
+    { title: "Liquidez", labels: ["Liquidez Geral", "Liquidez Corrente", "Liquidez Seca", "Liquidez Imediata"] },
+    { title: "Estrutura Financeira", labels: ["Endividamento", "Alavancagem Financeira"] },
+    { title: "Operacional", labels: ["Índice Operacional"] },
+  ].map((group) => ({
+    ...group,
+    rows: group.labels
+      .map((label) => manualIndicatorRows.find((row) => row.label === label))
+      .filter((row): row is ManualIndicatorRow => Boolean(row)),
+  })).filter((group) => group.rows.length > 0);
   const hasInvalidAgriskFinancialImport = agriskFinancialImport.files.length > 0 && (agriskFinancialImport.status === "invalid" || agriskFinancialImport.status === "error");
   const hasCofaceImported = isCofaceValidatedStatus(cofaceImport.status);
   const cofaceDecisionAmount = hasCofaceImported ?cofaceImport.cofaceReadPayload?.coface?.decision_amount ?? null : null;
@@ -1324,6 +1436,26 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }));
     if (savedManualPanel) {
       setManualPanel((prev) => ({ ...prev, ...savedManualPanel }));
+    }
+    const savedFinancial = workspaceState?.manual_financial_statements && typeof workspaceState.manual_financial_statements === "object"
+      ? (workspaceState.manual_financial_statements as Record<string, Record<string, unknown>>)
+      : null;
+    if (savedFinancial) {
+      setManualPanel((prev) => ({
+        ...prev,
+        netRevenue: String(savedFinancial.dre?.net_revenue ?? prev.netRevenue ?? ""),
+        grossProfit: String(savedFinancial.dre?.gross_profit ?? prev.grossProfit ?? ""),
+        ebitda: String(savedFinancial.dre?.ebitda ?? prev.ebitda ?? ""),
+        netIncome: String(savedFinancial.dre?.net_income ?? prev.netIncome ?? ""),
+        currentAssets: String(savedFinancial.balance_sheet?.current_assets ?? prev.currentAssets ?? ""),
+        totalAssets: String(savedFinancial.balance_sheet?.total_assets ?? prev.totalAssets ?? ""),
+        cashAndEquivalents: String(savedFinancial.balance_sheet?.cash_and_equivalents ?? prev.cashAndEquivalents ?? ""),
+        inventory: String(savedFinancial.balance_sheet?.inventory ?? prev.inventory ?? ""),
+        currentLiabilities: String(savedFinancial.balance_sheet?.current_liabilities ?? prev.currentLiabilities ?? ""),
+        totalLiabilities: String(savedFinancial.balance_sheet?.total_liabilities ?? prev.totalLiabilities ?? ""),
+        equity: String(savedFinancial.balance_sheet?.equity ?? prev.equity ?? ""),
+        operatingCashFlow: String(savedFinancial.cash_flow?.operating_cash_flow ?? prev.operatingCashFlow ?? ""),
+      }));
     }
     if (savedManual) {
       setManual((prev) => ({ ...prev, ...savedManual }));
@@ -2132,17 +2264,54 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   function saveManualDrawer() {
     const scoreIsFromImportedAgrisk = hasAgriskImported && manualPanel.scoreSource === "Agrisk";
     const cofaceIsFromImportedReport = hasCofaceImported;
+    const manualFinancialStatements = {
+      dre: {
+        net_revenue: toNullableNumberInput(manualPanel.netRevenue),
+        gross_profit: toNullableNumberInput(manualPanel.grossProfit),
+        ebitda: toNullableNumberInput(manualPanel.ebitda),
+        net_income: toNullableNumberInput(manualPanel.netIncome),
+      },
+      balance_sheet: {
+        current_assets: toNullableNumberInput(manualPanel.currentAssets),
+        total_assets: toNullableNumberInput(manualPanel.totalAssets),
+        cash_and_equivalents: toNullableNumberInput(manualPanel.cashAndEquivalents),
+        inventory: toNullableNumberInput(manualPanel.inventory),
+        current_liabilities: toNullableNumberInput(manualPanel.currentLiabilities),
+        total_liabilities: toNullableNumberInput(manualPanel.totalLiabilities),
+        equity: toNullableNumberInput(manualPanel.equity),
+      },
+      cash_flow: {
+        operating_cash_flow: toNullableNumberInput(manualPanel.operatingCashFlow),
+      },
+    };
+    const commercialInternalData = {
+      internal_revenue_last_12_months: toNullableNumberInput(manualPanel.internalRevenue12m),
+      open_amount: toNullableNumberInput(manualPanel.outstandingValue),
+      contracted_dso_days: toNullableNumberInput(manualPanel.pmrContractual),
+      effective_dso_days: toNullableNumberInput(manualPanel.pmrEffective),
+      commercial_note: manualPanel.commercialNote || null,
+    };
+    const externalReferences = {
+      score_source: scoreIsFromImportedAgrisk ? "Agrisk (importado)" : manualPanel.scoreSource,
+      score_value: scoreIsFromImportedAgrisk ? null : manualPanel.scoreValue,
+      coface_dra: cofaceIsFromImportedReport ? null : manualPanel.cofaceDra,
+    };
+    const observations = { analyst_notes: manualPanel.analystNotes || null };
 
     setManualConfigured(true);
     const nextManual = {
       ...manual,
       comments: manualPanel.analystNotes,
-      observations: `Fonte do score: ${scoreIsFromImportedAgrisk ?"Agrisk (importado)" : manualPanel.scoreSource}; Score: ${scoreIsFromImportedAgrisk ?"informado por relatório importado" : manualPanel.scoreValue}; DRA COFACE: ${cofaceIsFromImportedReport ?"informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}; Receita Líquida do Exercício: ${manualPanel.netRevenue || "não informada"}`
+      observations: `Fonte do score: ${externalReferences.score_source}; Score: ${externalReferences.score_value ?? "informado por relatório importado"}; DRA COFACE: ${cofaceIsFromImportedReport ? "informado por relatório importado" : manualPanel.cofaceDra}; Faturamento interno 12 meses: ${manualPanel.internalRevenue12m || "não informado"}`
     };
     setManual(nextManual);
     persistWorkspaceStatePatch({
       manual_configured: true,
       manual_panel: manualPanel,
+      external_references: externalReferences,
+      commercial_internal_data: commercialInternalData,
+      manual_financial_statements: manualFinancialStatements,
+      observations,
       complementary_data: {
         net_revenue: toNullableNumberInput(manualPanel.netRevenue)
       },
@@ -4381,132 +4550,175 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
           {isManualDrawerOpen ?(
             <div className="fixed inset-0 z-40 flex justify-end bg-[#0D1B2A]/45" onClick={() => setIsManualDrawerOpen(false)}>
-              <div className="flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
-                <div className="flex items-start justify-between border-b border-[#EEF3F8] px-6 py-5">
+              <div className="flex h-full w-full max-w-[760px] flex-col bg-[#F6F8FB] shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                <div className="flex items-start justify-between border-b border-[#D7E1EC] bg-white px-6 py-4">
                   <div>
-                    <p className="text-[15px] font-semibold text-[#102033]">Preenchimento manual</p>
-                    <p className="text-[12px] text-[#4F647A]">Informe os dados estruturados para análise de crédito</p>
+                    <p className="text-[18px] font-semibold leading-tight text-[#102033]">Informações complementares</p>
+                    <p className="mt-1 text-[12px] text-[#4F647A]">Informe dados manuais quando não houver relatórios externos suficientes para a análise.</p>
                   </div>
-                  <button type="button" onClick={() => setIsManualDrawerOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A]">
+                  <button type="button" onClick={() => setIsManualDrawerOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-full border border-[#D7E1EC] bg-[#F7F9FC] text-[#4F647A] hover:bg-white">
                     <X className="h-4 w-4" />
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-6 py-5">
-                  <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Scores e referências externas</p>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="text-[11px] font-medium text-[#4F647A]">
-                        Fonte do score
-                        <select
-                          value={manualPanel.scoreSource}
-                          onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreSource: event.target.value }))}
-                          className="mt-1 h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]"
-                        >
-                          <option value="Agrisk" disabled={hasAgriskImported}>
-                            {hasAgriskImported ?"Agrisk  indisponível (já importado)" : "Agrisk"}
-                          </option>
-                          <option value="Serasa">Serasa</option>
-                          <option value="SCR/Bacen">SCR/Bacen</option>
-                          <option value="Outro">Outro</option>
-                        </select>
-                      </label>
-                      <div className="text-[11px] font-medium text-[#4F647A]">
-                        Score
-                        <div className="mt-1 rounded-[8px] border border-[#D7E1EC] px-3 py-2">
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="range"
-                              min={0}
-                              max={1000}
-                              value={manualPanel.scoreValue}
-                              onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreValue: Number(event.target.value) }))}
-                              className="w-full"
-                            />
-                            <span className="min-w-[38px] text-right text-[16px] font-semibold text-[#295B9A]">{manualPanel.scoreValue}</span>
+                <div className="flex-1 overflow-y-auto px-6 py-4">
+                  <div className="space-y-3.5">
+                    <div className={`rounded-[8px] border px-3.5 py-2.5 text-[12px] leading-relaxed shadow-[0_8px_24px_rgba(15,23,42,0.04)] ${hasAgriskFinancialImported ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#1E3A8A]" : "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]"}`}>
+                      {hasAgriskFinancialImported
+                        ? "Relatório Financeiro Agrisk identificado. Os indicadores financeiros serão obtidos automaticamente do relatório. Use esta seção apenas para complementar dados comerciais ou observações."
+                        : "Nenhum Relatório Financeiro Agrisk foi identificado. Para melhorar a avaliação do Pilar 1, informe as demonstrações financeiras disponíveis."}
+                    </div>
+
+                    <section className="rounded-[8px] border border-[#D7E1EC] bg-white p-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#295B9A]">Scores e refer?ncias externas</p>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <label className="text-[11px] font-medium text-[#4F647A]">Fonte do score
+                          <select value={manualPanel.scoreSource} onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreSource: event.target.value }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]">
+                            <option value="Agrisk" disabled={hasAgriskImported}>{hasAgriskImported ? "Agrisk indisponível" : "Agrisk"}</option>
+                            <option value="Serasa">Serasa</option>
+                            <option value="SCR/Bacen">SCR/Bacen</option>
+                            <option value="Outro">Outro</option>
+                          </select>
+                        </label>
+                        <label className="text-[11px] font-medium text-[#4F647A]">Score
+                          <input type="number" min={0} max={1000} value={manualPanel.scoreValue} onChange={(event) => setManualPanel((prev) => ({ ...prev, scoreValue: Number(event.target.value) }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]" />
+                        </label>
+                        <label className="text-[11px] font-medium text-[#4F647A]">DRA COFACE
+                          <input type="number" min={0} max={10} step={0.1} value={manualPanel.cofaceDra} onChange={(event) => setManualPanel((prev) => ({ ...prev, cofaceDra: Number(event.target.value) }))} disabled={hasCofaceImported} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033] disabled:bg-[#F3F4F6]" />
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="rounded-[8px] border border-[#D7E1EC] bg-white p-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
+                      <div className="flex flex-wrap items-end justify-between gap-2 border-b border-[#EEF3F8] pb-2">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#295B9A]">Dados comerciais internos</p>
+                          <p className="mt-0.5 text-[11px] text-[#8FA3B4]">Relação comercial da empresa com o cliente.</p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        <label className="text-[11px] font-medium text-[#4F647A]"><span className="flex items-center gap-1.5"><Banknote className="h-3.5 w-3.5 text-[#295B9A]" />Receita últimos 12 meses</span>
+                          <input value={manualPanel.internalRevenue12m} onChange={(event) => setManualPanel((prev) => ({ ...prev, internalRevenue12m: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]" />
+                        </label>
+                        <label className="text-[11px] font-medium text-[#4F647A]"><span className="flex items-center gap-1.5"><ReceiptText className="h-3.5 w-3.5 text-[#295B9A]" />Valor em aberto</span>
+                          <input value={manualPanel.outstandingValue} onChange={(event) => setManualPanel((prev) => ({ ...prev, outstandingValue: formatCurrencyInputBRL(event.target.value) }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]" />
+                        </label>
+                        <label className="text-[11px] font-medium text-[#4F647A]"><span className="flex items-center gap-1.5"><CalendarDays className="h-3.5 w-3.5 text-[#295B9A]" />PMR contratado</span>
+                          <input value={manualPanel.pmrContractual} onChange={(event) => setManualPanel((prev) => ({ ...prev, pmrContractual: event.target.value }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]" />
+                        </label>
+                        <label className="text-[11px] font-medium text-[#4F647A]"><span className="flex items-center gap-1.5"><LineChart className="h-3.5 w-3.5 text-[#295B9A]" />PMR efetivo</span>
+                          <input value={manualPanel.pmrEffective} onChange={(event) => setManualPanel((prev) => ({ ...prev, pmrEffective: event.target.value }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]" />
+                        </label>
+                        <label className="sm:col-span-2 text-[11px] font-medium text-[#4F647A]">Observação comercial curta
+                          <input value={manualPanel.commercialNote} onChange={(event) => setManualPanel((prev) => ({ ...prev, commercialNote: event.target.value }))} className="mt-1 h-8 w-full rounded-[8px] border border-[#D7E1EC] bg-white px-2.5 text-[12px] text-[#102033]" />
+                        </label>
+                      </div>
+                    </section>
+
+                    <details open={!hasAgriskFinancialImported} className="rounded-[8px] border border-[#D7E1EC] bg-white shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
+                      <summary className="cursor-pointer px-3.5 py-3 text-[#102033]">
+                        <span className="flex items-center justify-between gap-3">
+                          <span className="flex items-center gap-2.5">
+                            <span className="grid h-8 w-8 place-items-center rounded-[8px] bg-[#EAF1FF] text-[#295B9A]"><BarChart3 className="h-4 w-4" /></span>
+                            <span>
+                              <span className="block text-[13px] font-semibold">Demonstrações Financeiras</span>
+                              <span className="block text-[11px] font-normal text-[#8FA3B4]">Preencha quando não houver Relatório Financeiro Agrisk.</span>
+                            </span>
+                          </span>
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[#4F647A]">Mostrar detalhes</span>
+                        </span>
+                      </summary>
+                      <div className="border-t border-[#EEF3F8] px-3.5 pb-3 pt-3">
+                        <div className="mb-3 rounded-[8px] border border-[#E5EAF1] bg-[#F8FBFF] px-3 py-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-[#64748B]">Origem dos dados financeiros</p>
+                          <div className="mt-1.5 flex flex-wrap gap-3 text-[11px] font-medium text-[#4F647A]">
+                            {hasAgriskFinancialImported ? <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-[#295B9A]" />Agrisk Financeiro</span> : null}
+                            <span className="inline-flex items-center gap-1.5"><span className={`h-2 w-2 rounded-full ${hasAgriskFinancialImported ? "border border-[#CBD5E1] bg-white" : "bg-[#295B9A]"}`} />Manual</span>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                  </div>
+                        <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
+                          <div>
+                            <p className="mb-2 text-[11px] font-semibold text-[#295B9A]">DRE</p>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <label className="text-[11px] font-medium text-[#4F647A]">Receita Líquida<input value={manualPanel.netRevenue} onChange={(event) => setManualPanel((prev) => ({ ...prev, netRevenue: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">EBITDA<input value={manualPanel.ebitda} onChange={(event) => setManualPanel((prev) => ({ ...prev, ebitda: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Lucro Bruto<input value={manualPanel.grossProfit} onChange={(event) => setManualPanel((prev) => ({ ...prev, grossProfit: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Resultado Líquido<input value={manualPanel.netIncome} onChange={(event) => setManualPanel((prev) => ({ ...prev, netIncome: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                            </div>
+                            <div className="mt-3 max-w-[180px]">
+                              <p className="mb-2 text-[11px] font-semibold text-[#295B9A]">Fluxo de Caixa</p>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Fluxo de Caixa Operacional<input value={manualPanel.operatingCashFlow} onChange={(event) => setManualPanel((prev) => ({ ...prev, operatingCashFlow: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="mb-2 text-[11px] font-semibold text-[#295B9A]">Balanço</p>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <label className="text-[11px] font-medium text-[#4F647A]">Ativo Total<input value={manualPanel.totalAssets} onChange={(event) => setManualPanel((prev) => ({ ...prev, totalAssets: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Passivo Total<input value={manualPanel.totalLiabilities} onChange={(event) => setManualPanel((prev) => ({ ...prev, totalLiabilities: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Ativo Circulante<input value={manualPanel.currentAssets} onChange={(event) => setManualPanel((prev) => ({ ...prev, currentAssets: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Passivo Circulante<input value={manualPanel.currentLiabilities} onChange={(event) => setManualPanel((prev) => ({ ...prev, currentLiabilities: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Disponibilidades<input value={manualPanel.cashAndEquivalents} onChange={(event) => setManualPanel((prev) => ({ ...prev, cashAndEquivalents: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Estoques<input value={manualPanel.inventory} onChange={(event) => setManualPanel((prev) => ({ ...prev, inventory: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                              <label className="text-[11px] font-medium text-[#4F647A]">Patrimônio Líquido<input value={manualPanel.equity} onChange={(event) => setManualPanel((prev) => ({ ...prev, equity: formatCurrencyInputBRL(event.target.value) }))} disabled={financialStatementsLocked} className={manualFinancialInputClassName} /></label>
+                            </div>
+                          </div>
+                        </div>
 
-                  <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">COFACE</p>
-                    <div className="text-[11px] font-medium text-[#4F647A]">
-                      DRA COFACE (0 a 10)
-                      <div className="mt-1 rounded-[8px] border border-[#D7E1EC] px-3 py-2">
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="range"
-                            min={0}
-                            max={10}
-                            step={0.1}
-                            value={manualPanel.cofaceDra}
-                            onChange={(event) => setManualPanel((prev) => ({ ...prev, cofaceDra: Number(event.target.value) }))}
-                            disabled={hasCofaceImported}
-                            className="w-full disabled:cursor-not-allowed"
-                          />
-                          <span className="min-w-[38px] text-right text-[16px] font-semibold text-[#295B9A]">{manualPanel.cofaceDra.toFixed(1)}</span>
+                      </div>
+                    </details>
+
+                    <section className="rounded-[8px] border border-[#D7E1EC] bg-white p-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
+                      <div className="flex flex-wrap items-end justify-between gap-2 border-b border-[#EEF3F8] pb-2">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#295B9A]">Indicadores calculados pelo motor</p>
+                          <p className="mt-0.5 text-[11px] text-[#8FA3B4]">Fonte atual dos indicadores: {currentIndicatorSourceLabel}</p>
                         </div>
                       </div>
-                      {hasCofaceImported ?<span className="mt-1 block text-[10px] text-[#8FA3B4]">DRA COFACE já informado por relatório importado.</span> : null}
-                    </div>
-                  </div>
+                      {hasAgriskFinancialImported ? (
+                        <div className="mt-3 rounded-[8px] border border-[#BFDBFE] bg-[#F8FBFF] px-3 py-2.5 text-[11px] leading-relaxed text-[#1E3A8A]">
+                          Indicadores exibidos a partir do Relat?rio Financeiro Agrisk. Dados manuais salvos, se houver, est?o preservados, por?m ignorados enquanto o Agrisk estiver dispon?vel.
+                        </div>
+                      ) : null}
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        {manualIndicatorGroups.map((group) => (
+                          <div key={group.title} className="rounded-[8px] border border-[#E5EAF1] bg-[#FBFDFF] p-2.5">
+                            <p className="mb-2 text-[11px] font-semibold text-[#102033]">{group.title}</p>
+                            <div className="grid gap-2">
+                              {group.rows.map((row) => {
+                                const available = row.value !== null && Number.isFinite(row.value);
+                                const sourceLabel = row.source === "Agrisk Financeiro" ? "Agrisk" : row.source;
+                                return (
+                                  <div key={row.label} className="rounded-[8px] border border-[#EDF2F7] bg-white px-2.5 py-2">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <p className="text-[11px] font-medium text-[#4F647A]">{row.label}</p>
+                                      {!available ? <span className="rounded-full bg-[#F1F5F9] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.04em] text-[#94A3B8]">Não disponível</span> : null}
+                                    </div>
+                                    <div className="mt-1 flex items-end justify-between gap-2">
+                                      <p className={`text-[16px] font-semibold leading-none ${available ? "text-[#102033]" : "text-[#94A3B8]"}`}>{formatManualIndicator(row.value, row.suffix)}</p>
+                                      <p className="text-[10px] font-medium text-[#8FA3B4]">{sourceLabel}</p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
 
-                  <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Dados comerciais internos</p>
-                    <p className="mb-3 text-[11px] text-[#8FA3B4]">
-                      Faturamento interno últimos 12 meses = total vendido ao cliente nos últimos 12 meses. Valor em aberto = total atualmente em aberto com o cliente.
-                    </p>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="text-[11px] font-medium text-[#4F647A]">
-                        <span className="mb-1 block min-h-[2.5rem]">Faturamento interno últimos 12 meses (R$)</span>
-                        <input value={manualPanel.internalRevenue12m} onChange={(event) => setManualPanel((prev) => ({ ...prev, internalRevenue12m: formatCurrencyInputBRL(event.target.value) }))} className="h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" />
+                    <section className="rounded-[8px] border border-[#D7E1EC] bg-white p-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#295B9A]">Observações</p>
+                      <label className="mt-3 block text-[11px] font-medium text-[#4F647A]">Considerações do analista
+                        <textarea value={manualPanel.analystNotes} onChange={(event) => setManualPanel((prev) => ({ ...prev, analystNotes: event.target.value }))} rows={4} maxLength={1200} className="mt-1 min-h-[96px] w-full rounded-[8px] border border-[#D7E1EC] px-3 py-2 text-[12px] text-[#102033]" />
                       </label>
-                      <label className="text-[11px] font-medium text-[#4F647A]">
-                        <span className="mb-1 block min-h-[2.5rem]">Receita Líquida do Exercício</span>
-                        <input
-                          value={manualPanel.netRevenue}
-                          onChange={(event) => setManualPanel((prev) => ({ ...prev, netRevenue: formatCurrencyInputBRL(event.target.value) }))}
-                          placeholder="R$ 45.000.000,00"
-                          disabled={isJourneyReadOnly}
-                          className="h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px] disabled:bg-[#F3F4F6] disabled:text-[#6B7280]"
-                        />
-                        <span className="mt-1 block text-[10px] leading-4 text-[#8FA3B4]">
-                          Usada para calcular as margens de EBITDA, Fluxo de Caixa e Resultado DRE no Pilar Estabilidade Financeira e Liquidez.
-                        </span>
-                      </label>
-                      <label className="text-[11px] font-medium text-[#4F647A]">
-                        <span className="mb-1 block min-h-[2.5rem]">Valor em aberto (R$)</span>
-                        <input value={manualPanel.outstandingValue} onChange={(event) => setManualPanel((prev) => ({ ...prev, outstandingValue: formatCurrencyInputBRL(event.target.value) }))} className="h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" />
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="mb-6">
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Indicadores operacionais</p>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="text-[11px] font-medium text-[#4F647A]">PMR contratual (dias)<input value={manualPanel.pmrContractual} onChange={(event) => setManualPanel((prev) => ({ ...prev, pmrContractual: event.target.value }))} className="mt-1 h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" /></label>
-                      <label className="text-[11px] font-medium text-[#4F647A]">PMR efetivo (dias)<input value={manualPanel.pmrEffective} onChange={(event) => setManualPanel((prev) => ({ ...prev, pmrEffective: event.target.value }))} className="mt-1 h-9 w-full rounded-[8px] border border-[#D7E1EC] px-3 text-[12px]" /></label>
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="mb-3 border-b border-[#EEF3F8] pb-1.5 text-[10px] font-semibold uppercase tracking-[0.7px] text-[#295B9A]">Observações</p>
-                    <label className="text-[11px] font-medium text-[#4F647A]">
-                      Considerações do analista <span className="ml-1 font-normal text-[#8FA3B4]">(opcional)</span>
-                      <textarea value={manualPanel.analystNotes} onChange={(event) => setManualPanel((prev) => ({ ...prev, analystNotes: event.target.value }))} rows={4} className="mt-1 w-full rounded-[8px] border border-[#D7E1EC] px-3 py-2 text-[12px]" />
-                    </label>
+                      <p className="mt-1 text-right text-[10px] text-[#8FA3B4]">{manualPanel.analystNotes.length}/1200</p>
+                    </section>
                   </div>
                 </div>
 
-                <div className="flex justify-end gap-2 border-t border-[#EEF3F8] px-6 py-4">
-                  <button type="button" onClick={() => setIsManualDrawerOpen(false)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-5 py-2 text-[12px] font-medium text-[#4F647A]">
-                    Cancelar
-                  </button>
-                  <button type="button" onClick={saveManualDrawer} className="rounded-[8px] bg-[#0D1B2A] px-6 py-2 text-[12px] font-medium text-white">
-                    Salvar dados
-                  </button>
+                <div className="flex justify-end gap-2 border-t border-[#D7E1EC] bg-white px-6 py-3">
+                  <button type="button" onClick={() => setIsManualDrawerOpen(false)} className="rounded-[8px] border border-[#D7E1EC] bg-white px-5 py-2 text-[12px] font-medium text-[#4F647A] hover:bg-[#F7F9FC]">Cancelar</button>
+                  <button type="button" onClick={saveManualDrawer} className="rounded-[8px] bg-[#0D1B2A] px-6 py-2 text-[12px] font-medium text-white hover:bg-[#13263B]">Salvar dados</button>
                 </div>
               </div>
             </div>

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -34,6 +33,11 @@ from app.services.credit_decision_pillar_five_score import (
     calculate_pillar_five_score,
 )
 from app.services.credit_report_readers.agrisk_types import AGRISK_FINANCIAL_ANALYSIS
+from app.services.manual_financial_statements import (
+    FINANCIAL_DATA_NOT_AVAILABLE_REASON,
+    build_manual_financial_policy_payload,
+    normalize_manual_financial_statements_from_analysis,
+)
 from app.services.report_links import get_agrisk_link
 
 VALID_SCORE_OPERATORS = {">=", ">", "<=", "<", "=", "between"}
@@ -590,33 +594,6 @@ def _manual_indicator_payload(db: Session, policy_id: int, indicator_values: dic
     return payload
 
 
-def _extract_net_revenue_from_analysis(analysis: CreditAnalysis) -> Decimal | None:
-    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
-    workspace_state = memory.get("workspace_state") if isinstance(memory.get("workspace_state"), dict) else {}
-    manual_panel = workspace_state.get("manual_panel") if isinstance(workspace_state.get("manual_panel"), dict) else {}
-    complementary_data = workspace_state.get("complementary_data") if isinstance(workspace_state.get("complementary_data"), dict) else {}
-    for source in (manual_panel, complementary_data):
-        for key in ("netRevenue", "net_revenue", "receita_liquida"):
-            if key in source:
-                parsed = _to_decimal(source.get(key))
-                if parsed is not None:
-                    return parsed
-    return None
-
-
-def _with_analysis_net_revenue(payload: dict[str, Any], analysis: CreditAnalysis) -> dict[str, Any]:
-    net_revenue = _extract_net_revenue_from_analysis(analysis)
-    if net_revenue is None:
-        return payload
-    enriched = deepcopy(payload)
-    complementary_data = enriched.get("complementary_data")
-    if not isinstance(complementary_data, dict):
-        complementary_data = {}
-        enriched["complementary_data"] = complementary_data
-    enriched["net_revenue"] = net_revenue
-    complementary_data["net_revenue"] = net_revenue
-    return enriched
-
 
 def _find_agrisk_financial_payload_for_analysis(db: Session, analysis_id: int) -> dict[str, Any] | None:
     analysis = db.get(CreditAnalysis, analysis_id)
@@ -628,7 +605,7 @@ def _find_agrisk_financial_payload_for_analysis(db: Session, analysis_id: int) -
         linked_read = db.get(CreditReportRead, linked_read_id)
         if linked_read is not None and isinstance(linked_read.read_payload_json, dict):
             if linked_read.read_payload_json.get("report_type") == AGRISK_FINANCIAL_ANALYSIS:
-                return _with_analysis_net_revenue(linked_read.read_payload_json, analysis)
+                return linked_read.read_payload_json
 
     customer_document = getattr(analysis.customer, "document_number", None)
     if not customer_document:
@@ -647,8 +624,16 @@ def _find_agrisk_financial_payload_for_analysis(db: Session, analysis_id: int) -
     for read in reads:
         payload = read.read_payload_json if isinstance(read.read_payload_json, dict) else {}
         if payload.get("report_type") == AGRISK_FINANCIAL_ANALYSIS:
-            return _with_analysis_net_revenue(payload, analysis)
+            return payload
     return None
+
+
+def _find_manual_financial_payload_for_analysis(db: Session, analysis_id: int) -> dict[str, Any] | None:
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        return None
+    statements = normalize_manual_financial_statements_from_analysis(analysis)
+    return build_manual_financial_policy_payload(statements)
 
 
 def simulate_pillar_one_score(
@@ -677,15 +662,46 @@ def simulate_pillar_one_score(
 
     if analysis_id is not None:
         payload = _find_agrisk_financial_payload_for_analysis(db, analysis_id)
-        result = calculate_pillar_one_from_agrisk_payload(
+        if payload is not None:
+            result = calculate_pillar_one_from_agrisk_payload(
+                db=db,
+                policy_id=policy_id,
+                has_valid_coface=False,
+                agrisk_financial_payload=payload,
+                analysis_id=analysis_id,
+            )
+            result["warnings"] = []
+            result["simulation"] = {"mode": "analysis_id", "persisted": False, "financial_source": "agrisk_financial_analysis"}
+            return result
+
+        manual_payload = _find_manual_financial_payload_for_analysis(db, analysis_id)
+        if manual_payload is not None:
+            result = calculate_pillar_one_score(
+                db=db,
+                policy_id=policy_id,
+                has_valid_coface=False,
+                agrisk_financial_data=manual_payload,
+                financial_data_source="manual_financial_statements",
+                analysis_id=analysis_id,
+            )
+            result["mapper_trace"] = []
+            result["mapper_warnings"] = []
+            result["warnings"] = result.get("warnings", [])
+            result["simulation"] = {"mode": "analysis_id", "persisted": False, "financial_source": "manual_financial_statements"}
+            return result
+
+        result = calculate_pillar_one_score(
             db=db,
             policy_id=policy_id,
             has_valid_coface=False,
-            agrisk_financial_payload=payload,
+            agrisk_financial_data=None,
+            not_available_reason_code=FINANCIAL_DATA_NOT_AVAILABLE_REASON,
             analysis_id=analysis_id,
         )
-        result["warnings"] = [] if payload is not None else [{"reason": "agrisk_financial_analysis_not_found"}]
-        result["simulation"] = {"mode": "analysis_id", "persisted": False}
+        result["mapper_trace"] = []
+        result["mapper_warnings"] = []
+        result["warnings"] = [{"reason": FINANCIAL_DATA_NOT_AVAILABLE_REASON}]
+        result["simulation"] = {"mode": "analysis_id", "persisted": False, "financial_source": "not_available"}
         return result
 
     if indicator_values:
@@ -706,12 +722,13 @@ def simulate_pillar_one_score(
         policy_id=policy_id,
         has_valid_coface=False,
         agrisk_financial_data=None,
+        not_available_reason_code=FINANCIAL_DATA_NOT_AVAILABLE_REASON,
         analysis_id=analysis_id,
     )
     result["mapper_trace"] = []
     result["mapper_warnings"] = []
-    result["warnings"] = [{"reason": "agrisk_financial_analysis_not_available"}]
-    result["simulation"] = {"mode": "not_available", "persisted": False}
+    result["warnings"] = [{"reason": FINANCIAL_DATA_NOT_AVAILABLE_REASON}]
+    result["simulation"] = {"mode": "not_available", "persisted": False, "financial_source": "not_available"}
     return result
 
 

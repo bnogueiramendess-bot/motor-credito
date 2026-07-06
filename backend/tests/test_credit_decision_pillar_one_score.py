@@ -25,6 +25,10 @@ from app.services.credit_decision_pillar_one_score import (
 )
 from app.services.credit_decision_policy_score_seed import ensure_default_score_structure
 from app.services.credit_decision_policy_service import create_credit_decision_policy
+from app.services.manual_financial_statements import (
+    DIVISION_BY_ZERO_OR_MISSING_BASE_REASON,
+    build_manual_financial_policy_payload,
+)
 
 
 def _valid_config() -> dict:
@@ -304,7 +308,7 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
         for code in ("ebitda", "cash_flow", "dre_result"):
             indicator = self._indicator_result(result, code)
             self.assertEqual(indicator["status"], "not_available")
-            self.assertEqual(indicator["reason"], NET_REVENUE_MISSING_WARNING)
+            self.assertEqual(indicator["reason"], DIVISION_BY_ZERO_OR_MISSING_BASE_REASON)
             self.assertIsNone(indicator["normalized_value"])
             self.assertEqual(indicator["value_type"], "percent")
 
@@ -324,7 +328,7 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
                 for code in ("ebitda", "cash_flow", "dre_result"):
                     indicator = self._indicator_result(result, code)
                     self.assertEqual(indicator["status"], "not_available")
-                    self.assertEqual(indicator["reason"], NET_REVENUE_INVALID_WARNING)
+                    self.assertEqual(indicator["reason"], DIVISION_BY_ZERO_OR_MISSING_BASE_REASON)
 
     def test_indicator_weights_affect_subgroup_score(self) -> None:
         self._set_ranges("current_liquidity", [(">=", "0", None, "10")])
@@ -444,6 +448,72 @@ class CreditDecisionPillarOneScoreTestCase(unittest.TestCase):
 
         self.assertGreaterEqual(result["score"], Decimal("0"))
         self.assertLessEqual(result["score"], Decimal("10"))
+
+    def test_manual_financial_payload_calculates_available_indicators(self) -> None:
+        payload = build_manual_financial_policy_payload(
+            {
+                "dre": {
+                    "net_revenue": "500",
+                    "gross_profit": "200",
+                    "ebitda": "100",
+                    "net_income": "50",
+                },
+                "balance_sheet": {
+                    "current_assets": "300",
+                    "total_assets": "1000",
+                    "cash_and_equivalents": "80",
+                    "inventory": "40",
+                    "current_liabilities": "150",
+                    "total_liabilities": "400",
+                    "equity": "600",
+                },
+                "cash_flow": {"operating_cash_flow": "25"},
+            }
+        )
+
+        self.assertIsNotNone(payload)
+        result = calculate_pillar_one_score(
+            db=self.db,
+            policy_id=self.policy.id,
+            has_valid_coface=False,
+            agrisk_financial_data=payload,
+            financial_data_source="manual_financial_statements",
+        )
+
+        self.assertEqual(result["status"], "calculated")
+        self.assertEqual(result["source"], "manual_financial_statements")
+        self.assertEqual(self._indicator_result(result, "ebitda")["normalized_value"], Decimal("20.00"))
+        self.assertEqual(self._indicator_result(result, "cash_flow")["normalized_value"], Decimal("5.00"))
+        self.assertEqual(self._indicator_result(result, "gross_margin")["raw_value"], Decimal("40.00"))
+
+    def test_manual_payload_marks_missing_indicators_as_not_available_without_crashing(self) -> None:
+        payload = build_manual_financial_policy_payload(
+            {
+                "dre": {"ebitda": "100"},
+                "balance_sheet": {"total_assets": "1000", "total_liabilities": "400"},
+                "cash_flow": {},
+            }
+        )
+
+        self.assertIsNotNone(payload)
+        result = calculate_pillar_one_score(
+            db=self.db,
+            policy_id=self.policy.id,
+            has_valid_coface=False,
+            agrisk_financial_data=payload,
+            financial_data_source="manual_financial_statements",
+        )
+
+        ebitda = self._indicator_result(result, "ebitda")
+        current_liquidity = self._indicator_result(result, "current_liquidity")
+        general_liquidity = self._indicator_result(result, "general_liquidity")
+
+        self.assertEqual(ebitda["status"], "not_available")
+        self.assertEqual(ebitda["reason"], DIVISION_BY_ZERO_OR_MISSING_BASE_REASON)
+        self.assertEqual(current_liquidity["status"], "not_available")
+        self.assertEqual(current_liquidity["reason"], DIVISION_BY_ZERO_OR_MISSING_BASE_REASON)
+        self.assertEqual(general_liquidity["status"], "calculated")
+        self.assertIn({"code": "net_revenue_not_available", "message": NET_REVENUE_MISSING_WARNING}, result["warnings"])
 
 
 if __name__ == "__main__":

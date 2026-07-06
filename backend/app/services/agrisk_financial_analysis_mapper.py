@@ -158,11 +158,30 @@ def _normalize_numeric(value: Any) -> Decimal | None:
         return None
 
 
-def _empty_policy_payload() -> dict[str, dict[str, Decimal | None]]:
+def _empty_policy_payload() -> dict[str, Any]:
     return {
         "financial_indicators": {},
         "quality_flags": {},
     }
+
+
+def _extract_net_revenue(payload: Any) -> Decimal | None:
+    candidates = (
+        ("net_revenue",),
+        ("receita_liquida",),
+        ("financial_indicators", "net_revenue"),
+        ("financial_indicators", "receita_liquida"),
+        ("complementary_data", "net_revenue"),
+        ("complementary_data", "receita_liquida"),
+    )
+    for path in candidates:
+        found, raw_value = _get_path_value(payload, path)
+        if not found:
+            continue
+        normalized_value = _normalize_numeric(raw_value)
+        if normalized_value is not None:
+            return normalized_value
+    return None
 
 
 def map_agrisk_financial_analysis_to_indicator_values(payload: Any | None) -> dict[str, Any]:
@@ -172,6 +191,10 @@ def map_agrisk_financial_analysis_to_indicator_values(payload: Any | None) -> di
     policy_payload = _empty_policy_payload()
 
     source_payload = _unwrap_payload(payload)
+    if source_payload is not None:
+        net_revenue = _extract_net_revenue(source_payload)
+        if net_revenue is not None:
+            policy_payload["net_revenue"] = net_revenue
 
     for mapping in FIELD_MAPPINGS:
         source_path, raw_value = _find_raw_value(source_payload, mapping) if source_payload is not None else (None, None)

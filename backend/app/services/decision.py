@@ -10,7 +10,9 @@ from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.enums import MotorResult, ScoreBand
 from app.models.external_data_entry import ExternalDataEntry
 from app.models.score_result import ScoreResult
+from app.services.credit_decision_policy_score_seed import PILLAR_CODE
 from app.services.credit_policy import build_runtime_policy_from_entity, ensure_active_policy
+from app.services.manual_financial_statements import FINANCIAL_DATA_NOT_AVAILABLE_REASON, to_decimal
 
 DECIMAL_ZERO = Decimal("0")
 
@@ -67,14 +69,68 @@ def _rule_explanation_item(
     }
 
 
-def _resolve_revenue_basis(analysis: CreditAnalysis, source_entry: ExternalDataEntry) -> tuple[str, Decimal]:
+def _score_memory(score_result: ScoreResult) -> dict[str, Any]:
+    memory = score_result.calculation_memory_json if isinstance(score_result.calculation_memory_json, dict) else {}
+    return memory if isinstance(memory, dict) else {}
+
+
+
+def _pillar_one_result_from_score(score_result: ScoreResult) -> dict[str, Any] | None:
+    explainability = _score_memory(score_result).get("explainability")
+    if not isinstance(explainability, dict):
+        return None
+    pillars = explainability.get("pillars_evaluated")
+    if not isinstance(pillars, list):
+        return None
+    for pillar in pillars:
+        if isinstance(pillar, dict) and pillar.get("pillar_code") == PILLAR_CODE:
+            return pillar
+    return None
+
+
+
+def _revenue_basis_from_pillar_one_score(score_result: ScoreResult) -> tuple[str, Decimal] | None:
+    pillar_one = _pillar_one_result_from_score(score_result)
+    if not isinstance(pillar_one, dict):
+        return None
+
+    source = str(pillar_one.get("source") or "score")
+    indicators = pillar_one.get("indicators") if isinstance(pillar_one.get("indicators"), list) else []
+    for indicator in indicators:
+        if not isinstance(indicator, dict):
+            continue
+        revenue_basis = to_decimal(indicator.get("net_revenue"))
+        if revenue_basis is not None and revenue_basis > DECIMAL_ZERO:
+            return f"{source}_net_revenue", revenue_basis
+
+    trace_items = pillar_one.get("calculation_trace") if isinstance(pillar_one.get("calculation_trace"), list) else []
+    for item in trace_items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("reason_code") == FINANCIAL_DATA_NOT_AVAILABLE_REASON:
+            return FINANCIAL_DATA_NOT_AVAILABLE_REASON, DECIMAL_ZERO
+
+    if source == "not_available":
+        return FINANCIAL_DATA_NOT_AVAILABLE_REASON, DECIMAL_ZERO
+    return None
+
+
+
+def _resolve_revenue_basis(analysis: CreditAnalysis, source_entry: ExternalDataEntry, score_result: ScoreResult) -> tuple[str, Decimal]:
+    score_source = str(_score_memory(score_result).get("score_source") or "")
+    if score_source == "configurable_policy":
+        revenue_basis = _revenue_basis_from_pillar_one_score(score_result)
+        if revenue_basis is not None:
+            return revenue_basis
+        return FINANCIAL_DATA_NOT_AVAILABLE_REASON, DECIMAL_ZERO
+
     if source_entry.declared_revenue is not None and source_entry.declared_revenue > 0:
         return "declared_revenue", source_entry.declared_revenue
 
     if analysis.annual_revenue_estimated is not None and analysis.annual_revenue_estimated > 0:
         return "annual_revenue_estimated", analysis.annual_revenue_estimated
 
-    raise DecisionCalculationError("No positive revenue basis available for decision calculation.")
+    return FINANCIAL_DATA_NOT_AVAILABLE_REASON, DECIMAL_ZERO
 
 
 def _resolve_band_cap(score_band: ScoreBand, revenue_basis: Decimal, ratio: Decimal) -> Decimal:
@@ -138,7 +194,7 @@ def calculate_and_apply_decision(
     if source_entry is None:
         raise DecisionCalculationError("No external data found for this analysis.")
 
-    revenue_basis_type, revenue_basis_value = _resolve_revenue_basis(analysis, source_entry)
+    revenue_basis_type, revenue_basis_value = _resolve_revenue_basis(analysis, source_entry, score_result)
     cap_ratio = policy.decision.band_limit_caps.get(score_result.score_band, DECIMAL_ZERO)
     band_limit_cap = _resolve_band_cap(score_result.score_band, revenue_basis_value, cap_ratio)
 

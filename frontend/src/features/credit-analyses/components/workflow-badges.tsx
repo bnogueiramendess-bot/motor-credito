@@ -8,7 +8,7 @@ type WorkflowBadgesProps = {
 const statusMap: Record<string, { label: string; cls: string }> = {
   pending: { label: "Pendente", cls: "bg-[#EFF6FF] text-[#1D4ED8]" },
   in_progress: { label: "Em andamento", cls: "bg-[#EEF3F8] text-[#295B9A]" },
-  in_approval: { label: "Em aprova??o", cls: "bg-[#FEF3C7] text-[#92400E]" },
+  in_approval: { label: "Em aprovação", cls: "bg-[#FEF3C7] text-[#92400E]" },
   changes_requested: { label: "Devolvido para Ajustes", cls: "bg-[#F1F5F9] text-[#475569]" },
   approved: { label: "Aprovado", cls: "bg-[#E6F4ED] text-[#166534]" },
   rejected: { label: "Recusado", cls: "bg-[#FEF2F2] text-[#B91C1C]" }
@@ -19,9 +19,9 @@ export function WorkflowBadges({ status, isEarlyReview, analysisType, hasRecent 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusInfo.cls}`}>{statusInfo.label}</span>
-      {isEarlyReview ? <span className="rounded-full bg-[#FFF7E8] px-2 py-0.5 text-[10px] font-semibold text-[#92400E]">Revis?o antecipada</span> : null}
+      {isEarlyReview ? <span className="rounded-full bg-[#FFF7E8] px-2 py-0.5 text-[10px] font-semibold text-[#92400E]">Revisão antecipada</span> : null}
       {analysisType === "novo_cliente" ? <span className="rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[10px] font-semibold text-[#4338CA]">Novo cliente</span> : <span className="rounded-full bg-[#E6F4ED] px-2 py-0.5 text-[10px] font-semibold text-[#166534]">Cliente da carteira</span>}
-      {hasRecent ? <span className="rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[10px] font-semibold text-[#92400E]">Possui an?lise recente</span> : null}
+      {hasRecent ? <span className="rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[10px] font-semibold text-[#92400E]">Possui análise recente</span> : null}
     </div>
   );
 }

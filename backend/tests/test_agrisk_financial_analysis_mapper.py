@@ -329,6 +329,34 @@ class AgriskFinancialAnalysisMapperTestCase(unittest.TestCase):
         self.assertEqual(result["mapper_trace"], [])
         self.assertEqual(result["mapper_warnings"], [])
 
+    def test_net_revenue_is_propagated_to_policy_payload(self) -> None:
+        payload = self._complete_payload()
+        payload["net_revenue"] = "45000000"
+
+        mapped = map_agrisk_financial_analysis_to_indicator_values(payload)
+
+        self.assertEqual(mapped["policy_payload"]["net_revenue"], Decimal("45000000"))
+
+    def test_agrisk_financial_data_does_not_require_manual_revenue(self) -> None:
+        payload = self._complete_payload()
+        payload["net_revenue"] = "45000000"
+        payload["financial_indicators"]["ebitda"] = "1736779.28"
+        payload["financial_indicators"]["cash_flow"] = "230569.31"
+        payload["financial_indicators"]["dre_result"] = "4500000"
+
+        result = calculate_pillar_one_from_agrisk_payload(
+            db=self.db,
+            policy_id=self.policy.id,
+            has_valid_coface=False,
+            agrisk_financial_payload=payload,
+        )
+
+        ebitda = next(indicator for indicator in result["indicators"] if indicator["code"] == "ebitda")
+        self.assertEqual(result["status"], "calculated")
+        self.assertEqual(result["source"], "agrisk_financial_analysis")
+        self.assertEqual(ebitda["normalized_value"], Decimal("3.86"))
+        self.assertEqual(result["warnings"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
