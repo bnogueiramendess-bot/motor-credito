@@ -14,6 +14,7 @@ class ScoreResultResponse(BaseModel):
     base_score: int
     final_score: int
     executive_score: int | None = None
+    executive_score_10: float | None = None
     score_band: ScoreBand
     calculation_memory_json: dict[str, Any]
     score_pillars: dict[str, Any] | None = None

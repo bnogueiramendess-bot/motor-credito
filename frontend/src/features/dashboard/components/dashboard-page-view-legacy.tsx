@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 
+import { formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 import { toNumber } from "@/features/credit-analyses/utils/formatters";
 import { DashboardAnalysisGrid } from "@/features/dashboard/components/dashboard-analysis-grid";
 import { DashboardAnalysisCardViewModel } from "@/features/dashboard/utils/dashboard-analysis-view-models";
@@ -47,9 +48,9 @@ function mapPortfolioCustomerToCard(item: PortfolioCustomerDto, index: number): 
   const scoreBandRaw = typeof item.score === "object" && item.score !== null ? (item.score as { score_band?: unknown }).score_band : null;
   const scoreBand = scoreBandRaw === "A" || scoreBandRaw === "B" || scoreBandRaw === "C" || scoreBandRaw === "D" ? scoreBandRaw : null;
 
-  const scoreValue = typeof item.score === "object" && item.score !== null ? (item.score as { final_score?: unknown }).final_score : null;
-  const finalScore = toNumber(scoreValue as string | number | null | undefined);
-  const scoreLabel = scoreBand ?? (finalScore !== null ? String(finalScore) : "Pendente");
+  const scoreValue = typeof item.score === "object" && item.score !== null ? item.score as { final_score?: number | string | null; executive_score?: number | null; executive_score_10?: number | null } : null;
+  const executiveScore = resolveExecutiveScore10(scoreValue);
+  const scoreLabel = scoreBand ?? (executiveScore !== null ? formatExecutiveScore10(executiveScore) : "Pendente");
 
   const decisionValue = (typeof item.decision === "string" ? item.decision : null) ?? null;
   const statusLabel = decisionValue === "approved" ? "Aprovado" : decisionValue === "rejected" ? "Recusado" : "N/D";
@@ -360,3 +361,4 @@ export function DashboardPageViewLegacy() {
     </section>
   );
 }
+

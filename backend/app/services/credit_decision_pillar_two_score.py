@@ -83,12 +83,19 @@ def _load_structure(db: Session, policy_id: int) -> tuple[CreditDecisionPolicyPi
 def _range_trace(score_range: CreditDecisionPolicyScoreRange | None) -> dict[str, Any] | None:
     if score_range is None:
         return None
+    range_used = (
+        f"{score_range.operator} {score_range.threshold_value}"
+        if score_range.threshold_value_to is None
+        else f"{score_range.threshold_value}..{score_range.threshold_value_to}"
+    )
     return {
         "operator": score_range.operator,
         "threshold_value": score_range.threshold_value,
         "threshold_value_to": score_range.threshold_value_to,
         "score": score_range.score,
         "label": score_range.label,
+        "range_used": range_used,
+        "source": "published_policy",
     }
 
 
@@ -107,8 +114,14 @@ def calculate_pillar_two_score(
     coverage = _to_decimal(coface_coverage_amount)
     invalid_limit = requested is None or requested <= 0
     invalid_coface = coface_valid is False or coverage is None or coverage <= 0
+    invalid_coface_reason = None
+    if coverage is None or coverage <= 0:
+        invalid_coface_reason = "coface_coverage_not_available"
+    if coface_valid is False:
+        invalid_coface_reason = "coface_not_valid"
     if coface_status is not None and coface_status.strip().lower() in {"refused", "rejected", "invalid", "denied", "recusada", "invalida"}:
         invalid_coface = True
+        invalid_coface_reason = "coface_status_invalid"
 
     raw_ratio = None if invalid_limit else (Decimal("0") if invalid_coface else coverage / requested)
     capped_ratio = Decimal("0") if raw_ratio is None else min(max(raw_ratio, Decimal("0")), Decimal("1"))
@@ -121,6 +134,7 @@ def calculate_pillar_two_score(
     pillar_score = min(max(subgroup_weighted, Decimal("0")), Decimal("10")).quantize(Decimal("0.01"))
     weighted_score = (pillar_score * Decimal(pillar.weight_percent) / Decimal("100")).quantize(Decimal("0.0001"))
     status = "invalid_input" if invalid_limit else "calculated"
+    warnings = [] if not invalid_coface_reason else [{"reason": invalid_coface_reason, "message": "Cobertura COFACE valida nao disponivel para o calculo do pilar."}]
 
     indicator_result = {
         "code": indicator.code,
@@ -129,34 +143,46 @@ def calculate_pillar_two_score(
         "raw_ratio": raw_ratio,
         "capped_ratio": capped_ratio,
         "score": indicator_score.quantize(Decimal("0.01")),
+        "weight": indicator.weight_percent,
         "weight_percent": indicator.weight_percent,
         "weighted_score": indicator_weighted,
         "matched_range": _range_trace(matched_range),
+        "range_used": _range_trace(matched_range),
+        "operator": matched_range.operator if matched_range is not None else None,
+        "policy_source": "published_policy",
     }
     return {
         "analysis_id": analysis_id,
         "policy_id": policy_id,
         "pillar_code": pillar.code,
         "pillar_name": pillar.name,
+        "weight": pillar.weight_percent,
         "score": pillar_score,
         "weighted_score": weighted_score,
         "weight_percent": pillar.weight_percent,
+        "effective": True,
+        "policy_source": "published_policy",
         "status": status,
         "source": "coface",
         "subgroups": [{
             "code": subgroup.code,
             "name": subgroup.name,
+            "weight": subgroup.weight_percent,
             "score": subgroup_score,
             "weight_percent": subgroup.weight_percent,
             "weighted_score": subgroup_weighted,
+            "policy_source": "published_policy",
             "indicators": [indicator_result],
         }],
         "indicators": [indicator_result],
+        "warnings": warnings,
         "calculation_trace": [{
             "step": "coface_coverage_requested_ratio",
             "formula": "COFACE coverage amount / requested limit amount",
             "requested_limit_amount": requested,
             "coface_coverage_amount": coverage,
+            "coface_valid": coface_valid,
+            "coface_status": coface_status,
             "raw_ratio": raw_ratio,
             "capped_ratio": capped_ratio,
             "score": pillar_score,

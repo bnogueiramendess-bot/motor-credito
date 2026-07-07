@@ -13,6 +13,7 @@ import { RecommendationInsightsCard } from "@/features/analysis-journey/componen
 import { ApprovalWorkflowCard } from "@/features/credit-analyses/components/approval-workflow-card";
 import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, startCreditAnalysis, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
 import type { ScorePillarItemDto, ScorePillarsDto } from "@/features/credit-analyses/api/contracts";
+import { executiveScore10ToPercent, formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 import { createExternalDataEntry, getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
 import { getPortfolioCustomers } from "@/features/portfolio/api/portfolio.api";
 import {
@@ -540,10 +541,10 @@ function reasonFromScorePillarItem(item: ScorePillarItemDto | null): string {
 
 function toScoreBand(score: number | null): InstitutionalScoreBand {
   if (score === null || Number.isNaN(score)) return "Informações insuficientes";
-  if (score >= 90) return "AA";
-  if (score >= 80) return "A";
-  if (score >= 60) return "B";
-  if (score >= 40) return "C";
+  if (score >= 9) return "AA";
+  if (score >= 8) return "A";
+  if (score >= 6) return "B";
+  if (score >= 4) return "C";
   if (score >= 1) return "D";
   return "Informações insuficientes";
 }
@@ -2865,10 +2866,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     : scorePillarsContract && !scorePillarsContract.available
       ? scorePillarsContract.reason ?? "Score por pilares indisponível para esta análise."
       : null;
-  const backendExecutiveScore = toNullableNumeric(workspaceDetailQuery.data?.score?.executive_score);
-  const institutionalScore = scorePillarsContract?.available && backendExecutiveScore !== null
-    ? Math.max(0, Math.min(100, backendExecutiveScore))
+  const backendExecutiveScore10 = resolveExecutiveScore10(workspaceDetailQuery.data?.score);
+  const institutionalScore = scorePillarsContract?.available && backendExecutiveScore10 !== null
+    ? backendExecutiveScore10
     : null;
+  const institutionalScoreDisplay = formatExecutiveScore10(institutionalScore);
   const policyPillars: PolicyPillar[] = scorePillarsContract?.available
     ? SCORE_PILLAR_DEFINITIONS.map((definition) => {
       const item = findScorePillarItem(scorePillarsContract, definition);
@@ -2927,7 +2929,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const institutionalRiskBand = institutionalScore !== null ? toScoreBand(institutionalScore) : "Informações insuficientes";
   const executiveScoreBand = institutionalRiskBand.toUpperCase();
   const institutionalBandVisual = getScoreBandVisualTokens(institutionalRiskBand);
-  const institutionalScorePercent = institutionalScore !== null ? Math.max(0, Math.min(100, Math.round(institutionalScore))) : 0;
+  const institutionalScorePercent = institutionalScore !== null ? Math.round(executiveScore10ToPercent(institutionalScore)) : 0;
   const institutionalScoreRingLength = 326.73;
   const institutionalScoreRingOffset = institutionalScore !== null
     ? institutionalScoreRingLength * (1 - (institutionalScorePercent / 100))
@@ -2945,11 +2947,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const institutionalScoreSummary =
     institutionalScore === null
       ? "Informações insuficientes para cálculo consolidado."
-      : institutionalScore >= 80
+      : institutionalScore >= 8
         ? "Leitura consolidada favorável, com pilares majoritariamente consistentes."
-        : institutionalScore >= 60
+        : institutionalScore >= 6
           ? "Avaliação preliminar equilibrada, com pontos de atenção em pilares específicos."
-          : institutionalScore >= 40
+          : institutionalScore >= 4
             ? "Leitura consolidada em atenção, com necessidade de reforço técnico."
             : "Avaliação preliminar crítica, com riscos relevantes na estrutura atual.";
   const backendRecommendationClassification = (() => {
@@ -2994,7 +2996,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     return Number.isFinite(parsed) ? parsed : null;
   })();
   const preliminaryRiskLimitValue = engineRecommendedLimit ?? null;
-  const insightRiskScoreText = institutionalScore !== null ? `${Math.round(institutionalScore)}/100` : "Não informado";
+  const insightRiskScoreText = institutionalScore !== null ? institutionalScoreDisplay : "Não informado";
   const insightRiskProfileText = institutionalRiskBand === "Informações insuficientes" ? "Perfil não identificado" : `Perfil ${institutionalRiskBand}`;
   const insightRiskLimitText = preliminaryRiskLimitValue !== null
     ? formatCurrencyBRLMM2(preliminaryRiskLimitValue)
@@ -4781,7 +4783,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         <p className="text-[11px] font-semibold text-[#475569]">Perfil de risco</p>
                       </div>
                       <p className="mt-1 text-[18px] font-extrabold leading-tight text-[#0f172a]">{institutionalScore !== null ? executiveRiskProfile : "—"}</p>
-                      <p className="mt-0.5 text-[11px] text-[#64748b]">{institutionalScore !== null ? `${Math.round(institutionalScore)}/100` : "Sem score"}</p>
+                      <p className="mt-0.5 text-[11px] text-[#64748b]">{institutionalScore !== null ? institutionalScoreDisplay : "Sem score"}</p>
                     </div>
                     <div className={`rounded-[14px] border px-3.5 py-3 ${
                       executiveExposureHasResidual
@@ -4805,6 +4807,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               <InstitutionalScoreCard
                 score={institutionalScore}
                 breakdown={institutionalScoreBreakdown}
+                scoreCalculation={workspaceDetailQuery.data?.score?.score_calculation ?? null}
                 unavailableReason={scorePillarsUnavailableReason}
                 hasValidCofaceCoverage={hasValidCofaceCoverage}
                 guaranteeCoverageHelperText={guaranteeCoverageHelperText}
@@ -4887,8 +4890,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                       />
                     </svg>
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                      <p className="text-[32px] font-light leading-none tracking-[-0.022em] text-[#F2F6FC]">{institutionalScore !== null ? institutionalScorePercent : "—"}</p>
-                      <p className="mt-0.5 text-[20px] font-semibold leading-none text-[#A8B4C7]">/100</p>
+                      <p className="text-[32px] font-light leading-none tracking-[-0.022em] text-[#F2F6FC]">{institutionalScore !== null ? institutionalScore.toFixed(1) : "—"}</p>
+                      <p className="mt-0.5 text-[20px] font-semibold leading-none text-[#A8B4C7]">/10</p>
                     </div>
                   </div>
                   <div className="mt-2.5 flex w-[124px] flex-col items-center justify-center text-center">
@@ -4989,6 +4992,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               <InstitutionalScoreCard
                 score={institutionalScore}
                 breakdown={institutionalScoreBreakdown}
+                scoreCalculation={workspaceDetailQuery.data?.score?.score_calculation ?? null}
                 unavailableReason={scorePillarsUnavailableReason}
                 hasValidCofaceCoverage={hasValidCofaceCoverage}
                 guaranteeCoverageHelperText={guaranteeCoverageHelperText}
@@ -5531,3 +5535,5 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     </section>
   );
 }
+
+

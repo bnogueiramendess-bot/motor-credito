@@ -12,6 +12,7 @@ import {
   resolveDecision
 } from "@/features/credit-analyses/utils/analysis-view-models";
 import { formatCurrency, formatDate, toNumber } from "@/features/credit-analyses/utils/formatters";
+import { formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 import { AccordionRules } from "@/features/credit-analysis/dossier/components/accordion-rules";
 import { FactorList } from "@/features/credit-analysis/dossier/components/factor-list";
 import { KpiCard } from "@/features/credit-analysis/dossier/components/kpi-card";
@@ -86,8 +87,9 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   const resolvedDecision = decisionPill(
     resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result)
   );
-  const scoreNumber = toNumber(score?.executive_score ?? score?.final_score);
-  const scoreBand = score?.score_band ?? inferBand(scoreNumber);
+  const scoreNumber = resolveExecutiveScore10(score);
+  const technicalScoreNumber = toNumber(score?.final_score);
+  const scoreBand = score?.score_band ?? inferBand(technicalScoreNumber);
   const scoreSummary = buildExplainabilitySummary({
     score,
     decisionMemory: decision?.decision_memory_json ?? analysis.decision_memory_json
@@ -255,10 +257,10 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
             <div className="col-span-12 min-w-0 pt-0.5 xl:col-span-3 xl:self-center xl:pt-0">
               <RatingCard
                 letter={scoreBand}
-                score={`${scoreNumber ?? 0} pts`}
+                score={formatExecutiveScore10(scoreNumber)}
                 rangeLabel={`Faixa ${scoreBand}`}
                 riskLabel={riskLabelByBand[scoreBand] ?? "Risco moderado"}
-                scorePill={`${scoreNumber ?? 0} / 100`}
+                scorePill={formatExecutiveScore10(scoreNumber)}
                 dateLabel={`Atualizado ${formatDate(analysis.decision_calculated_at ?? analysis.created_at)}`}
               />
             </div>

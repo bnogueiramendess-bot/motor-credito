@@ -119,6 +119,14 @@ class CreditDecisionPillarTwoScoreTestCase(unittest.TestCase):
                 result = self._calculate("100", coverage)
                 self.assertEqual(result["score"], Decimal(expected))
 
+
+    def test_missing_coface_is_explicitly_warned(self) -> None:
+        result = self._calculate("100", None)
+
+        self.assertEqual(result["score"], Decimal("0.00"))
+        self.assertEqual(result["status"], "calculated")
+        self.assertEqual(result["warnings"][0]["reason"], "coface_coverage_not_available")
+
     def test_invalid_or_refused_coface_returns_zero(self) -> None:
         self.assertEqual(self._calculate("100", "100", coface_valid=False)["score"], Decimal("0.00"))
         self.assertEqual(self._calculate("100", "100", coface_status="refused")["score"], Decimal("0.00"))

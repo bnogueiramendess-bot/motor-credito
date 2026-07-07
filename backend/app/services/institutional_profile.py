@@ -39,6 +39,16 @@ def score_1000_to_100(score_1000: int | Decimal | float | str | None) -> int | N
     return int((value / Decimal("10")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def score_1000_to_10(score_1000: int | Decimal | float | str | None) -> float | None:
+    if score_1000 is None:
+        return None
+    try:
+        value = Decimal(str(score_1000))
+    except Exception:
+        return None
+    return float((value / Decimal("100")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
 def _as_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
     if value is None:
         return default
@@ -182,6 +192,8 @@ def build_score_calculation(score_1000: int | None, memory: dict[str, Any] | Non
     return {
         "score": score_1000_to_100(score_1000),
         "scale": "0-100",
+        "executive_score_10": score_1000_to_10(score_1000),
+        "executive_scale": "0-10",
         "engine_score": score_1000,
         "engine_scale": "0-1000",
         "calculation": calculation,
@@ -311,3 +323,5 @@ def build_recommendation_summary(
         "mitigating_factors": mitigating_factors,
         "final_rationale": final_rationale,
     }
+
+

@@ -23,6 +23,7 @@ export type ScoreExplainabilitySummaryDto = {
   base_score: number;
   final_score: number;
   executive_score?: number | null;
+  executive_score_10?: number | null;
   score_band: ScoreBand;
   evaluated_rules: number;
   matched_rules: number;
@@ -86,6 +87,7 @@ export type ScoreCalculationMemoryDto = {
   }>;
   final_score: number;
   executive_score?: number | null;
+  executive_score_10?: number | null;
   score_band: ScoreBand;
   source_entry_id: number;
   source_type: string;
@@ -228,6 +230,7 @@ export type ScoreResultDto = {
   base_score: number;
   final_score: number;
   executive_score?: number | null;
+  executive_score_10?: number | null;
   score_band: ScoreBand;
   calculation_memory_json: Record<string, unknown>;
   score_pillars?: ScorePillarsDto | null;

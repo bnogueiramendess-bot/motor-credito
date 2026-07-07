@@ -1,5 +1,5 @@
-﻿import { CreditAnalysisListItemDto, FinalDecision, MotorResult } from "@/features/credit-analyses/api/contracts";
-import { toNumber } from "@/features/credit-analyses/utils/formatters";
+import { CreditAnalysisListItemDto, FinalDecision, MotorResult } from "@/features/credit-analyses/api/contracts";
+import { formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 import { resolveDecision } from "@/features/credit-analyses/utils/analysis-view-models";
 import { formatCurrencyInThousands } from "@/features/dashboard/utils/dashboard-formatters";
 
@@ -57,9 +57,9 @@ function resolveScore(item: CreditAnalysisListItemDto): {
     return { label: "D", tone: "danger", band };
   }
 
-  const finalScore = toNumber(item.score?.final_score);
-  if (finalScore !== null) {
-    return { label: String(finalScore), tone: "neutral", band: null };
+  const executiveScore = resolveExecutiveScore10(item.score);
+  if (executiveScore !== null) {
+    return { label: formatExecutiveScore10(executiveScore), tone: "neutral", band: null };
   }
 
   return { label: "N/D", tone: "neutral", band: null };

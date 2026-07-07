@@ -71,12 +71,19 @@ def _matches(value: Decimal, score_range: CreditDecisionPolicyScoreRange) -> boo
 def _range_trace(score_range: CreditDecisionPolicyScoreRange | None) -> dict[str, Any] | None:
     if score_range is None:
         return None
+    range_used = (
+        f"{score_range.operator} {score_range.threshold_value}"
+        if score_range.threshold_value_to is None
+        else f"{score_range.threshold_value}..{score_range.threshold_value_to}"
+    )
     return {
         "operator": score_range.operator,
         "threshold_value": score_range.threshold_value,
         "threshold_value_to": score_range.threshold_value_to,
         "score": score_range.score,
         "label": score_range.label,
+        "range_used": range_used,
+        "source": "published_policy",
     }
 
 
@@ -327,9 +334,13 @@ def calculate_pillar_five_score(
         "name": indicator.name,
         "raw_value": relationship_level,
         "score": score.quantize(Decimal("0.01")),
+        "weight": indicator.weight_percent,
         "weight_percent": indicator.weight_percent,
         "weighted_score": indicator_weighted,
         "matched_range": _range_trace(matched_range),
+        "range_used": _range_trace(matched_range),
+        "operator": matched_range.operator if matched_range is not None else None,
+        "policy_source": "published_policy",
     }
     return {
         "analysis_id": analysis_id,
@@ -337,9 +348,12 @@ def calculate_pillar_five_score(
         "cnpj_normalized": cnpj_normalized,
         "pillar_code": pillar.code,
         "pillar_name": pillar.name,
+        "weight": pillar.weight_percent,
         "score": pillar_score,
         "weighted_score": weighted_score,
         "weight_percent": pillar.weight_percent,
+        "effective": True,
+        "policy_source": "published_policy",
         "status": "calculated",
         "source": "internal_portfolio",
         "reason": reason,
@@ -350,8 +364,10 @@ def calculate_pillar_five_score(
                 "code": subgroup.code,
                 "name": subgroup.name,
                 "score": subgroup_score,
+                "weight": subgroup.weight_percent,
                 "weight_percent": subgroup.weight_percent,
                 "weighted_score": subgroup_weighted,
+                "policy_source": "published_policy",
                 "indicators": [indicator_result],
             }
         ],

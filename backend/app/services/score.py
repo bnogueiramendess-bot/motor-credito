@@ -11,6 +11,7 @@ from app.models.credit_decision_policy import CreditDecisionPolicy
 from app.models.credit_policy_rule import CreditPolicyRule
 from app.models.enums import ScoreBand
 from app.models.external_data_entry import ExternalDataEntry
+from app.models.credit_report_read import CreditReportRead
 from app.models.score_result import ScoreResult
 from app.models.user import User
 from app.services.credit_decision_policy_score_structure import (
@@ -740,26 +741,12 @@ def _validate_configurable_policy_ready(
             raise ConfigurableScorePolicyUnavailable("policy_has_pending_governance_request")
 
     validation = validate_score_structure(db, policy.id)
-    if validation.get("operational_status") != "configured":
+    if validation.get("status") == "invalid" or validation.get("errors"):
         raise ConfigurableScorePolicyUnavailable("policy_not_operationally_configured")
-    if Decimal(str(validation.get("effective_pillars_weight", "0"))) != CONFIGURABLE_EFFECTIVE_WEIGHT:
+    if Decimal(str(validation.get("effective_pillars_weight", "0"))) <= Decimal("0"):
         raise ConfigurableScorePolicyUnavailable("invalid_effective_weight")
 
     structure = get_score_structure(db, policy.id, source="active")
-    pillar_three = next(
-        (
-            item
-            for item in structure.get("pillar_roadmap", [])
-            if item.get("code") == "market_conditions"
-        ),
-        PLANNED_NO_EFFECT_PILLARS["market_conditions"],
-    )
-    if (
-        pillar_three.get("status") != "planned"
-        or pillar_three.get("is_effective") is not False
-        or pillar_three.get("affects_score") is not False
-    ):
-        raise ConfigurableScorePolicyUnavailable("pillar_three_must_remain_planned")
     return structure
 
 
@@ -795,35 +782,269 @@ def _resolve_configurable_policy_for_analysis(
     return policy, structure, snapshot
 
 
+def _decimal_for_json(value: Decimal) -> int | str:
+    return int(value) if value == value.to_integral_value() else str(value)
+
+
+def _coface_status_is_invalid(status: str | None) -> bool:
+    return bool(status and status.strip().lower() in {"refused", "rejected", "invalid", "denied", "recusada", "invalida"})
+
+
+def _resolve_coface_evidence(db: Session, analysis: CreditAnalysis) -> dict[str, Any]:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    report_links = memory.get("report_links") if isinstance(memory.get("report_links"), dict) else {}
+    coface_link = report_links.get("coface") if isinstance(report_links.get("coface"), dict) else {}
+    read_id = coface_link.get("read_id") if isinstance(coface_link.get("read_id"), int) else None
+
+    read = db.get(CreditReportRead, int(read_id)) if read_id else None
+    customer_document = getattr(getattr(analysis, "customer", None), "document_number", None)
+    if read is None and customer_document:
+        read = db.scalar(
+            select(CreditReportRead)
+            .where(
+                CreditReportRead.customer_document_number == customer_document,
+                CreditReportRead.source_type == "coface",
+                CreditReportRead.status.in_(["valid", "valid_with_warnings"]),
+            )
+            .order_by(CreditReportRead.created_at.desc(), CreditReportRead.id.desc())
+            .limit(1)
+        )
+
+    payload = read.read_payload_json if read is not None and isinstance(read.read_payload_json, dict) else {}
+    coface_payload = payload.get("coface") if isinstance(payload.get("coface"), dict) else {}
+    coverage = None
+    if isinstance(coface_payload, dict):
+        try:
+            raw_amount = coface_payload.get("decision_amount")
+            coverage = Decimal(str(raw_amount)) if raw_amount is not None else None
+        except Exception:
+            coverage = None
+    status = str(coface_payload.get("decision_status") or read.status) if read is not None and isinstance(coface_payload, dict) else None
+    valid = bool(read is not None and coverage is not None and coverage > Decimal("0") and not _coface_status_is_invalid(status))
+    return {
+        "read_id": read.id if read is not None else None,
+        "coverage_amount": coverage,
+        "status": status,
+        "valid": valid,
+        "source": "coface" if read is not None else "not_available",
+    }
+
+
+def _enabled_pillar_codes(structure: dict[str, Any]) -> list[str]:
+    pillars = structure.get("pillars") if isinstance(structure.get("pillars"), list) else []
+    return [str(item.get("code")) for item in pillars if isinstance(item, dict) and item.get("is_enabled") is not False]
+
+
+
+def _generic_decimal(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().replace("R$", "").replace("%", "").replace(" ", "")
+        if not normalized:
+            return None
+        if "," in normalized:
+            normalized = normalized.replace(".", "").replace(",", ".")
+        try:
+            return Decimal(normalized)
+        except Exception:
+            return None
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _generic_path_value(payload: Any, source_key: str | None) -> Any:
+    if not source_key:
+        return None
+    current = payload
+    for part in source_key.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            current = getattr(current, part, None)
+        if current is None:
+            return None
+    return current
+
+
+def _generic_range_matches(value: Decimal, score_range: dict[str, Any]) -> bool:
+    threshold = _generic_decimal(score_range.get("threshold_value"))
+    threshold_to = _generic_decimal(score_range.get("threshold_value_to"))
+    if threshold is None:
+        return False
+    operator = score_range.get("operator")
+    if operator == ">=":
+        return value >= threshold
+    if operator == ">":
+        return value > threshold
+    if operator == "<=":
+        return value <= threshold
+    if operator == "<":
+        return value < threshold
+    if operator == "=":
+        return value == threshold
+    if operator == "between":
+        return threshold_to is not None and threshold <= value <= threshold_to
+    return False
+
+
+def _generic_range_trace(score_range: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not score_range:
+        return None
+    threshold = score_range.get("threshold_value")
+    threshold_to = score_range.get("threshold_value_to")
+    return {
+        "operator": score_range.get("operator"),
+        "threshold_value": threshold,
+        "threshold_value_to": threshold_to,
+        "score": score_range.get("score"),
+        "label": score_range.get("label"),
+        "range_used": f"{score_range.get('operator')} {threshold}" if threshold_to is None else f"{threshold}..{threshold_to}",
+        "source": "published_policy",
+    }
+
+
+def _calculate_generic_policy_pillar_score(*, pillar: dict[str, Any], analysis: CreditAnalysis) -> dict[str, Any]:
+    payload = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    subgroups_result: list[dict[str, Any]] = []
+    indicators_flat: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    pillar_score = Decimal("0")
+    for subgroup in pillar.get("subgroups", []) if isinstance(pillar.get("subgroups"), list) else []:
+        if not isinstance(subgroup, dict) or subgroup.get("is_enabled") is False:
+            continue
+        subgroup_score = Decimal("0")
+        subgroup_indicators: list[dict[str, Any]] = []
+        for indicator in subgroup.get("indicators", []) if isinstance(subgroup.get("indicators"), list) else []:
+            if not isinstance(indicator, dict) or indicator.get("is_enabled") is False:
+                continue
+            raw_value = _generic_path_value(payload, indicator.get("source_key"))
+            numeric_value = _generic_decimal(raw_value)
+            ranges = [item for item in indicator.get("score_ranges", []) if isinstance(item, dict) and item.get("is_enabled") is not False]
+            matched_range = next((item for item in ranges if numeric_value is not None and _generic_range_matches(numeric_value, item)), None)
+            indicator_score = _generic_decimal(matched_range.get("score") if matched_range else None) or Decimal("0")
+            indicator_weight = _generic_decimal(indicator.get("weight_percent")) or Decimal("0")
+            indicator_weighted = (indicator_score * indicator_weight / Decimal("100")).quantize(Decimal("0.0001"))
+            status = "calculated" if matched_range is not None else "not_available"
+            reason = None if matched_range is not None else "Indicador sem valor/faixa disponivel na fonte configurada."
+            if matched_range is None:
+                warnings.append({"reason": "generic_indicator_not_available", "indicator_code": indicator.get("code")})
+            indicator_result = {
+                "code": indicator.get("code"),
+                "name": indicator.get("name"),
+                "source_key": indicator.get("source_key"),
+                "raw_value": raw_value,
+                "score": indicator_score.quantize(Decimal("0.01")),
+                "weight": indicator_weight,
+                "weight_percent": indicator_weight,
+                "weighted_score": indicator_weighted,
+                "status": status,
+                "reason": reason,
+                "matched_range": _generic_range_trace(matched_range),
+                "range_used": _generic_range_trace(matched_range),
+                "operator": matched_range.get("operator") if matched_range else None,
+                "policy_source": "published_policy",
+            }
+            subgroup_score += indicator_weighted
+            subgroup_indicators.append(indicator_result)
+            indicators_flat.append(indicator_result)
+        subgroup_score = min(max(subgroup_score, Decimal("0")), Decimal("10")).quantize(Decimal("0.01"))
+        subgroup_weight = _generic_decimal(subgroup.get("weight_percent")) or Decimal("0")
+        subgroup_weighted = (subgroup_score * subgroup_weight / Decimal("100")).quantize(Decimal("0.0001"))
+        pillar_score += subgroup_weighted
+        subgroups_result.append({
+            "code": subgroup.get("code"),
+            "name": subgroup.get("name"),
+            "score": subgroup_score,
+            "weight": subgroup_weight,
+            "weight_percent": subgroup_weight,
+            "weighted_score": subgroup_weighted,
+            "policy_source": "published_policy",
+            "indicators": subgroup_indicators,
+        })
+    pillar_score = min(max(pillar_score, Decimal("0")), Decimal("10")).quantize(Decimal("0.01"))
+    pillar_weight = _generic_decimal(pillar.get("weight_percent")) or Decimal("0")
+    return {
+        "analysis_id": analysis.id,
+        "policy_id": pillar.get("policy_id"),
+        "pillar_code": pillar.get("code"),
+        "pillar_name": pillar.get("name"),
+        "weight": pillar_weight,
+        "score": pillar_score,
+        "weighted_score": (pillar_score * pillar_weight / Decimal("100")).quantize(Decimal("0.0001")),
+        "weight_percent": pillar_weight,
+        "effective": True,
+        "policy_source": "published_policy",
+        "status": "calculated" if indicators_flat and any(item["status"] == "calculated" for item in indicators_flat) else "not_available",
+        "source": "published_policy",
+        "reason": None if indicators_flat and any(item["status"] == "calculated" for item in indicators_flat) else "Pilar efetivo sem dados disponiveis na fonte configurada.",
+        "subgroups": subgroups_result,
+        "indicators": indicators_flat,
+        "warnings": warnings,
+        "calculation_trace": [{"step": "generic_policy_pillar", "source": "published_policy"}],
+    }
+
 def _calculate_configurable_pillar_results(
     db: Session,
     *,
     policy: CreditDecisionPolicy,
     analysis: CreditAnalysis,
+    structure: dict[str, Any],
 ) -> list[dict[str, Any]]:
     customer_document = getattr(analysis.customer, "document_number", None)
-    return [
-        simulate_pillar_one_score(db, policy_id=policy.id, analysis_id=analysis.id),
-        simulate_pillar_two_score(
-            db,
-            policy_id=policy.id,
-            requested_limit_amount=analysis.requested_limit,
-            analysis_id=analysis.id,
-        ),
-        simulate_pillar_four_score(
-            db,
-            policy_id=policy.id,
-            cnpj=customer_document,
-            analysis_id=analysis.id,
-        ),
-        simulate_pillar_five_score(
-            db,
-            policy_id=policy.id,
-            cnpj=customer_document,
-            analysis_id=analysis.id,
-        ),
-    ]
+    coface = _resolve_coface_evidence(db, analysis)
+    results: list[dict[str, Any]] = []
+    pillars_by_code = {str(item.get("code")): item for item in structure.get("pillars", []) if isinstance(item, dict)}
+    for code in _enabled_pillar_codes(structure):
+        if code == "financial_stability_liquidity":
+            results.append(simulate_pillar_one_score(db, policy_id=policy.id, analysis_id=analysis.id, coface_valid=bool(coface["valid"])))
+        elif code == "guarantees_credit_insurance":
+            results.append(
+                simulate_pillar_two_score(
+                    db,
+                    policy_id=policy.id,
+                    requested_limit_amount=analysis.requested_limit,
+                    coface_coverage_amount=coface["coverage_amount"],
+                    coface_valid=bool(coface["valid"]),
+                    coface_status=coface["status"],
+                    analysis_id=analysis.id,
+                )
+            )
+        elif code == "payment_history":
+            results.append(simulate_pillar_four_score(db, policy_id=policy.id, cnpj=customer_document, analysis_id=analysis.id))
+        elif code == "relationship_history":
+            results.append(simulate_pillar_five_score(db, policy_id=policy.id, cnpj=customer_document, analysis_id=analysis.id))
+        else:
+            results.append(_calculate_generic_policy_pillar_score(pillar=pillars_by_code[code], analysis=analysis))
+    for result in results:
+        result.setdefault("effective", True)
+        result.setdefault("policy_source", "published_policy")
+        result.setdefault("coface_evidence", coface if result.get("pillar_code") in {"financial_stability_liquidity", "guarantees_credit_insurance"} else None)
+    return results
 
+
+
+def _calculate_configurable_score_values(pillar_results: list[dict[str, Any]]) -> dict[str, Any]:
+    weighted_score = sum((_decimal_from_result(result, "weighted_score") for result in pillar_results), Decimal("0"))
+    effective_weight = sum(
+        (_decimal_from_result(result, "weight_percent") for result in pillar_results if result.get("effective") is not False),
+        Decimal("0"),
+    )
+    normalized_score = (
+        (weighted_score * Decimal("100") / effective_weight).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        if effective_weight > Decimal("0")
+        else Decimal("0.0000")
+    )
+    final_score = int((normalized_score * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    final_score = max(0, min(1000, final_score))
+    return {
+        "weighted_score": weighted_score,
+        "effective_weight": effective_weight,
+        "normalized_score": normalized_score,
+        "final_score": final_score,
+    }
 
 def _calculate_and_upsert_configurable_score(
     db: Session, analysis_id: int, *, company_id: int | None = None
@@ -844,15 +1065,13 @@ def _calculate_and_upsert_configurable_score(
     policy, structure, policy_snapshot = _resolve_configurable_policy_for_analysis(
         db, analysis, company_id=resolved_company_id
     )
-    pillar_results = _calculate_configurable_pillar_results(db, policy=policy, analysis=analysis)
+    pillar_results = _calculate_configurable_pillar_results(db, policy=policy, analysis=analysis, structure=structure)
     safe_pillar_results = _json_safe(pillar_results)
-    weighted_score = sum((_decimal_from_result(result, "weighted_score") for result in pillar_results), Decimal("0"))
-    normalized_score = (weighted_score * Decimal("10") / CONFIGURABLE_EFFECTIVE_WEIGHT).quantize(
-        Decimal("0.0001"),
-        rounding=ROUND_HALF_UP,
-    )
-    final_score = int((normalized_score * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    final_score = max(0, min(1000, final_score))
+    score_values = _calculate_configurable_score_values(pillar_results)
+    weighted_score = score_values["weighted_score"]
+    effective_weight = score_values["effective_weight"]
+    normalized_score = score_values["normalized_score"]
+    final_score = score_values["final_score"]
     score_band = _score_band_from_configurable_score(final_score)
 
     calculation_memory_json = {
@@ -866,7 +1085,7 @@ def _calculate_and_upsert_configurable_score(
         "policy_id": policy.id,
         "policy_code": policy.code,
         "policy_version": policy.version,
-        "effective_weight": int(CONFIGURABLE_EFFECTIVE_WEIGHT),
+        "effective_weight": _decimal_for_json(effective_weight),
         "fallback_used": False,
         "summary": f"Score configuravel {final_score} na faixa {score_band.value}.",
         "explainability": {
@@ -884,9 +1103,10 @@ def _calculate_and_upsert_configurable_score(
                 "base_score": 0,
                 "weighted_score": str(weighted_score.quantize(Decimal("0.0001"))),
                 "normalized_score": str(normalized_score),
+                "normalization_formula": "sum(pillar_score * pillar_weight / 100) * 100 / effective_weight",
                 "final_score": final_score,
                 "score_band": score_band.value,
-                "effective_weight": int(CONFIGURABLE_EFFECTIVE_WEIGHT),
+                "effective_weight": _decimal_for_json(effective_weight),
             },
             "pillars_evaluated": safe_pillar_results,
             "score_structure": {
@@ -900,7 +1120,7 @@ def _calculate_and_upsert_configurable_score(
             "policy_id": policy.id,
             "policy_code": policy.code,
             "policy_version": policy.version,
-            "effective_weight": int(CONFIGURABLE_EFFECTIVE_WEIGHT),
+            "effective_weight": _decimal_for_json(effective_weight),
             "source": "analysis_policy_snapshot" if policy_snapshot is not None else "active_configurable_policy",
             "fallback_used": False,
         },
@@ -984,12 +1204,16 @@ def build_score_pillars_contract(score_result: ScoreResult) -> dict[str, Any]:
             "score": item.get("score"),
             "max_score": 10,
             "weighted_score": item.get("weighted_score"),
+            "weight": item.get("weight") or item.get("weight_percent"),
             "weight_percent": item.get("weight_percent"),
+            "effective": item.get("effective", True),
+            "policy_source": item.get("policy_source"),
             "status": item.get("status"),
             "source": item.get("source"),
             "reason": item.get("reason"),
             "warnings": item.get("warnings") if isinstance(item.get("warnings"), list) else [],
             "calculation_trace": item.get("calculation_trace") if isinstance(item.get("calculation_trace"), list) else [],
+            "indicators": item.get("indicators") if isinstance(item.get("indicators"), list) else [],
         })
 
     return {

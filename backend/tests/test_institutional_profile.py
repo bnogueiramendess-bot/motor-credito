@@ -120,3 +120,19 @@ def test_recommendation_summary_is_structured_for_executive_dossier():
     assert set(summary) == {"positive_factors", "negative_factors", "risk_factors", "mitigating_factors", "final_rationale"}
     assert "Ausência de cobertura COFACE válida impede recomendação automática de limite." in summary["risk_factors"]
     assert "Comitê" in summary["final_rationale"]
+
+
+def test_score_1000_to_10_executive_scale():
+    from app.services.institutional_profile import score_1000_to_10
+
+    assert score_1000_to_10(190) == 1.9
+    assert score_1000_to_10(1000) == 10.0
+    assert score_1000_to_10(None) is None
+
+
+def test_build_score_calculation_exposes_executive_score_10_without_changing_engine_score():
+    result = build_score_calculation(190, _memory(financial=True, coface=True, internal=True))
+
+    assert result["engine_score"] == 190
+    assert result["executive_score_10"] == 1.9
+    assert result["executive_scale"] == "0-10"

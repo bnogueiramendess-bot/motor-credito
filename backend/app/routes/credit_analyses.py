@@ -85,7 +85,7 @@ from app.schemas.analysis_request import (
 )
 from app.services.protocol import generate_protocol_number
 from app.services.decision import DecisionCalculationError, calculate_and_apply_decision
-from app.services.institutional_profile import build_score_calculation, calculate_profile_status, score_1000_to_100
+from app.services.institutional_profile import build_score_calculation, calculate_profile_status, score_1000_to_10, score_1000_to_100
 from app.services.score import ScoreCalculationError, build_score_pillars_contract, calculate_and_upsert_score
 from app.services.external_cnpj import fetch_external_cnpj_data, is_valid_cnpj
 from app.services.recommendation import classify_recommendation
@@ -1365,6 +1365,7 @@ def _score_result_response(score_result: ScoreResult) -> ScoreResultResponse:
     response = ScoreResultResponse.model_validate(score_result)
     memory = score_result.calculation_memory_json if isinstance(score_result.calculation_memory_json, dict) else {}
     response.executive_score = score_1000_to_100(score_result.final_score)
+    response.executive_score_10 = score_1000_to_10(score_result.final_score)
     response.score_pillars = build_score_pillars_contract(score_result)
     response.score_calculation = build_score_calculation(score_result.final_score, memory)
     response.profile_status = calculate_profile_status(memory)

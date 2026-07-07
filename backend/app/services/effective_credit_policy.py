@@ -202,8 +202,9 @@ def get_effective_credit_policy(
     pending_request = has_pending_publication_or_archive_request(db, policy.id)
     valid = (
         published
-        and validation.get("operational_status") == "configured"
-        and Decimal(str(validation.get("effective_pillars_weight", "0"))) == CONFIGURABLE_EFFECTIVE_WEIGHT
+        and validation.get("status") != "invalid"
+        and not validation.get("errors")
+        and Decimal(str(validation.get("effective_pillars_weight", "0"))) > Decimal("0")
         and not pending_request
     )
     reason = None
@@ -213,9 +214,9 @@ def get_effective_credit_policy(
         reason = "active_policy_without_governed_publication"
     elif pending_request:
         reason = "policy_has_pending_governance_request"
-    elif validation.get("operational_status") != "configured":
+    elif validation.get("status") == "invalid" or validation.get("errors"):
         reason = "policy_not_operationally_configured"
-    elif Decimal(str(validation.get("effective_pillars_weight", "0"))) != CONFIGURABLE_EFFECTIVE_WEIGHT:
+    elif Decimal(str(validation.get("effective_pillars_weight", "0"))) <= Decimal("0"):
         reason = "invalid_effective_weight"
 
     return EffectiveCreditPolicyResolution(

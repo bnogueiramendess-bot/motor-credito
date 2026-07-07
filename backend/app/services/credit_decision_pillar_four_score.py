@@ -53,12 +53,19 @@ def _matches(value: Decimal, score_range: CreditDecisionPolicyScoreRange) -> boo
 def _range_trace(score_range: CreditDecisionPolicyScoreRange | None) -> dict[str, Any] | None:
     if score_range is None:
         return None
+    range_used = (
+        f"{score_range.operator} {score_range.threshold_value}"
+        if score_range.threshold_value_to is None
+        else f"{score_range.threshold_value}..{score_range.threshold_value_to}"
+    )
     return {
         "operator": score_range.operator,
         "threshold_value": score_range.threshold_value,
         "threshold_value_to": score_range.threshold_value_to,
         "score": score_range.score,
         "label": score_range.label,
+        "range_used": range_used,
+        "source": "published_policy",
     }
 
 
@@ -169,9 +176,13 @@ def _indicator_result(
         "status": status,
         "reason": reason,
         "score": score.quantize(Decimal("0.01")),
+        "weight": indicator.weight_percent,
         "weight_percent": indicator.weight_percent,
         "weighted_score": weighted_score,
         "matched_range": _range_trace(matched_range),
+        "range_used": _range_trace(matched_range),
+        "operator": matched_range.operator if matched_range is not None else None,
+        "policy_source": "published_policy",
     }
 
 
@@ -266,8 +277,10 @@ def calculate_pillar_four_score(
                 "status": "calculated" if subgroup_available else "not_available",
                 "reason": subgroup_reason,
                 "score": subgroup_score,
+                "weight": subgroup.weight_percent,
                 "weight_percent": subgroup.weight_percent,
                 "weighted_score": subgroup_weighted,
+                "policy_source": "published_policy",
                 "indicators": [indicator_result],
             }
         )
@@ -311,9 +324,12 @@ def calculate_pillar_four_score(
         "cnpj_normalized": cnpj_normalized,
         "pillar_code": pillar.code,
         "pillar_name": pillar.name,
+        "weight": pillar.weight_percent,
         "score": pillar_score,
         "weighted_score": weighted_score,
         "weight_percent": pillar.weight_percent,
+        "effective": True,
+        "policy_source": "published_policy",
         "status": status,
         "source": "ar_aging",
         "reason": reason,

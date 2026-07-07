@@ -6,7 +6,8 @@ import { Search } from "lucide-react";
 
 import { CreditAnalysisListApiResponse } from "@/features/credit-analyses/api/contracts";
 import { buildMilestones, buildRuleSignals, decisionPill, getInitials, resolveDecision, toneStyles } from "@/features/credit-analyses/utils/analysis-view-models";
-import { formatCurrency, formatDateTime, toNumber } from "@/features/credit-analyses/utils/formatters";
+import { formatCurrency, formatDateTime } from "@/features/credit-analyses/utils/formatters";
+import { formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 
 type AnalysisListCardsProps = {
   analyses: CreditAnalysisListApiResponse;
@@ -49,11 +50,11 @@ export function AnalysisListCards({ analyses }: AnalysisListCardsProps) {
     const rejected = analyses.filter((item) => resolveDecision(item.final_decision, item.motor_result) === "rejected").length;
     const manual = analyses.filter((item) => resolveDecision(item.final_decision, item.motor_result) === "manual_review").length;
     const scoreAvgBase = analyses
-      .map((item) => toNumber(item.score?.executive_score ?? item.score?.final_score))
+      .map((item) => resolveExecutiveScore10(item.score))
       .filter((value): value is number => value !== null);
 
     const avgScore = scoreAvgBase.length
-      ? Math.round(scoreAvgBase.reduce((acc, value) => acc + value, 0) / scoreAvgBase.length)
+      ? scoreAvgBase.reduce((acc, value) => acc + value, 0) / scoreAvgBase.length
       : null;
 
     return {
@@ -106,7 +107,7 @@ export function AnalysisListCards({ analyses }: AnalysisListCardsProps) {
         </article>
         <article className="rounded-[8px] border border-[#e2e5eb] bg-white px-3.5 py-3">
           <p className="text-[10px] text-[#9ca3af]">Score médio</p>
-          <p className="mt-1 text-[18px] font-medium text-[#111827]">{stats.avgScore ?? "--"}</p>
+          <p className="mt-1 text-[18px] font-medium text-[#111827]">{stats.avgScore !== null ? formatExecutiveScore10(stats.avgScore) : "--"}</p>
           <p className="text-[10px] text-[#6b7280]">Último lote</p>
         </article>
       </div>
@@ -161,7 +162,7 @@ export function AnalysisListCards({ analyses }: AnalysisListCardsProps) {
                     <p className="truncate text-[10px] text-[#9ca3af]">{analysis.customer?.document_number ?? "Documento não informado"}</p>
                   </div>
 
-                  <div className="text-[12px] font-medium text-[#374151] md:text-center">{analysis.score?.executive_score ?? analysis.score?.final_score ?? "--"}</div>
+                  <div className="text-[12px] font-medium text-[#374151] md:text-center">{formatExecutiveScore10(resolveExecutiveScore10(analysis.score))}</div>
 
                   <div className="inline-flex items-center gap-2 text-[11px] font-medium">
                     <span className={`inline-block h-2 w-2 rounded-full ${styles.dot}`} />
@@ -196,7 +197,7 @@ export function AnalysisListCards({ analyses }: AnalysisListCardsProps) {
               <div className={`rounded-[7px] border px-3 py-2 text-center ${selectedStyles.badge}`}>
                 <p className="text-[11px] font-medium">{selectedDecision.label}</p>
                 <p className="my-1 text-[18px] font-medium text-[#111827]">{formatCurrency(selectedAnalysis.final_limit ?? selectedAnalysis.suggested_limit)}</p>
-                <p className="text-[10px] text-[#6b7280]">Score {selectedAnalysis.score?.executive_score ?? selectedAnalysis.score?.final_score ?? "--"}</p>
+                <p className="text-[10px] text-[#6b7280]">Score {formatExecutiveScore10(resolveExecutiveScore10(selectedAnalysis.score))}</p>
               </div>
             </section>
 

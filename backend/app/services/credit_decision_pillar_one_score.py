@@ -107,12 +107,19 @@ def _matches_range(value: Decimal, score_range: CreditDecisionPolicyScoreRange) 
 def _range_to_trace(score_range: CreditDecisionPolicyScoreRange | None) -> dict[str, Any] | None:
     if score_range is None:
         return None
+    range_used = (
+        f"{score_range.operator} {score_range.threshold_value}"
+        if score_range.threshold_value_to is None
+        else f"{score_range.threshold_value}..{score_range.threshold_value_to}"
+    )
     return {
         "operator": score_range.operator,
         "threshold_value": score_range.threshold_value,
         "threshold_value_to": score_range.threshold_value_to,
         "score": score_range.score,
         "label": score_range.label,
+        "range_used": range_used,
+        "source": "published_policy",
     }
 
 
@@ -224,9 +231,12 @@ def _base_result(
         "policy_id": pillar.policy_id,
         "pillar_code": pillar.code,
         "pillar_name": pillar.name,
+        "weight": pillar.weight_percent,
         "score": _round_score(score),
         "weighted_score": _round_weighted(_round_score(score) * Decimal(pillar.weight_percent) / Decimal("100")),
         "weight_percent": pillar.weight_percent,
+        "effective": True,
+        "policy_source": "published_policy",
         "status": status,
         "source": source,
         "reason": reason,
@@ -346,12 +356,16 @@ def calculate_pillar_one_score(
                 "source_key": indicator.source_key,
                 "raw_value": raw_value,
                 **margin_trace,
+                "weight": indicator.weight_percent,
                 "score": _round_score(indicator_score),
                 "weight_percent": indicator.weight_percent,
                 "weighted_score": indicator_weighted_score,
                 "status": status,
                 "reason": reason,
                 "matched_range": _range_to_trace(matched_range),
+                "range_used": _range_to_trace(matched_range),
+                "operator": matched_range.operator if matched_range is not None else None,
+                "policy_source": "published_policy",
             }
             indicator_results.append(indicator_result)
             trace.append(
@@ -378,9 +392,11 @@ def calculate_pillar_one_score(
             {
                 "code": subgroup.code,
                 "name": subgroup.name,
+                "weight": subgroup.weight_percent,
                 "score": subgroup_score,
                 "weight_percent": subgroup.weight_percent,
                 "weighted_score": subgroup_weighted_score,
+                "policy_source": "published_policy",
                 "indicators": indicator_results,
             }
         )

@@ -1,3 +1,4 @@
+import { formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 import {
   CreditAnalysisDto,
   DecisionEventDto,
@@ -260,13 +261,13 @@ export function buildRuleSignals({
     });
   }
 
-  const finalScore = toNumber(score?.executive_score ?? score?.final_score) ?? 0;
+  const finalScore = resolveExecutiveScore10(score) ?? 0;
   if (score) {
     items.push({
       id: "score-track",
-      text: `Score calculado em ${finalScore} (${score.score_band}).`,
-      status: finalScore >= 600 ? "ATENDE" : "RISCO",
-      tone: finalScore >= 600 ? "success" : "warning"
+      text: `Score calculado em ${formatExecutiveScore10(finalScore)} (${score.score_band}).`,
+      status: finalScore >= 6 ? "ATENDE" : "RISCO",
+      tone: finalScore >= 6 ? "success" : "warning"
     });
   }
 
@@ -431,3 +432,4 @@ export function toneStyles(tone: UiTone) {
       };
   }
 }
+

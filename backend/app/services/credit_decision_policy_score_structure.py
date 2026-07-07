@@ -670,7 +670,7 @@ def simulate_pillar_one_score(
                 agrisk_financial_payload=payload,
                 analysis_id=analysis_id,
             )
-            result["warnings"] = []
+            result["warnings"] = [*result.get("warnings", []), *result.get("mapper_warnings", [])]
             result["simulation"] = {"mode": "analysis_id", "persisted": False, "financial_source": "agrisk_financial_analysis"}
             return result
 
