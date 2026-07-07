@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -13,9 +13,12 @@ class ScoreResultResponse(BaseModel):
     credit_analysis_id: int
     base_score: int
     final_score: int
+    executive_score: int | None = None
     score_band: ScoreBand
     calculation_memory_json: dict[str, Any]
     score_pillars: dict[str, Any] | None = None
+    score_calculation: dict[str, Any] | None = None
+    profile_status: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 

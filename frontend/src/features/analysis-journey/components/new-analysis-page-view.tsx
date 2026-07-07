@@ -324,13 +324,6 @@ function formatIsoDateToBr(value: string | null | undefined) {
   return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
-function normalizeAgriskScoreToTenScale(rawScore: number) {
-  if (!Number.isFinite(rawScore) || rawScore <= 0) return 0;
-  if (rawScore <= 10) return Math.max(0, Math.min(10, rawScore));
-  if (rawScore <= 1000) return Math.max(0, Math.min(10, rawScore / 100));
-  return Math.max(0, Math.min(10, rawScore / 100));
-}
-
 type InstitutionalScoreBand = "AA" | "A" | "B" | "C" | "D" | "Informações insuficientes";
 
 type ScoreBandVisualTokens = {
@@ -547,10 +540,10 @@ function reasonFromScorePillarItem(item: ScorePillarItemDto | null): string {
 
 function toScoreBand(score: number | null): InstitutionalScoreBand {
   if (score === null || Number.isNaN(score)) return "Informações insuficientes";
-  if (score >= 9) return "AA";
-  if (score >= 8) return "A";
-  if (score >= 6) return "B";
-  if (score >= 4) return "C";
+  if (score >= 90) return "AA";
+  if (score >= 80) return "A";
+  if (score >= 60) return "B";
+  if (score >= 40) return "C";
   if (score >= 1) return "D";
   return "Informações insuficientes";
 }
@@ -2872,9 +2865,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     : scorePillarsContract && !scorePillarsContract.available
       ? scorePillarsContract.reason ?? "Score por pilares indisponível para esta análise."
       : null;
-  const backendFinalScore = toNullableNumeric(workspaceDetailQuery.data?.score?.final_score);
-  const institutionalScore = scorePillarsContract?.available && backendFinalScore !== null
-    ? Math.max(0, Math.min(10, backendFinalScore / 100))
+  const backendExecutiveScore = toNullableNumeric(workspaceDetailQuery.data?.score?.executive_score);
+  const institutionalScore = scorePillarsContract?.available && backendExecutiveScore !== null
+    ? Math.max(0, Math.min(100, backendExecutiveScore))
     : null;
   const policyPillars: PolicyPillar[] = scorePillarsContract?.available
     ? SCORE_PILLAR_DEFINITIONS.map((definition) => {
@@ -2934,7 +2927,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const institutionalRiskBand = institutionalScore !== null ? toScoreBand(institutionalScore) : "Informações insuficientes";
   const executiveScoreBand = institutionalRiskBand.toUpperCase();
   const institutionalBandVisual = getScoreBandVisualTokens(institutionalRiskBand);
-  const institutionalScorePercent = institutionalScore !== null ? Math.max(0, Math.min(100, Math.round(institutionalScore * 10))) : 0;
+  const institutionalScorePercent = institutionalScore !== null ? Math.max(0, Math.min(100, Math.round(institutionalScore))) : 0;
   const institutionalScoreRingLength = 326.73;
   const institutionalScoreRingOffset = institutionalScore !== null
     ? institutionalScoreRingLength * (1 - (institutionalScorePercent / 100))
@@ -2946,17 +2939,17 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     if (executiveScoreBand === "B") return "B · Moderado";
     if (executiveScoreBand === "C") return "C · Atenção";
     if (executiveScoreBand === "D") return "D · Restritivo";
-    return "Perfil não consolidado";
+    return "Informações insuficientes";
   })();
   const executiveRiskAccentStyle = { borderTopColor: institutionalBandVisual.accent };
   const institutionalScoreSummary =
     institutionalScore === null
       ? "Informações insuficientes para cálculo consolidado."
-      : institutionalScore >= 8
+      : institutionalScore >= 80
         ? "Leitura consolidada favorável, com pilares majoritariamente consistentes."
-        : institutionalScore >= 6
+        : institutionalScore >= 60
           ? "Avaliação preliminar equilibrada, com pontos de atenção em pilares específicos."
-          : institutionalScore >= 4
+          : institutionalScore >= 40
             ? "Leitura consolidada em atenção, com necessidade de reforço técnico."
             : "Avaliação preliminar crítica, com riscos relevantes na estrutura atual.";
   const backendRecommendationClassification = (() => {
@@ -3001,7 +2994,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     return Number.isFinite(parsed) ? parsed : null;
   })();
   const preliminaryRiskLimitValue = engineRecommendedLimit ?? null;
-  const insightRiskScoreText = institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "Não informado";
+  const insightRiskScoreText = institutionalScore !== null ? `${Math.round(institutionalScore)}/100` : "Não informado";
   const insightRiskProfileText = institutionalRiskBand === "Informações insuficientes" ? "Perfil não identificado" : `Perfil ${institutionalRiskBand}`;
   const insightRiskLimitText = preliminaryRiskLimitValue !== null
     ? formatCurrencyBRLMM2(preliminaryRiskLimitValue)
@@ -4788,7 +4781,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                         <p className="text-[11px] font-semibold text-[#475569]">Perfil de risco</p>
                       </div>
                       <p className="mt-1 text-[18px] font-extrabold leading-tight text-[#0f172a]">{institutionalScore !== null ? executiveRiskProfile : "—"}</p>
-                      <p className="mt-0.5 text-[11px] text-[#64748b]">{institutionalScore !== null ? `${Math.round(institutionalScore * 10)}/100` : "Sem score"}</p>
+                      <p className="mt-0.5 text-[11px] text-[#64748b]">{institutionalScore !== null ? `${Math.round(institutionalScore)}/100` : "Sem score"}</p>
                     </div>
                     <div className={`rounded-[14px] border px-3.5 py-3 ${
                       executiveExposureHasResidual

@@ -260,7 +260,7 @@ export function buildRuleSignals({
     });
   }
 
-  const finalScore = toNumber(score?.final_score) ?? 0;
+  const finalScore = toNumber(score?.executive_score ?? score?.final_score) ?? 0;
   if (score) {
     items.push({
       id: "score-track",

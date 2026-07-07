@@ -86,7 +86,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
   const resolvedDecision = decisionPill(
     resolveDecision(finalDecision?.final_decision ?? null, decision?.motor_result ?? analysis.motor_result)
   );
-  const scoreNumber = toNumber(score?.final_score);
+  const scoreNumber = toNumber(score?.executive_score ?? score?.final_score);
   const scoreBand = score?.score_band ?? inferBand(scoreNumber);
   const scoreSummary = buildExplainabilitySummary({
     score,
@@ -258,7 +258,7 @@ export function AnalysisDetailCards({ data }: AnalysisDetailCardsProps) {
                 score={`${scoreNumber ?? 0} pts`}
                 rangeLabel={`Faixa ${scoreBand}`}
                 riskLabel={riskLabelByBand[scoreBand] ?? "Risco moderado"}
-                scorePill={`${scoreNumber ?? 0} / 1000`}
+                scorePill={`${scoreNumber ?? 0} / 100`}
                 dateLabel={`Atualizado ${formatDate(analysis.decision_calculated_at ?? analysis.created_at)}`}
               />
             </div>

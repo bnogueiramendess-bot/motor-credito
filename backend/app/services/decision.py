@@ -13,8 +13,17 @@ from app.models.score_result import ScoreResult
 from app.services.credit_decision_policy_score_seed import PILLAR_CODE
 from app.services.credit_policy import build_runtime_policy_from_entity, ensure_active_policy
 from app.services.manual_financial_statements import FINANCIAL_DATA_NOT_AVAILABLE_REASON, to_decimal
+from app.services.institutional_profile import (
+    build_recommendation_summary,
+    build_score_calculation,
+    calculate_profile_status,
+    has_internal_history_from_score_memory,
+    has_valid_coface_from_score_memory,
+    score_1000_to_100,
+)
 
 DECIMAL_ZERO = Decimal("0")
+COMMITTEE_COFACE_REASON = "Ausência de COFACE válida impede recomendação automática de limite."
 
 
 class DecisionCalculationError(Exception):
@@ -137,6 +146,26 @@ def _resolve_band_cap(score_band: ScoreBand, revenue_basis: Decimal, ratio: Deci
     return _quantize_money(revenue_basis * ratio)
 
 
+def _recommendation_from_decision(
+    *,
+    motor_result: MotorResult,
+    suggested_limit: Decimal,
+    requested_limit: Decimal,
+    requires_committee: bool,
+) -> str:
+    if motor_result == MotorResult.REJECTED:
+        return "reject"
+    if motor_result == MotorResult.APPROVED:
+        return "approve"
+    if requires_committee:
+        return "partial_approval"
+    if suggested_limit <= DECIMAL_ZERO:
+        return "maintenance"
+    if requested_limit > DECIMAL_ZERO and suggested_limit >= requested_limit:
+        return "approve"
+    return "partial_approval"
+
+
 def _build_decision_summary(
     *,
     rules_evaluated: list[dict[str, Any]],
@@ -194,6 +223,13 @@ def calculate_and_apply_decision(
     if source_entry is None:
         raise DecisionCalculationError("No external data found for this analysis.")
 
+    score_memory = score_result.calculation_memory_json if isinstance(score_result.calculation_memory_json, dict) else {}
+    executive_score = score_1000_to_100(score_result.final_score)
+    score_calculation = build_score_calculation(score_result.final_score, score_memory)
+    profile_status = calculate_profile_status(score_memory)
+    has_valid_coface = has_valid_coface_from_score_memory(score_memory)
+    has_internal_history = has_internal_history_from_score_memory(score_memory)
+
     revenue_basis_type, revenue_basis_value = _resolve_revenue_basis(analysis, source_entry, score_result)
     cap_ratio = policy.decision.band_limit_caps.get(score_result.score_band, DECIMAL_ZERO)
     band_limit_cap = _resolve_band_cap(score_result.score_band, revenue_basis_value, cap_ratio)
@@ -201,7 +237,7 @@ def calculate_and_apply_decision(
     requested_limit = analysis.requested_limit if analysis.requested_limit is not None else DECIMAL_ZERO
     suggested_limit = min(requested_limit, band_limit_cap) if requested_limit > DECIMAL_ZERO else band_limit_cap
 
-    if score_result.score_band == ScoreBand.D:
+    if score_result.score_band == ScoreBand.D or not has_valid_coface:
         suggested_limit = DECIMAL_ZERO
 
     suggested_limit = _quantize_money(max(DECIMAL_ZERO, suggested_limit))
@@ -298,17 +334,24 @@ def calculate_and_apply_decision(
     )
 
     reasons: list[str] = []
-    if score_result.score_band == ScoreBand.D:
+    if score_result.score_band == ScoreBand.D and has_valid_coface:
         reasons.append("score_band_d")
+    if not has_valid_coface:
+        reasons.append("missing_valid_coface_committee_required")
     if source_entry.has_restrictions:
         reasons.append("active_restrictions_detected")
 
-    if reasons:
+    blocking_reasons = [item for item in reasons if item in {"score_band_d", "active_restrictions_detected"}]
+    if blocking_reasons:
         motor_result = MotorResult.REJECTED
-        executive_reason = "Reprovada por combinação de score em faixa D e/ou restrições ativas."
+        executive_reason = "Reprovada por regra explicita de politica: score em faixa D com COFACE valida e/ou restricoes ativas."
+    elif "missing_valid_coface_committee_required" in reasons:
+        motor_result = MotorResult.MANUAL_REVIEW
+        executive_reason = "Encaminhada para Comite por ausencia de cobertura COFACE valida; o score permanece apenas informativo."
     else:
         can_auto_approve = (
             score_result.score_band == ScoreBand.A
+            and has_valid_coface
             and not source_entry.has_restrictions
             and (
                 indebtedness_ratio is None
@@ -324,10 +367,28 @@ def calculate_and_apply_decision(
             reasons.append("manual_review_required_by_policy")
             executive_reason = "Encaminhada para revisão manual por critérios de política para aprovação automática."
 
+    requires_committee = "missing_valid_coface_committee_required" in reasons
+    committee_reason = COMMITTEE_COFACE_REASON if requires_committee else None
+    recommendation = _recommendation_from_decision(
+        motor_result=motor_result,
+        suggested_limit=suggested_limit,
+        requested_limit=requested_limit,
+        requires_committee=requires_committee,
+    )
+
     decision_summary = _build_decision_summary(
         rules_evaluated=rules_explanation,
         motor_result=motor_result,
         suggested_limit=suggested_limit,
+    )
+
+    recommendation_summary = build_recommendation_summary(
+        score_100=executive_score,
+        profile_status=profile_status,
+        has_valid_coface=has_valid_coface,
+        has_internal_history=has_internal_history,
+        motor_result=motor_result,
+        reasons=reasons,
     )
 
     score_explainability = None
@@ -340,6 +401,10 @@ def calculate_and_apply_decision(
     decision_memory_json = {
         "score_band": score_result.score_band.value,
         "score_final": score_result.final_score,
+        "executive_score": executive_score,
+        "score_calculation": score_calculation,
+        "profile_status": profile_status,
+        "has_valid_coface": has_valid_coface,
         "source_entry_id": source_entry.id,
         "source_type": source_entry.source_type.value,
         "revenue_basis_type": revenue_basis_type,
@@ -349,11 +414,12 @@ def calculate_and_apply_decision(
         "band_limit_cap": str(_quantize_money(band_limit_cap)),
         "suggested_limit": str(_quantize_money(suggested_limit)),
         "motor_result": motor_result.value,
+        "recommendation": recommendation,
+        "requires_committee": requires_committee,
+        "committee_reason": committee_reason,
         "reasons": reasons,
-        "summary": (
-            f"Resultado {motor_result.value} com limite sugerido "
-            f"{_quantize_money(suggested_limit)} e {decision_summary['evaluated_rules']} regras avaliadas."
-        ),
+        "summary": recommendation_summary,
+        "summary_text": recommendation_summary["final_rationale"],
         "explainability": {
             "policy": {
                 "policy_id": active_policy_entity.id,
@@ -365,6 +431,10 @@ def calculate_and_apply_decision(
             "decision_summary": {
                 **decision_summary,
                 "executive_reason": executive_reason,
+                "recommendation": recommendation,
+                "requires_committee": requires_committee,
+                "committee_reason": committee_reason,
+                "recommendation_summary": recommendation_summary,
             },
             "rules_evaluated": rules_explanation,
             "score_explainability": score_explainability,

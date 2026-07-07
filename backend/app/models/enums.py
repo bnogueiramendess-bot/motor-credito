@@ -1,4 +1,4 @@
-from enum import StrEnum
+﻿from enum import StrEnum
 
 
 class AnalysisStatus(StrEnum):
@@ -45,6 +45,12 @@ class ScoreBand(StrEnum):
     B = "B"
     C = "C"
     D = "D"
+
+
+class ProfileConsolidationStatus(StrEnum):
+    PROFILE_NOT_CONSOLIDATED = "profile_not_consolidated"
+    PROFILE_PARTIALLY_CONSOLIDATED = "profile_partially_consolidated"
+    PROFILE_CONSOLIDATED = "profile_consolidated"
 
 
 class CreditPolicyStatus(StrEnum):

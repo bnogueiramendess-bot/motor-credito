@@ -14,6 +14,8 @@ def test_existing_customer_maintains_current_limit() -> None:
         motor_result=MotorResult.MANUAL_REVIEW,
     )
     assert result["code"] == "maintain_current_limit"
+    assert result["recommendation"] == "maintenance"
+    assert result["requires_committee"] is False
     assert result["label"] == "Manutenção do Limite Atual"
     assert result["final_suggested_limit"] == "4500000.00"
     assert result["financial_impact"] == "0.00"
@@ -32,6 +34,7 @@ def test_existing_customer_partial_approval_with_increase() -> None:
         motor_result=MotorResult.MANUAL_REVIEW,
     )
     assert result["code"] == "partial_approval"
+    assert result["recommendation"] == "partial_approval"
     assert result["label"] == "Aprovação parcial recomendada"
 
 
@@ -45,6 +48,7 @@ def test_existing_customer_reduction_when_final_below_current() -> None:
         motor_result=MotorResult.MANUAL_REVIEW,
     )
     assert result["code"] == "reduction"
+    assert result["recommendation"] == "partial_approval"
     assert result["label"] == "Redução recomendada"
     assert result["final_suggested_limit"] == "3000000.00"
 
@@ -58,6 +62,7 @@ def test_new_customer_partial_with_coface_below_requested() -> None:
         is_existing_customer=False,
         motor_result=MotorResult.MANUAL_REVIEW,
     )
+    assert result["recommendation"] == "partial_approval"
     assert result["label"] == "Aprovação parcial recomendada"
 
 
@@ -71,6 +76,7 @@ def test_new_customer_full_approval() -> None:
         motor_result=MotorResult.APPROVED,
     )
     assert result["code"] == "full_approval"
+    assert result["recommendation"] == "approve"
     assert result["label"] == "Aprovação integral recomendada"
 
 
@@ -83,6 +89,7 @@ def test_new_customer_rejection_zero_limit() -> None:
         is_existing_customer=False,
         motor_result=MotorResult.REJECTED,
     )
+    assert result["recommendation"] == "reject"
     assert result["label"] == "Reprovação recomendada"
 
 
@@ -96,6 +103,7 @@ def test_existing_customer_maintenance_when_engine_above_coface_at_current_limit
         motor_result=MotorResult.MANUAL_REVIEW,
     )
     assert result["code"] == "maintain_current_limit"
+    assert result["recommendation"] == "maintenance"
     assert result["final_suggested_limit"] == "4500000.00"
     assert result["financial_impact"] == "0.00"
 
@@ -111,3 +119,23 @@ def test_coface_does_not_reduce_when_coverage_is_above_engine_limit() -> None:
     )
     assert result["final_suggested_limit"] == "4200000.00"
     assert result["code"] == "partial_approval"
+    assert result["recommendation"] == "partial_approval"
+
+
+def test_manual_review_without_coface_separates_recommendation_from_committee_flow() -> None:
+    result = classify_recommendation(
+        requested_limit=Decimal("1000000"),
+        engine_recommended_limit=Decimal("0"),
+        coface_coverage_limit=None,
+        current_approved_limit=None,
+        is_existing_customer=False,
+        motor_result=MotorResult.MANUAL_REVIEW,
+    )
+
+    assert result["code"] == "committee_review"
+    assert result["legacy_code"] == "committee_review"
+    assert result["recommendation"] == "partial_approval"
+    assert result["recommendation"] != "committee_review"
+    assert result["requires_committee"] is True
+    assert result["committee_reason"]
+    assert result["final_suggested_limit"] == "0"

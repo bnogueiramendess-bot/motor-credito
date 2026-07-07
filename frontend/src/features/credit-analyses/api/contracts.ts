@@ -22,6 +22,7 @@ export type ExplainabilityRuleItemDto = {
 export type ScoreExplainabilitySummaryDto = {
   base_score: number;
   final_score: number;
+  executive_score?: number | null;
   score_band: ScoreBand;
   evaluated_rules: number;
   matched_rules: number;
@@ -41,6 +42,15 @@ export type ScoreExplainabilityDto = {
   rules_evaluated: ExplainabilityRuleItemDto[];
 };
 
+
+export type ExecutiveRecommendationSummaryDto = {
+  positive_factors: string[];
+  negative_factors: string[];
+  risk_factors: string[];
+  mitigating_factors: string[];
+  final_rationale: string;
+};
+
 export type DecisionExplainabilitySummaryDto = {
   evaluated_rules: number;
   matched_rules: number;
@@ -48,6 +58,10 @@ export type DecisionExplainabilitySummaryDto = {
   motor_result: MotorResult;
   suggested_limit: string;
   executive_reason: string;
+  recommendation?: "approve" | "partial_approval" | "maintenance" | "reject" | string;
+  requires_committee?: boolean;
+  committee_reason?: string | null;
+  recommendation_summary?: ExecutiveRecommendationSummaryDto;
 };
 
 export type DecisionExplainabilityDto = {
@@ -71,6 +85,7 @@ export type ScoreCalculationMemoryDto = {
     detail: string;
   }>;
   final_score: number;
+  executive_score?: number | null;
   score_band: ScoreBand;
   source_entry_id: number;
   source_type: string;
@@ -90,8 +105,12 @@ export type DecisionMemoryDto = {
   band_limit_cap: string;
   suggested_limit: string;
   motor_result: MotorResult;
+  recommendation?: "approve" | "partial_approval" | "maintenance" | "reject" | string;
+  requires_committee?: boolean;
+  committee_reason?: string | null;
   reasons: string[];
-  summary: string;
+  summary: string | ExecutiveRecommendationSummaryDto;
+  summary_text?: string | null;
   explainability?: DecisionExplainabilityDto;
 };
 
@@ -208,9 +227,12 @@ export type ScoreResultDto = {
   credit_analysis_id: number;
   base_score: number;
   final_score: number;
+  executive_score?: number | null;
   score_band: ScoreBand;
   calculation_memory_json: Record<string, unknown>;
   score_pillars?: ScorePillarsDto | null;
+  score_calculation?: Record<string, unknown> | null;
+  profile_status?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 };

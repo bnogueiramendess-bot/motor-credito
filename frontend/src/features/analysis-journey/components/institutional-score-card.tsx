@@ -83,7 +83,7 @@ function scoreGaugeBandClass(band: ScoreGaugeBand) {
 }
 
 function InstitutionalScoreGauge({ score }: { score: number | null }) {
-  const safeScore100 = score === null ? 0 : Math.max(0, Math.min(100, score * 10));
+  const safeScore100 = score === null ? 0 : Math.max(0, Math.min(100, score));
   const displayScore = score === null ? "—" : `${Math.round(safeScore100)}`;
   const band = scoreGaugeBandFrom100(safeScore100);
   const bandToken = getScoreBandVisualTokens(scoreGaugeBandToInstitutionalBand(band));
