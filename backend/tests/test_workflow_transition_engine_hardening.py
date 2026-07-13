@@ -254,9 +254,9 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
     def test_monitor_execute_analysis_routes_to_workspace_and_not_dossier(self) -> None:
         monitor_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "credit-analyses" / "components" / "monitor-page-view.tsx"
         content = monitor_path.read_text(encoding="utf-8")
-        self.assertIn('["start_analysis", "continue_analysis", "execute_analysis"]', content)
-        self.assertIn("return `/analises/${analysisId}/workspace`;", content)
-        self.assertIn('["view_dossier", "view_result"]', content)
+        self.assertIn("getCreditAnalysisWorkspaceRoute", content)
+        self.assertIn("return getCreditAnalysisWorkspaceRoute(analysisId);", content)
+        self.assertNotIn("return `/analises/${analysisId}`;", content)
 
     def test_workspace_starts_from_step2_and_has_no_auto_triage_lookup(self) -> None:
         workspace_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "analysis-journey" / "components" / "new-analysis-page-view.tsx"

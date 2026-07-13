@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -7,6 +7,7 @@ import { CalendarDays, Check, ChevronDown, ChevronsLeft, ChevronsRight, Filter, 
 
 import { CreditAnalysisApprovalProgressItemDto, CreditAnalysisMonitorItemDto, CreditPolicyApprovalQueueItemDto } from "@/features/credit-analyses/api/contracts";
 import { useCreditAnalysesApprovalQueueQuery } from "@/features/credit-analyses/hooks/use-credit-analyses-approval-queue-query";
+import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 import { BusinessUnitContextSelector } from "@/features/business-units/components/business-unit-context-selector";
 import { useBusinessUnitContextQuery } from "@/features/business-units/hooks/use-business-unit-context-query";
 import { policyGovernanceQueueCta } from "@/features/credit-decision-policy/utils/policy-governance-labels";
@@ -518,7 +519,7 @@ export function ApprovalQueuePageView() {
 
               <div className="mt-auto flex items-center justify-end gap-3">
                 {item.available_actions.includes("view_dossier") || decisionActions.length > 0 ? (
-                  <Link href={`/analises/${item.analysis_id}/workspace`} className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
+                  <Link href={getCreditAnalysisWorkspaceRoute(item.analysis_id)} className="inline-flex h-11 min-w-[150px] items-center justify-center rounded-[14px] bg-gradient-to-r from-[#4F46E5] to-[#4338CA] px-5 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)] hover:from-[#4338CA] hover:to-[#3730A3]">
                     Abrir Dossiê para Decidir
                   </Link>
                 ) : (

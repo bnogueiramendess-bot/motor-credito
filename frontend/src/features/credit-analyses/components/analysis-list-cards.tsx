@@ -7,6 +7,7 @@ import { Search } from "lucide-react";
 import { CreditAnalysisListApiResponse } from "@/features/credit-analyses/api/contracts";
 import { buildMilestones, buildRuleSignals, decisionPill, getInitials, resolveDecision, toneStyles } from "@/features/credit-analyses/utils/analysis-view-models";
 import { formatCurrency, formatDateTime } from "@/features/credit-analyses/utils/formatters";
+import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 import { formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 
 type AnalysisListCardsProps = {
@@ -252,7 +253,7 @@ export function AnalysisListCards({ analyses }: AnalysisListCardsProps) {
             </section>
 
             <Link
-              href={`/analises/${selectedAnalysis.id}`}
+              href={getCreditAnalysisWorkspaceRoute(selectedAnalysis.id)}
               className="inline-flex w-full items-center justify-center rounded-[6px] border border-[#d1d5db] bg-white px-3 py-2 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"
             >
               Ver análise completa -&gt;

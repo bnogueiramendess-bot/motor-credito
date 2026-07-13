@@ -5,6 +5,7 @@ import { AgingIndicator } from "@/features/credit-analyses/components/aging-indi
 import { ExternalReportStatus } from "@/features/credit-analyses/components/external-report-status";
 import { WorkflowBadges } from "@/features/credit-analyses/components/workflow-badges";
 import { formatCurrency } from "@/features/credit-analyses/utils/formatters";
+import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 
 type AnalysisQueueCardProps = {
@@ -52,11 +53,11 @@ export function AnalysisQueueCard({ item }: AnalysisQueueCardProps) {
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Link href={`/analises/${item.analysis_id}`} className="rounded-[8px] bg-[#1E3A8A] px-3 py-1.5 text-[11px] font-medium text-white">Abrir análise</Link>
-        {canExecuteAnalysis ? <Link href={`/analises/${item.analysis_id}`} className="rounded-[8px] border border-[#D7E1EC] px-3 py-1.5 text-[11px] font-medium text-[#4F647A]">Continuar análise</Link> : null}
-        <Link href={`/analises/${item.analysis_id}`} className="rounded-[8px] border border-[#D7E1EC] px-3 py-1.5 text-[11px] font-medium text-[#4F647A]">Importar relatórios</Link>
+        <Link href={getCreditAnalysisWorkspaceRoute(item.analysis_id)} className="rounded-[8px] bg-[#1E3A8A] px-3 py-1.5 text-[11px] font-medium text-white">Abrir análise</Link>
+        {canExecuteAnalysis ? <Link href={getCreditAnalysisWorkspaceRoute(item.analysis_id)} className="rounded-[8px] border border-[#D7E1EC] px-3 py-1.5 text-[11px] font-medium text-[#4F647A]">Continuar análise</Link> : null}
+        <Link href={getCreditAnalysisWorkspaceRoute(item.analysis_id)} className="rounded-[8px] border border-[#D7E1EC] px-3 py-1.5 text-[11px] font-medium text-[#4F647A]">Importar relatórios</Link>
         {canViewDossier ? <Link href={`/credit-analysis/${item.analysis_id}/dossier`} className="rounded-[8px] border border-[#D7E1EC] px-3 py-1.5 text-[11px] font-medium text-[#4F647A]">Gerar dossiê</Link> : null}
-        {canSubmitRequest ? <Link href={`/analises/${item.analysis_id}`} className="rounded-[8px] border border-[#D7E1EC] px-3 py-1.5 text-[11px] font-medium text-[#4F647A]">Submeter para aprovação</Link> : null}
+        {canSubmitRequest ? <Link href={getCreditAnalysisWorkspaceRoute(item.analysis_id)} className="rounded-[8px] border border-[#D7E1EC] px-3 py-1.5 text-[11px] font-medium text-[#4F647A]">Submeter para aprovação</Link> : null}
       </div>
     </article>
   );

@@ -361,6 +361,7 @@ export type CreditAnalysisMonitorItemDto = {
   status_label: string;
   workflow_stage: "commercial_submitted" | "financial_review" | "pending_approval" | "decided" | "returned" | string;
   current_journey_step?: number | null;
+  submitted_for_approval_at?: string | null;
   requested_limit: number | string | null;
   recommended_limit?: number | string | null;
   financial_impact?: number | string | null;

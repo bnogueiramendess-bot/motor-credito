@@ -463,6 +463,72 @@ TECHNICAL_MONITOR_VISIBILITY_ACTIONS = {
     "view_result",
 }
 
+TECHNICAL_MONITOR_OPERATIONAL_ACTIONS = {
+    "start_analysis",
+    "continue_analysis",
+    "submit_approval",
+    "approve",
+    "reject",
+    "request_changes",
+    "escalate_to_committee",
+}
+
+
+def _analysis_has_current_company_signal(
+    db: Session,
+    current: CurrentUser,
+    analysis: CreditAnalysis,
+    *,
+    allow_unknown: bool = True,
+) -> bool:
+    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    triage = memory.get("triage_submission") if isinstance(memory.get("triage_submission"), dict) else {}
+    company_signal = triage.get("requester_company_id") or triage.get("company_id")
+    if company_signal is not None:
+        try:
+            return int(company_signal) == int(current.user.company_id)
+        except (TypeError, ValueError):
+            return False
+
+    user_ids = {
+        user_id
+        for user_id in (analysis.current_owner_user_id, analysis.last_owner_user_id)
+        if user_id is not None
+    }
+    if user_ids:
+        owner_company_ids = set(db.scalars(select(User.company_id).where(User.id.in_(user_ids))).all())
+        if owner_company_ids:
+            return current.user.company_id in owner_company_ids
+
+    audit = db.scalar(
+        select(AuditLog)
+        .where(
+            AuditLog.resource == "credit_analysis",
+            AuditLog.resource_id == str(analysis.id),
+            AuditLog.action.in_(("credit_request_triage_submit", "credit_request_draft_create")),
+        )
+        .order_by(AuditLog.id.desc())
+    )
+    if audit is None:
+        return allow_unknown
+    if audit.actor_user_id is not None:
+        actor_company_id = db.scalar(select(User.company_id).where(User.id == audit.actor_user_id))
+        if actor_company_id is not None:
+            return actor_company_id == current.user.company_id
+    metadata = audit.metadata_json if isinstance(audit.metadata_json, dict) else {}
+    metadata_company_id = metadata.get("requester_company_id") or metadata.get("company_id")
+    if metadata_company_id is not None:
+        try:
+            return int(metadata_company_id) == int(current.user.company_id)
+        except (TypeError, ValueError):
+            return False
+    requester_email = str(metadata.get("requested_by") or "").strip().lower()
+    if requester_email:
+        requester_company_id = db.scalar(select(User.company_id).where(func.lower(User.email) == requester_email).limit(1))
+        if requester_company_id is not None:
+            return requester_company_id == current.user.company_id
+    return allow_unknown
+
 
 def _status_label(status_value: str) -> str:
     mapping = {
@@ -1488,6 +1554,7 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
         resolve_credit_workflow_action(db, current, action="return_to_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_dossier", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_result", analysis=analysis, business_unit=analysis_bu).allowed,
+        resolve_credit_workflow_action(db, current, action="view_tracking", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
     ]
     if any(visibility_checks):
@@ -1499,7 +1566,7 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
 
 
 def _enforce_detail_read_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
-    if _has_any_permission(current, "credit_request_view_bu", "scope:all_bu"):
+    if _has_any_permission(current, "credit_request_view_bu", "scope:all_bu", "credit.requests.view", "clients.dossier.view"):
         allowed_bu_names = get_user_allowed_business_units(db, current)
         has_all_scope = user_has_all_bu_scope(current)
         analysis_bu = resolve_analysis_business_unit(db, analysis)
@@ -1873,6 +1940,7 @@ def create_credit_analysis_draft(
                 "business_unit": selected_bu_name,
                 "economic_group": payload.economic_group,
                 "draft_created_from_step1": True,
+                "requester_company_id": current.user.company_id,
             }
         },
     )
@@ -1899,6 +1967,7 @@ def create_credit_analysis_draft(
                 "source": source,
                 "analysis_id": analysis.id,
                 "business_unit": selected_bu_name,
+                "requester_company_id": current.user.company_id,
             },
             notes="Rascunho criado para preenchimento da etapa inicial.",
         )
@@ -2143,6 +2212,7 @@ def submit_credit_analysis_from_triage(
         "has_recent_analysis": recent_analysis is not None,
         "business_unit": selected_bu_name,
         "draft_created_from_step1": False,
+        "requester_company_id": current.user.company_id,
     }
     if reusable_draft is not None:
         analysis = reusable_draft
@@ -2209,6 +2279,7 @@ def submit_credit_analysis_from_triage(
                 "business_unit": selected_bu_name,
                 "early_review_justification": early_justification if payload.is_early_review_request else None,
                 "previous_analysis_id": payload.previous_analysis_id or (recent_analysis.id if recent_analysis else None),
+                "requester_company_id": current.user.company_id,
             },
             notes="Solicitacao enviada para analise financeira.",
         )
@@ -2699,6 +2770,8 @@ def list_credit_analyses_queue(
         bu_name = portfolio[0]
         if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
+        if not _analysis_has_current_company_signal(db, current, analysis):
+            continue
 
         external_entries = list(
             db.scalars(
@@ -2908,8 +2981,8 @@ def list_credit_analyses_monitor(
 ) -> CreditAnalysisMonitorResponse:
     page = max(page, 1)
     page_size = min(max(page_size, 1), 100)
-    can_view_own = _has_any_permission(current, "credit_request_view_own", "credit.requests.view")
-    can_view_bu = _has_any_permission(current, "credit_request_view_bu", "scope:all_bu")
+    can_view_own = bool({"credit_request_view_own", "credit.requests.view", "credit_request_view_bu", "scope:all_bu"} & current.permissions)
+    can_view_bu = bool({"credit_request_view_bu", "scope:all_bu", "credit.requests.view"} & current.permissions)
     is_consultant = db.scalar(
         select(UserWorkflowRole.id)
         .join(WorkflowRole, WorkflowRole.id == UserWorkflowRole.workflow_role_id)
@@ -2980,6 +3053,8 @@ def list_credit_analyses_monitor(
             bu_name = triage_data.get("business_unit")
         if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
+        if not _analysis_has_current_company_signal(db, current, analysis):
+            continue
 
         external_entries = list(db.scalars(select(ExternalDataEntry).where(ExternalDataEntry.credit_analysis_id == analysis.id)).all())
         status_value = _resolve_operational_status(analysis, external_entries)
@@ -3011,10 +3086,11 @@ def list_credit_analyses_monitor(
         if not available_actions:
             continue
         has_technical_visibility = any(action in TECHNICAL_MONITOR_VISIBILITY_ACTIONS for action in available_actions)
+        has_operational_visibility = any(action in TECHNICAL_MONITOR_OPERATIONAL_ACTIONS for action in available_actions)
 
         if can_view_own and not can_view_bu and not is_consultant:
             is_requester = requester_email == current.user.email.strip().lower()
-            if not is_requester and not has_technical_visibility:
+            if not is_requester and not has_operational_visibility:
                 continue
         next_role = "analista_financeiro"
         if stage == "pending_approval":
@@ -3041,6 +3117,7 @@ def list_credit_analyses_monitor(
             status_label=_status_label(status_value),
             workflow_stage=stage,
             current_journey_step=_resolve_persisted_journey_step(db, analysis),
+            submitted_for_approval_at=analysis.submitted_for_approval_at,
             requested_limit=_resolve_monitor_requested_limit_with_legacy_context(
                 analysis,
                 triage_data=triage_data,
@@ -3225,6 +3302,8 @@ def list_credit_analyses_approval_queue(
             bu_name = triage_data.get("business_unit")
         if not bu_name_in_scope(scoped_bu_names, bu_name, has_all_scope=has_all_scope):
             continue
+        if not _analysis_has_current_company_signal(db, current, analysis, allow_unknown=False):
+            continue
 
         audit = db.scalar(
             select(AuditLog).where(
@@ -3308,6 +3387,7 @@ def list_credit_analyses_approval_queue(
             status_label=_status_label(status_value),
             workflow_stage=stage,
             current_journey_step=_resolve_persisted_journey_step(db, analysis),
+            submitted_for_approval_at=analysis.submitted_for_approval_at,
             requested_limit=analysis.requested_limit,
             recommended_limit=_resolve_recommended_limit_from_memory(analysis),
             financial_impact=_resolve_financial_impact(analysis),

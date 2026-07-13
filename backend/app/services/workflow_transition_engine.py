@@ -19,7 +19,7 @@ from app.services.workflow_authorization import (
     resolve_credit_workflow_action,
     resolve_credit_workflow_available_actions,
 )
-from app.services.committee_sessions import open_credit_committee_session
+from app.services.committee_sessions import get_open_committee_session, open_credit_committee_session
 from app.services.workflow_approval import create_workflow_approval_round, decide_active_approval_step, get_active_approval_step
 
 DECIMAL_ZERO = Decimal("0.00")
@@ -39,6 +39,40 @@ class WorkflowTransitionResult:
     notifications: list[str]
     available_actions: list[str]
     workflow_context: dict
+
+
+
+
+def _record_committee_vote_if_open(db: Session, current: CurrentUser, analysis: CreditAnalysis, *, action: str, comment: str | None, voted_at: datetime) -> None:
+    session = get_open_committee_session(db, analysis_id=analysis.id)
+    if session is None:
+        return
+    vote = db.scalar(
+        select(CommitteeSessionVote)
+        .where(
+            CommitteeSessionVote.session_id == session.id,
+            CommitteeSessionVote.resolved_user_id == current.user.id,
+            CommitteeSessionVote.status == "PENDING",
+        )
+        .limit(1)
+    )
+    if vote is None:
+        return
+    vote.status = "VOTED"
+    vote.decision = "APPROVE" if action == "approve" else "REJECT" if action == "reject" else None
+    vote.comment = comment
+    vote.voted_at = voted_at
+    pending_vote_id = db.scalar(
+        select(CommitteeSessionVote.id)
+        .where(
+            CommitteeSessionVote.session_id == session.id,
+            CommitteeSessionVote.status == "PENDING",
+        )
+        .limit(1)
+    )
+    if pending_vote_id is None:
+        session.status = "CLOSED"
+        session.closed_at = voted_at
 
 
 def _status_value(analysis: CreditAnalysis) -> str:
@@ -248,6 +282,7 @@ def resolve_credit_workflow_transition(
         next_owner_role = _owner_for_status(next_status)
         analysis.analysis_status = AnalysisStatus.CHANGES_REQUESTED
         timeline_event = "returned_for_revision"
+        _record_committee_vote_if_open(db, current, analysis, action="request_changes", comment=justification, voted_at=transition_at)
         authorization.workflow_context.update(
             {
                 "approval_round": approval_decision.step.round_number,
@@ -302,6 +337,7 @@ def resolve_credit_workflow_transition(
             timeline_event = "analysis_approval_step_approved"
         next_owner_user_id = current.user.id
         next_owner_role = _owner_for_status(next_status)
+        _record_committee_vote_if_open(db, current, analysis, action=action, comment=comment, voted_at=transition_at)
         authorization.workflow_context.update(
             {
                 "approval_round": approval_decision.step.round_number,
@@ -327,6 +363,7 @@ def resolve_credit_workflow_transition(
         next_owner_role = _owner_for_status(next_status)
         analysis.analysis_status = AnalysisStatus.IN_APPROVAL
         timeline_event = "analysis_escalated_to_committee"
+        _record_committee_vote_if_open(db, current, analysis, action="request_changes", comment=justification, voted_at=transition_at)
         authorization.workflow_context.update(
             {
                 "approval_round": approval_decision.step.round_number,

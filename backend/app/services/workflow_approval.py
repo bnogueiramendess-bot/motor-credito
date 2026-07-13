@@ -109,7 +109,7 @@ def get_active_approval_step(db: Session, analysis_id: int) -> WorkflowApprovalS
         select(WorkflowApprovalStep)
         .where(
             WorkflowApprovalStep.credit_analysis_id == analysis_id,
-            WorkflowApprovalStep.status == "ACTIVE",
+            WorkflowApprovalStep.status.in_(("ACTIVE", "IN_COMMITTEE")),
         )
         .order_by(WorkflowApprovalStep.round_number.desc(), WorkflowApprovalStep.sequence_order.asc(), WorkflowApprovalStep.id.asc())
         .limit(1)

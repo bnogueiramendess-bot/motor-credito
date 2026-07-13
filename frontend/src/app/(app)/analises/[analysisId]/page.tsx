@@ -1,6 +1,6 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
-import { AnalysisDetailPageView } from "@/features/credit-analyses/components/analysis-detail-page-view";
+import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 
 type AnalysisPageProps = {
   params: {
@@ -15,5 +15,5 @@ export default function AnalysisDetailPage({ params }: AnalysisPageProps) {
     notFound();
   }
 
-  return <AnalysisDetailPageView analysisId={analysisId} />;
+  redirect(getCreditAnalysisWorkspaceRoute(analysisId));
 }

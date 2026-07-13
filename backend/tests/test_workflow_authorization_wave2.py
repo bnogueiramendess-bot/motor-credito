@@ -228,6 +228,84 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
             self.assertFalse(resolve_credit_workflow_action(db=object(), current=current, action="submit_approval", analysis=in_progress).allowed)  # type: ignore[arg-type]
             self.assertFalse(resolve_credit_workflow_action(db=object(), current=current, action="approve", analysis=in_progress).allowed)  # type: ignore[arg-type]
 
+    def test_requester_view_tracking_is_read_only_access(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=44), permissions=set())
+        analysis = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            motor_result=None,
+        )
+
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_REQUESTER"]):
+            tracking = resolve_credit_workflow_action(db=object(), current=current, action="view_tracking", analysis=analysis)  # type: ignore[arg-type]
+            continue_analysis = resolve_credit_workflow_action(db=object(), current=current, action="continue_analysis", analysis=analysis)  # type: ignore[arg-type]
+            approve = resolve_credit_workflow_action(db=object(), current=current, action="approve", analysis=analysis)  # type: ignore[arg-type]
+
+        self.assertTrue(tracking.allowed)
+        self.assertFalse(continue_analysis.allowed)
+        self.assertFalse(approve.allowed)
+
+    def test_completed_and_cancelled_are_read_only_for_consultation(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=45), permissions={"credit.requests.view", "clients.dossier.view"})
+        completed = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            analysis_status=AnalysisStatus.COMPLETED,
+            motor_result=None,
+        )
+        cancelled = DummyAnalysis(
+            final_limit=None,
+            suggested_limit=Decimal("100000"),
+            requested_limit=Decimal("100000"),
+            analysis_status="cancelled",  # type: ignore[assignment]
+            motor_result=None,
+        )
+
+        with patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=[]):
+            self.assertTrue(resolve_credit_workflow_action(db=object(), current=current, action="view_result", analysis=completed).allowed)  # type: ignore[arg-type]
+            self.assertTrue(resolve_credit_workflow_action(db=object(), current=current, action="view_dossier", analysis=cancelled).allowed)  # type: ignore[arg-type]
+            self.assertFalse(resolve_credit_workflow_action(db=object(), current=current, action="continue_analysis", analysis=completed).allowed)  # type: ignore[arg-type]
+
+    def test_open_committee_session_preserves_pending_member_decision_action(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=46), permissions=set())
+        analysis = DummyAnalysis(final_limit=None, suggested_limit=Decimal("15000000"), requested_limit=Decimal("15000000"), analysis_status=AnalysisStatus.IN_APPROVAL)
+        open_session = type("CommitteeSession", (), {"id": 10, "status": "OPEN"})()
+        active_step = type("Step", (), {"workflow_role_id": 99, "workflow_role": type("Role", (), {"code": "CREDIT_COMMITTEE"})()})()
+
+        with (
+            patch("app.services.workflow_authorization.get_open_committee_session", return_value=open_session),
+            patch("app.services.workflow_authorization._user_has_pending_committee_vote", return_value=True),
+            patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
+            patch("app.services.workflow_authorization.settings.credit_approval_legacy_fallback_enabled", False),
+            patch("app.services.workflow_authorization._get_current_approval_or_committee_step", return_value=active_step),
+            patch("app.services.workflow_authorization.user_has_approval_step_role", return_value=True),
+            patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_COMMITTEE"]),
+            patch(
+                "app.services.workflow_authorization.resolve_required_approval_roles",
+                return_value={"rule_id": 5, "rule_name": "Comite", "required_roles": ["CREDIT_COMMITTEE"], "required_approvals": 1, "requires_committee": True},
+            ),
+        ):
+            result = resolve_credit_workflow_action(db=object(), current=current, action="approve", analysis=analysis)  # type: ignore[arg-type]
+
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.workflow_context.get("matched_roles"), ["CREDIT_COMMITTEE"])
+
+    def test_open_committee_session_blocks_non_member_decision_action(self) -> None:
+        current = DummyCurrentUser(user=DummyUser(id=47), permissions=set())
+        analysis = DummyAnalysis(final_limit=None, suggested_limit=Decimal("15000000"), requested_limit=Decimal("15000000"), analysis_status=AnalysisStatus.IN_APPROVAL)
+        open_session = type("CommitteeSession", (), {"id": 11, "status": "OPEN"})()
+
+        with (
+            patch("app.services.workflow_authorization.get_open_committee_session", return_value=open_session),
+            patch("app.services.workflow_authorization._user_has_pending_committee_vote", return_value=False),
+        ):
+            result = resolve_credit_workflow_action(db=object(), current=current, action="approve", analysis=analysis)  # type: ignore[arg-type]
+
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.denial_type, "forbidden")
+
     def test_resolve_required_approval_roles_by_amount_inactive_and_priority(self) -> None:
         high_priority = DummyRule(
             id=10,

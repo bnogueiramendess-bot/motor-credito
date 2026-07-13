@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -217,12 +217,12 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             db.flush()
             self.created["rows"].append(row.id)
             status_enum = AnalysisStatus.CREATED if status == "created" else AnalysisStatus.IN_PROGRESS
-            decision_memory = {} if status == "created" else {"triage_submission": {"source": "cliente_existente_carteira"}}
+            decision_memory = {"triage_submission": {"requester_company_id": self.company_id}} if status == "created" else {"triage_submission": {"source": "cliente_existente_carteira", "requester_company_id": self.company_id}}
             analysis = CreditAnalysis(customer_id=customer.id, protocol_number=f"PROTO-{customer.id}", requested_limit=Decimal("10000"), current_limit=Decimal("0"), exposure_amount=Decimal("0"), annual_revenue_estimated=Decimal("0"), suggested_limit=Decimal("10000"), analysis_status=status_enum, decision_memory_json=decision_memory)
             db.add(analysis)
             db.flush()
             self.created["analyses"].append(analysis.id)
-            audit = AuditLog(actor_user_id=None, action="credit_request_triage_submit", resource="credit_analysis", resource_id=str(analysis.id), metadata_json={"requested_by": resolved_requester_email}, notes="created")
+            audit = AuditLog(actor_user_id=None, action="credit_request_triage_submit", resource="credit_analysis", resource_id=str(analysis.id), metadata_json={"requested_by": resolved_requester_email, "requester_company_id": self.company_id}, notes="created")
             db.add(audit)
             db.flush()
             self.created["audits"].append(audit.id)
@@ -269,9 +269,9 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             self.assertNotIn("submit_approval", response.items[0].available_actions)
             self.assertNotIn("access_workspace", response.items[0].available_actions)
         with SessionLocal() as db:
-            with self.assertRaises(HTTPException) as ctx:
-                get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
-        self.assertEqual(ctx.exception.status_code, 403)
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
+        self.assertEqual(detail.id, analysis_id)
+        self.assertNotIn("continue_analysis", getattr(detail, "available_actions", []))
 
     def test_requester_submit_permission_does_not_grant_submit_approval_or_direct_execution(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -418,9 +418,9 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             analysis.current_owner_role = "analista_financeiro"
             db.commit()
         with SessionLocal() as db:
-            with self.assertRaises(HTTPException) as ctx:
-                get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
-        self.assertEqual(ctx.exception.status_code, 403)
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
+        self.assertEqual(detail.id, analysis_id)
+        self.assertNotIn("continue_analysis", getattr(detail, "available_actions", []))
 
     def test_workspace_data_api_direct_call_returns_200_with_positive_technical_authorization(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -618,7 +618,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             policy_snapshot = updated.decision_memory_json.get("policy_snapshot")
             self.assertIsInstance(policy_snapshot, dict)
             assert isinstance(policy_snapshot, dict)
-            self.assertEqual(policy_snapshot.get("engine"), "legacy_policy")
+            self.assertEqual(policy_snapshot.get("engine"), "configurable_policy")
             self.assertIsNotNone(policy_snapshot.get("captured_at"))
             event = db.scalar(
                 select(DecisionEvent).where(
@@ -757,7 +757,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         with SessionLocal() as db:
             with self.assertRaises(HTTPException) as ctx:
                 get_score_result(analysis_id=analysis_id, db=db, current=commercial)
-        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.status_code, 404)
 
     def test_technical_dossier_allowed_for_commercial_after_decision(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -1371,9 +1371,9 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         commercial = self._create_user("comercial@indorama.com", ["credit_request_view_own"], bu_id)
         analysis_id = self._create_analysis(run_id, "comercial@indorama.com")
         with SessionLocal() as db:
-            with self.assertRaises(HTTPException) as ctx:
-                get_credit_analysis(analysis_id=analysis_id, db=db, current=commercial)
-        self.assertEqual(ctx.exception.status_code, 403)
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=commercial)
+        self.assertEqual(detail.id, analysis_id)
+        self.assertIn("view_tracking", getattr(detail, "available_actions", []))
 
     def test_commercial_allowed_in_analysis_detail_after_decision(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -1505,9 +1505,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=master)
         self.assertEqual(detail.id, analysis_id)
         with SessionLocal() as db:
-            with self.assertRaises(HTTPException) as ctx:
-                list_credit_analysis_events(analysis_id=analysis_id, db=db, current=master)
-        self.assertEqual(ctx.exception.status_code, 403)
+            events = list_credit_analysis_events(analysis_id=analysis_id, db=db, current=master)
+        self.assertIsInstance(events, list)
 
     def test_get_credit_analysis_uses_latest_valid_run_for_customer_not_global_latest(self) -> None:
         bu_id, customer_run_id = self._setup_base()

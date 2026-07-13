@@ -11,6 +11,7 @@ import { AgriskImportStatus, AgriskReportReadResponse, AgriskReportType, Analysi
 import { InstitutionalScoreCard } from "@/features/analysis-journey/components/institutional-score-card";
 import { RecommendationInsightsCard } from "@/features/analysis-journey/components/recommendation-insights-card";
 import { ApprovalWorkflowCard } from "@/features/credit-analyses/components/approval-workflow-card";
+import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, startCreditAnalysis, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
 import type { ScorePillarItemDto, ScorePillarsDto } from "@/features/credit-analyses/api/contracts";
 import { executiveScore10ToPercent, formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
@@ -999,11 +1000,11 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
 
   function resolveWorkspaceInitialStep(analysisRecord: { final_decision?: unknown; analysis_status?: string | null; motor_result?: unknown; submitted_for_approval_at?: string | null; current_journey_step?: number | null; last_completed_journey_step?: number | null } | null | undefined) {
     if (!analysisRecord) return 2;
+    const status = analysisRecord.analysis_status ?? null;
     if (
       analysisRecord.final_decision ||
-      analysisRecord.analysis_status === "completed" ||
-      analysisRecord.motor_result ||
-      analysisRecord.submitted_for_approval_at
+      ["approved", "rejected", "completed", "cancelled"].includes(status ?? "") ||
+      (status !== "changes_requested" && (analysisRecord.motor_result || analysisRecord.submitted_for_approval_at))
     ) {
       return 4;
     }
@@ -1191,13 +1192,18 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       ? Math.max(0, internalTotalLimit - internalOpenAmount)
       : null;
   const internalOperationalStatus = workspaceDetailQuery.data?.analysis?.analysis_status ?? null;
+  const isReturnedForChanges = internalOperationalStatus === "changes_requested";
+  const isFinalReadOnlyStatus = ["approved", "rejected", "completed", "cancelled"].includes(internalOperationalStatus ?? "");
+  const hasTechnicalWorkspaceEditCapability = hasTechnicalContinuationCapability && ["created", "in_progress", "changes_requested"].includes(internalOperationalStatus ?? "");
   const isJourneyReadOnly =
     isWorkspaceMode &&
-    Boolean(
-      workspaceDetailQuery.data?.analysis?.motor_result ||
-      workspaceDetailQuery.data?.analysis?.final_decision ||
-      workspaceDetailQuery.data?.analysis?.submitted_for_approval_at ||
-      workspaceDetailQuery.data?.analysis?.analysis_status === "completed"
+    (
+      !hasTechnicalWorkspaceEditCapability ||
+      Boolean(
+        workspaceDetailQuery.data?.analysis?.final_decision ||
+        isFinalReadOnlyStatus ||
+        (!isReturnedForChanges && (workspaceDetailQuery.data?.analysis?.motor_result || workspaceDetailQuery.data?.analysis?.submitted_for_approval_at))
+      )
     );
   const internalBehaviorLabel = triageResult?.has_recent_analysis ? "cliente com histórico recente" : "histórico estável";
   const hasInternalFinancialSnapshot = hasInternalFinancialData;
@@ -1251,7 +1257,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
         const availableActions = detail.analysis.available_actions ?? [];
         const canContinueInTechnicalWorkspace = availableActions.some((action) => TECHNICAL_CONTINUATION_ACTIONS.has(action));
         if (canContinueInTechnicalWorkspace) {
-          router.push(`/analises/${response.analysis_id}/workspace`);
+          router.push(getCreditAnalysisWorkspaceRoute(response.analysis_id));
           return;
         }
       } catch {
@@ -1301,7 +1307,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       const availableActions = response.available_actions ?? [];
       const canContinueInTechnicalWorkspace = availableActions.some((action) => TECHNICAL_CONTINUATION_ACTIONS.has(action));
       if (canContinueInTechnicalWorkspace) {
-        router.push(`/analises/${response.analysis_id}/workspace`);
+        router.push(getCreditAnalysisWorkspaceRoute(response.analysis_id));
         return;
       }
       router.push("/analises/monitor?submission=success");

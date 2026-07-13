@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { Badge } from "@/shared/components/ui/badge";
 import { DashboardAnalysisCardViewModel } from "@/features/dashboard/utils/dashboard-analysis-view-models";
+import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 
 type DashboardAnalysisCardProps = {
@@ -93,7 +94,7 @@ export function DashboardAnalysisCard({ analysis }: DashboardAnalysisCardProps) 
         <p className="text-xs font-medium text-[#6b7280]">Análise #{analysis.id}</p>
         {canViewDossier ? (
           <Link
-            href={`/analises/${analysis.id}`}
+            href={getCreditAnalysisWorkspaceRoute(analysis.id)}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#c9d5ec] bg-[#f4f7ff] px-3 text-sm font-semibold text-[#1a2b5e] transition hover:border-[#b3c5e8] hover:bg-[#ebf1ff]"
           >
             Abrir análise

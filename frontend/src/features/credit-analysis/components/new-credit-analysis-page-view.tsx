@@ -10,6 +10,7 @@ import { ClientStepData, StepClient } from "@/features/credit-analysis/steps/ste
 import { OperationStepData, StepOperation } from "@/features/credit-analysis/steps/step-operation";
 import { Alert, AlertDescription, AlertTitle } from "@/shared/components/ui/alert";
 import { Button } from "@/shared/components/ui/button";
+import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card";
 
 const STORAGE_KEY = "credit-analysis:new-wizard:v1";
@@ -170,7 +171,7 @@ export function NewCreditAnalysisPageView() {
     timeoutRef.current = setTimeout(() => {
       const analysisId = `${Date.now()}`;
       window.localStorage.removeItem(STORAGE_KEY);
-      router.push(`/analises/${analysisId}`);
+      router.push(getCreditAnalysisWorkspaceRoute(analysisId));
     }, 2000);
   }
 

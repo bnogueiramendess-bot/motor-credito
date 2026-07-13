@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import CurrentUser
 from app.models.business_unit import BusinessUnit
+from app.models.committee_session import CommitteeSession
+from app.models.committee_session_vote import CommitteeSessionVote
 from app.models.credit_analysis import CreditAnalysis
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_approval_step import WorkflowApprovalStep
@@ -78,7 +80,7 @@ ACTION_POLICIES: dict[str, dict] = {
         "legacy_permissions": ("credit.dossier.edit",),
         "statuses": {"in_progress", "changes_requested"},
     },
-    "generate_dossier": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_progress", "changes_requested", "in_approval", "approved", "rejected"}},
+    "generate_dossier": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_progress", "changes_requested", "in_approval", "approved", "rejected", "completed", "cancelled"}},
     "submit_approval": {
         "workflow_roles": ("CREDIT_ANALYST",),
         "legacy_permissions": ("credit.request.submit",),
@@ -91,17 +93,17 @@ ACTION_POLICIES: dict[str, dict] = {
     "submit_to_committee": {"workflow_roles": (), "legacy_permissions": ("credit.approval.approve",), "statuses": {"in_approval"}},
     "return_to_analysis": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"in_approval"}},
     "finalize": {"workflow_roles": (), "legacy_permissions": (), "statuses": {"approved", "rejected"}},
-    "view_result": {"workflow_roles": ("CREDIT_CONSULTANT",), "legacy_permissions": ("credit.requests.view",), "statuses": {"approved", "rejected"}},
-    "view_dossier": {"workflow_roles": ("CREDIT_CONSULTANT",), "legacy_permissions": ("clients.dossier.view",), "statuses": {"changes_requested", "in_approval", "approved", "rejected"}},
+    "view_result": {"workflow_roles": ("CREDIT_CONSULTANT",), "legacy_permissions": ("credit.requests.view",), "statuses": {"approved", "rejected", "completed", "cancelled"}},
+    "view_dossier": {"workflow_roles": ("CREDIT_CONSULTANT",), "legacy_permissions": ("clients.dossier.view",), "statuses": {"changes_requested", "in_approval", "approved", "rejected", "completed", "cancelled"}},
     "view_tracking": {
         "workflow_roles": ("CREDIT_REQUESTER", "CREDIT_CONSULTANT"),
         "legacy_permissions": ("credit.requests.view",),
-        "statuses": {"pending", "in_progress", "changes_requested", "in_approval"},
+        "statuses": {"pending", "in_progress", "changes_requested", "in_approval", "approved", "rejected", "completed", "cancelled"},
     },
     "view_analysis": {
         "workflow_roles": ("CREDIT_CONSULTANT",),
         "legacy_permissions": (),
-        "statuses": {"pending", "in_progress", "changes_requested", "in_approval", "approved", "rejected"},
+        "statuses": {"pending", "in_progress", "changes_requested", "in_approval", "approved", "rejected", "completed", "cancelled"},
     },
     "access_workspace": {
         "workflow_roles": ("CREDIT_ANALYST",),
@@ -179,6 +181,10 @@ def _current_status_value(analysis: CreditAnalysis) -> str:
         return "in_approval"
     if status_value == "changes_requested":
         return "changes_requested"
+    if status_value == "completed":
+        return "completed"
+    if status_value == "cancelled":
+        return "cancelled"
     if status_value == "in_progress" and getattr(analysis, "motor_result", None) is not None:
         return "in_approval"
     if status_value == "created":
@@ -308,6 +314,18 @@ def _get_current_approval_or_committee_step(db: Session, analysis_id: int) -> Wo
         .limit(1)
     )
 
+def _user_has_pending_committee_vote(db: Session, current: CurrentUser, session: CommitteeSession) -> bool:
+    return db.scalar(
+        select(CommitteeSessionVote.id)
+        .where(
+            CommitteeSessionVote.session_id == session.id,
+            CommitteeSessionVote.resolved_user_id == current.user.id,
+            CommitteeSessionVote.status == "PENDING",
+        )
+        .limit(1)
+    ) is not None
+
+
 def resolve_technical_dossier_status(analysis: CreditAnalysis) -> dict:
     missing: list[dict[str, str]] = []
     decision_calculated_at = getattr(analysis, "decision_calculated_at", None)
@@ -398,25 +416,36 @@ def resolve_credit_workflow_action(
         except Exception:
             open_committee_session = None
         if open_committee_session is not None and hasattr(open_committee_session, "id") and hasattr(open_committee_session, "status"):
-            detail = (
-                "Ja existe uma Sessao de Comite em andamento para esta analise."
-                if action == "submit_to_committee"
-                else "Analise em deliberacao do Comite de Credito."
-            )
-            return WorkflowAuthorizationContext(
-                allowed=False,
-                denial_reason=detail,
-                denial_type="invalid_status",
-                applicable_doa_code=None,
-                applicable_doa_range=None,
-                available_actions=[],
-                workflow_context={
-                    "action": action,
-                    "status": status_value,
-                    "committee_session_id": open_committee_session.id,
-                    "committee_status": open_committee_session.status,
-                },
-            )
+            if action == "submit_to_committee":
+                return WorkflowAuthorizationContext(
+                    allowed=False,
+                    denial_reason="Ja existe uma Sessao de Comite em andamento para esta analise.",
+                    denial_type="invalid_status",
+                    applicable_doa_code=None,
+                    applicable_doa_range=None,
+                    available_actions=[],
+                    workflow_context={
+                        "action": action,
+                        "status": status_value,
+                        "committee_session_id": open_committee_session.id,
+                        "committee_status": open_committee_session.status,
+                    },
+                )
+            if not _user_has_pending_committee_vote(db, current, open_committee_session):
+                return WorkflowAuthorizationContext(
+                    allowed=False,
+                    denial_reason="Usuario sem voto pendente na Sessao de Comite em andamento.",
+                    denial_type="forbidden",
+                    applicable_doa_code=None,
+                    applicable_doa_range=None,
+                    available_actions=[],
+                    workflow_context={
+                        "action": action,
+                        "status": status_value,
+                        "committee_session_id": open_committee_session.id,
+                        "committee_status": open_committee_session.status,
+                    },
+                )
 
     user_role_codes = _list_user_workflow_role_codes(db, current.user.id)
     authorization_role_codes = _role_codes_for_authorization(user_role_codes)

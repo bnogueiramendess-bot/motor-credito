@@ -275,6 +275,7 @@ class CreditAnalysisMonitorItem(BaseModel):
     status_label: str
     workflow_stage: str
     current_journey_step: int | None = None
+    submitted_for_approval_at: datetime | None = None
     requested_limit: Decimal | None = None
     recommended_limit: Decimal | None = None
     financial_impact: Decimal | None = None
