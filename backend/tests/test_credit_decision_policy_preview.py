@@ -204,7 +204,8 @@ class CreditDecisionPolicyPreviewTestCase(unittest.TestCase):
             exposure_amount=Decimal("0"),
             annual_revenue_estimated=Decimal("10000000"),
             decision_memory_json={
-                "triage_submission": {"source": "cliente_existente_carteira" if existing_customer else "cliente_novo"}
+                "triage_submission": {"source": "cliente_existente_carteira" if existing_customer else "cliente_novo"},
+                "report_links": {},
             },
         )
         self.db.add(analysis)
@@ -231,6 +232,9 @@ class CreditDecisionPolicyPreviewTestCase(unittest.TestCase):
             self.db.add(report)
             self.db.flush()
             self.created_report_ids.append(report.id)
+            memory = dict(analysis.decision_memory_json or {})
+            memory["report_links"] = {"coface": {"read_id": report.id}}
+            analysis.decision_memory_json = memory
         self.db.commit()
         return analysis.id
 

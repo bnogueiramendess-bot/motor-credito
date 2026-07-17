@@ -82,8 +82,6 @@ def _status_value(analysis: CreditAnalysis) -> str:
         return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CHANGES_REQUESTED:
         return "changes_requested"
-    if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
-        return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CREATED:
         return "pending"
     return "in_progress"

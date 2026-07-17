@@ -797,18 +797,6 @@ def _resolve_coface_evidence(db: Session, analysis: CreditAnalysis) -> dict[str,
     read_id = coface_link.get("read_id") if isinstance(coface_link.get("read_id"), int) else None
 
     read = db.get(CreditReportRead, int(read_id)) if read_id else None
-    customer_document = getattr(getattr(analysis, "customer", None), "document_number", None)
-    if read is None and customer_document:
-        read = db.scalar(
-            select(CreditReportRead)
-            .where(
-                CreditReportRead.customer_document_number == customer_document,
-                CreditReportRead.source_type == "coface",
-                CreditReportRead.status.in_(["valid", "valid_with_warnings"]),
-            )
-            .order_by(CreditReportRead.created_at.desc(), CreditReportRead.id.desc())
-            .limit(1)
-        )
 
     payload = read.read_payload_json if read is not None and isinstance(read.read_payload_json, dict) else {}
     coface_payload = payload.get("coface") if isinstance(payload.get("coface"), dict) else {}

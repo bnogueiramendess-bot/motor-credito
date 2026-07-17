@@ -12,7 +12,7 @@ import { InstitutionalScoreCard } from "@/features/analysis-journey/components/i
 import { RecommendationInsightsCard } from "@/features/analysis-journey/components/recommendation-insights-card";
 import { ApprovalWorkflowCard } from "@/features/credit-analyses/components/approval-workflow-card";
 import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
-import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, startCreditAnalysis, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
+import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, resetCreditAnalysisOperationalData, startCreditAnalysis, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
 import type { ScorePillarItemDto, ScorePillarsDto } from "@/features/credit-analyses/api/contracts";
 import { executiveScore10ToPercent, formatExecutiveScore10, resolveExecutiveScore10 } from "@/features/credit-analyses/utils/score-scale";
 import { createExternalDataEntry, getExternalDataDashboard } from "@/features/external-data/api/external-data.api";
@@ -27,12 +27,16 @@ import {
 import { resolveExecutiveAgingComposition } from "@/features/analysis-journey/utils/internal-portfolio-aging-executive";
 import { resolveInternalPortfolioSummaryFromSources } from "@/features/analysis-journey/utils/internal-portfolio-summary";
 import { formatCurrencyBRL, resolveManualStatus, resolveUploadStatus } from "@/features/analysis-journey/utils/view-models";
+import {
+  TECHNICAL_CONTINUATION_ACTIONS,
+  resolveAnalysisJourneyReadOnly,
+  resolveTechnicalWorkspaceEditCapability,
+} from "@/features/analysis-journey/utils/workspace-readonly";
 import { ErrorState } from "@/shared/components/states/error-state";
 import { getEffectivePermissions, hasPermission } from "@/shared/lib/auth/permissions";
 import { getCurrentUserDisplayName } from "@/shared/lib/auth/current-user";
 
 const steps = ["Identificação do cliente", "Coleta de informações", "Mesa de análise", "Revisão e envio"];
-const TECHNICAL_CONTINUATION_ACTIONS = new Set(["start_analysis", "continue_analysis", "execute_analysis"]);
 const AGRISK_SCORE_RISK: AgriskReportType = "AGRISK_SCORE_RISK";
 const AGRISK_FINANCIAL_ANALYSIS: AgriskReportType = "AGRISK_FINANCIAL_ANALYSIS";
 type ImportSource = "agrisk" | "agrisk_financial" | "coface";
@@ -599,8 +603,12 @@ function isAgriskValidatedImport(state: ImportState) {
   return state.status === "valid" || state.status === "valid_with_warnings";
 }
 
-function canClearLocalImport(state: ImportState) {
-  return state.status === "invalid" || state.status === "error";
+function isValidatedReportRead(read: AnalysisReportReadSummaryDto | undefined) {
+  return read?.status === "valid" || read?.status === "valid_with_warnings";
+}
+
+function pickCanonicalReportRead(reads: AnalysisReportReadSummaryDto[]) {
+  return reads.find(isValidatedReportRead) ?? reads[0];
 }
 
 function isAgriskFinancialSource(source: ImportSource) {
@@ -838,6 +846,28 @@ const documentLibraryGroups: Array<{ title: string; types: Step1DocumentType[] }
   }
 ];
 
+type AnalysisJourneyStepRecord = {
+  final_decision?: unknown;
+  analysis_status?: string | null;
+  current_journey_step?: number | null;
+  last_completed_journey_step?: number | null;
+};
+
+function resolveAnalysisJourneyStep(analysisRecord: AnalysisJourneyStepRecord | null | undefined) {
+  if (!analysisRecord) return 2;
+  const status = analysisRecord.analysis_status ?? null;
+  if (analysisRecord.final_decision || ["in_approval", "approved", "rejected", "completed", "cancelled"].includes(status ?? "")) {
+    return 4;
+  }
+  const persistedStep = analysisRecord.current_journey_step ?? analysisRecord.last_completed_journey_step ?? null;
+  if (persistedStep && persistedStep >= 2 && persistedStep <= 4) return persistedStep;
+  return 2;
+}
+
+function resolveWorkspaceInitialStep(analysisRecord: AnalysisJourneyStepRecord | null | undefined) {
+  return resolveAnalysisJourneyStep(analysisRecord);
+}
+
 type NewAnalysisPageViewProps = {
   mode?: "create" | "workspace";
   analysisId?: number;
@@ -996,21 +1026,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       payload.analyst_notes = analystNotes;
     }
     persistWorkspaceStateMutation.mutate({ id: activeAnalysisId, payload });
-  }
-
-  function resolveWorkspaceInitialStep(analysisRecord: { final_decision?: unknown; analysis_status?: string | null; motor_result?: unknown; submitted_for_approval_at?: string | null; current_journey_step?: number | null; last_completed_journey_step?: number | null } | null | undefined) {
-    if (!analysisRecord) return 2;
-    const status = analysisRecord.analysis_status ?? null;
-    if (
-      analysisRecord.final_decision ||
-      ["approved", "rejected", "completed", "cancelled"].includes(status ?? "") ||
-      (status !== "changes_requested" && (analysisRecord.motor_result || analysisRecord.submitted_for_approval_at))
-    ) {
-      return 4;
-    }
-    const persistedStep = analysisRecord.current_journey_step ?? analysisRecord.last_completed_journey_step ?? null;
-    if (persistedStep && persistedStep >= 2 && persistedStep <= 4) return persistedStep;
-    return 2;
   }
 
   const workspaceDetailQuery = useQuery({
@@ -1192,19 +1207,20 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       ? Math.max(0, internalTotalLimit - internalOpenAmount)
       : null;
   const internalOperationalStatus = workspaceDetailQuery.data?.analysis?.analysis_status ?? null;
-  const isReturnedForChanges = internalOperationalStatus === "changes_requested";
-  const isFinalReadOnlyStatus = ["approved", "rejected", "completed", "cancelled"].includes(internalOperationalStatus ?? "");
-  const hasTechnicalWorkspaceEditCapability = hasTechnicalContinuationCapability && ["created", "in_progress", "changes_requested"].includes(internalOperationalStatus ?? "");
-  const isJourneyReadOnly =
-    isWorkspaceMode &&
-    (
-      !hasTechnicalWorkspaceEditCapability ||
-      Boolean(
-        workspaceDetailQuery.data?.analysis?.final_decision ||
-        isFinalReadOnlyStatus ||
-        (!isReturnedForChanges && (workspaceDetailQuery.data?.analysis?.motor_result || workspaceDetailQuery.data?.analysis?.submitted_for_approval_at))
-      )
-    );
+  const workflowAvailableActions = workspaceDetailQuery.data?.analysis?.available_actions ?? [];
+  const hasTechnicalWorkspaceEditCapability = resolveTechnicalWorkspaceEditCapability({
+    analysisStatus: internalOperationalStatus,
+    hasTechnicalContinuationCapability,
+    availableActions: workflowAvailableActions,
+  });
+  const isJourneyReadOnly = resolveAnalysisJourneyReadOnly({
+    isWorkspaceMode,
+    analysisStatus: internalOperationalStatus,
+    finalDecision: workspaceDetailQuery.data?.analysis?.final_decision,
+    submittedForApprovalAt: workspaceDetailQuery.data?.analysis?.submitted_for_approval_at,
+    hasTechnicalContinuationCapability,
+    availableActions: workflowAvailableActions,
+  });
   const internalBehaviorLabel = triageResult?.has_recent_analysis ? "cliente com histórico recente" : "histórico estável";
   const hasInternalFinancialSnapshot = hasInternalFinancialData;
   const analysisLifecycleStatus = workspaceDetailQuery.data?.analysis?.analysis_status ?? null;
@@ -1393,13 +1409,28 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const entries = external.entries ?? [];
     const byNewestReads = [...reportReads].sort((a, b) => (new Date(b.created_at).getTime() || 0) - (new Date(a.created_at).getTime() || 0));
     const agriskReads = byNewestReads.filter((entry) => entry.source_type === "agrisk");
-    const agriskRead = agriskReads.find((entry) => normalizeAgriskReportType(entry.report_type) === AGRISK_SCORE_RISK);
-    const agriskFinancialRead = agriskReads.find((entry) => normalizeAgriskReportType(entry.report_type) === AGRISK_FINANCIAL_ANALYSIS);
-    const cofaceRead = byNewestReads.find((entry) => entry.source_type === "coface");
+    const agriskRead = pickCanonicalReportRead(agriskReads.filter((entry) => normalizeAgriskReportType(entry.report_type) === AGRISK_SCORE_RISK));
+    const agriskFinancialRead = pickCanonicalReportRead(agriskReads.filter((entry) => normalizeAgriskReportType(entry.report_type) === AGRISK_FINANCIAL_ANALYSIS));
+    const cofaceRead = pickCanonicalReportRead(byNewestReads.filter((entry) => entry.source_type === "coface"));
 
     const analysisDocuments = step1DocumentsQuery.data ?? [];
     const findDocumentForRead = (read: AnalysisReportReadSummaryDto | undefined) =>
       read?.analysis_document_id ? analysisDocuments.find((doc) => doc.id === read.analysis_document_id) : undefined;
+    const fileFromRead = (read: AnalysisReportReadSummaryDto | undefined, document: AnalysisDocumentDto | undefined): UploadFileMetadataInput[] => {
+      if (document) {
+        return [{
+          original_filename: document.original_filename,
+          mime_type: document.mime_type,
+          file_size: document.file_size
+        }];
+      }
+      if (!read) return [];
+      return [{
+        original_filename: read.original_filename,
+        mime_type: read.mime_type,
+        file_size: read.file_size
+      }];
+    };
     const agriskDocument = findDocumentForRead(agriskRead);
     const agriskFinancialDocument = findDocumentForRead(agriskFinancialRead);
     const cofaceDocument = findDocumentForRead(cofaceRead);
@@ -1409,19 +1440,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     const savedManual = workspaceState?.manual && typeof workspaceState.manual === "object"
       ? (workspaceState.manual as Record<string, unknown>)
       : null;
-    const savedImports = workspaceState?.imports && typeof workspaceState.imports === "object"
-      ? (workspaceState.imports as Record<string, unknown>)
-      : null;
-    const savedAgriskImport = savedImports?.agrisk && typeof savedImports.agrisk === "object"
-      ? (savedImports.agrisk as Record<string, unknown>)
-      : null;
-    const savedAgriskFinancialImport = savedImports?.agrisk_financial && typeof savedImports.agrisk_financial === "object"
-      ? (savedImports.agrisk_financial as Record<string, unknown>)
-      : null;
-    const savedCofaceImport = savedImports?.coface && typeof savedImports.coface === "object"
-      ? (savedImports.coface as Record<string, unknown>)
-      : null;
-
     setExistingCustomerId(resolvedCustomerId);
     setTriageSelectedBusinessUnit(buName);
     setCustomer((prev) => ({
@@ -1473,11 +1491,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     }
     setAgriskImport((prev) => ({
       ...prev,
-      files: agriskDocument ? [{
-        original_filename: agriskDocument.original_filename,
-        mime_type: agriskDocument.mime_type,
-        file_size: agriskDocument.file_size
-      }] : [],
+      files: fileFromRead(agriskRead, agriskDocument),
       status: (agriskRead?.status as ImportStatus) ?? "empty",
       importedAt: agriskRead?.created_at ?? null,
       agriskReadId: agriskRead?.id ?? null,
@@ -1485,24 +1499,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       errorMessage: agriskRead?.validation_message ?? null,
       agriskReadPayload: (agriskRead?.read_payload as AgriskReportReadResponse["read_payload"] | null) ?? null,
     }));
-    if (savedAgriskImport) {
-      setAgriskImport((prev) => ({
-        ...prev,
-        status: (savedAgriskImport.status as ImportStatus) ?? prev.status,
-        importedAt: (savedAgriskImport.imported_at as string | null) ?? prev.importedAt,
-        agriskReadId: (savedAgriskImport.read_id as number | null) ?? prev.agriskReadId,
-        files: savedAgriskImport.original_filename
-          ? [{ original_filename: String(savedAgriskImport.original_filename), mime_type: "application/pdf", file_size: Number(savedAgriskImport.file_size ?? 0) }]
-          : prev.files
-      }));
-    }
     setAgriskFinancialImport((prev) => ({
       ...prev,
-      files: agriskFinancialDocument ? [{
-        original_filename: agriskFinancialDocument.original_filename,
-        mime_type: agriskFinancialDocument.mime_type,
-        file_size: agriskFinancialDocument.file_size
-      }] : [],
+      files: fileFromRead(agriskFinancialRead, agriskFinancialDocument),
       status: (agriskFinancialRead?.status as ImportStatus) ?? "empty",
       importedAt: agriskFinancialRead?.created_at ?? null,
       agriskReadId: agriskFinancialRead?.id ?? null,
@@ -1510,24 +1509,9 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       errorMessage: agriskFinancialRead?.validation_message ?? null,
       agriskReadPayload: (agriskFinancialRead?.read_payload as AgriskReportReadResponse["read_payload"] | null) ?? null,
     }));
-    if (savedAgriskFinancialImport) {
-      setAgriskFinancialImport((prev) => ({
-        ...prev,
-        status: (savedAgriskFinancialImport.status as ImportStatus) ?? prev.status,
-        importedAt: (savedAgriskFinancialImport.imported_at as string | null) ?? prev.importedAt,
-        agriskReadId: (savedAgriskFinancialImport.read_id as number | null) ?? prev.agriskReadId,
-        files: savedAgriskFinancialImport.original_filename
-          ? [{ original_filename: String(savedAgriskFinancialImport.original_filename), mime_type: "application/pdf", file_size: Number(savedAgriskFinancialImport.file_size ?? 0) }]
-          : prev.files
-      }));
-    }
     setCofaceImport((prev) => ({
       ...prev,
-      files: cofaceDocument ? [{
-        original_filename: cofaceDocument.original_filename,
-        mime_type: cofaceDocument.mime_type,
-        file_size: cofaceDocument.file_size
-      }] : [],
+      files: fileFromRead(cofaceRead, cofaceDocument),
       status: (cofaceRead?.status as ImportStatus) ?? "empty",
       importedAt: cofaceRead?.created_at ?? null,
       cofaceReadId: cofaceRead?.id ?? null,
@@ -1535,25 +1519,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       errorMessage: cofaceRead?.validation_message ?? null,
       cofaceReadPayload: (cofaceRead?.read_payload as CofaceReportReadResponse["read_payload"] | null) ?? null,
     }));
-    if (savedCofaceImport) {
-      setCofaceImport((prev) => ({
-        ...prev,
-        status: (savedCofaceImport.status as ImportStatus) ?? prev.status,
-        importedAt: (savedCofaceImport.imported_at as string | null) ?? prev.importedAt,
-        cofaceReadId: (savedCofaceImport.read_id as number | null) ?? prev.cofaceReadId,
-        files: savedCofaceImport.original_filename
-          ? [{ original_filename: String(savedCofaceImport.original_filename), mime_type: "application/pdf", file_size: Number(savedCofaceImport.file_size ?? 0) }]
-          : prev.files
-      }));
-    }
     setTriageModalOpen(false);
     setStep(resolveWorkspaceInitialStep(analysisRecord));
     setWorkspaceError(null);
     setWorkspaceHydrated(true);
     void (async () => {
-      const agriskReadId = (savedAgriskImport?.read_id as number | null) ?? agriskRead?.id ?? null;
-      const agriskFinancialReadId = (savedAgriskFinancialImport?.read_id as number | null) ?? agriskFinancialRead?.id ?? null;
-      const cofaceReadId = (savedCofaceImport?.read_id as number | null) ?? cofaceRead?.id ?? null;
+      const agriskReadId = agriskRead?.id ?? null;
+      const agriskFinancialReadId = agriskFinancialRead?.id ?? null;
+      const cofaceReadId = cofaceRead?.id ?? null;
       if (agriskReadId) {
         try {
           const response = await getAgriskReportRead(agriskReadId);
@@ -2029,13 +2002,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   ]);
 
   useEffect(() => {
-    if (!isJourneyReadOnly) return;
-    if (step < 4) {
-      setStep(4);
-    }
-  }, [isJourneyReadOnly, step]);
-
-  useEffect(() => {
     if (!isOperationalSubmitOnlyFlow) return;
     if (step > 1) {
       setStep(1);
@@ -2231,41 +2197,55 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     setIsImportModalOpen(false);
   }
 
-  function removeImport(source: ImportSource) {
-    if (isWorkspaceMode) {
-      const currentImport =
-        source === "agrisk"
-          ? agriskImport
-          : source === "agrisk_financial"
-            ? agriskFinancialImport
-            : cofaceImport;
-      const persistedReadId = source === "coface" ? currentImport.cofaceReadId : currentImport.agriskReadId;
-      if (persistedReadId) {
-        if (!canClearLocalImport(currentImport)) {
-          setStepError("Este relatório já está vinculado ao dossiê. Envie um novo arquivo para substituir.");
-          return;
-        }
-      }
-    }
-    const shouldRemove = window.confirm("Deseja remover o relatório importado desta fonte?");
-    if (!shouldRemove) return;
+  function clearImportState(source: ImportSource) {
     if (source === "agrisk") {
       setIsAgriskDataDrawerOpen(false);
       setAgriskImport(buildDefaultImportState());
-      persistWorkspaceStatePatch({ imports: { agrisk: null } });
       return;
     }
     if (source === "agrisk_financial") {
       setIsAgriskFinancialDataDrawerOpen(false);
       setAgriskFinancialImport(buildDefaultImportState());
-      persistWorkspaceStatePatch({ imports: { agrisk_financial: null } });
       return;
     }
-    if (source === "coface") {
-      setIsCofaceDataDrawerOpen(false);
-      setCofaceImport(buildDefaultImportState());
-      persistWorkspaceStatePatch({ imports: { coface: null } });
-      return;
+    setIsCofaceDataDrawerOpen(false);
+    setCofaceImport(buildDefaultImportState());
+  }
+
+  async function refetchAfterOperationalReset(analysisId: number) {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["workspace-analysis-detail", analysisId] }),
+      queryClient.invalidateQueries({ queryKey: ["credit-analysis-detail", analysisId] }),
+      queryClient.invalidateQueries({ queryKey: ["workspace-analysis-external-data", analysisId] }),
+      queryClient.invalidateQueries({ queryKey: ["analysis-documents", analysisId] }),
+      queryClient.invalidateQueries({ queryKey: ["analysis-report-reads", analysisId] }),
+      queryClient.invalidateQueries({ queryKey: ["credit-analyses-monitor"] })
+    ]);
+    await Promise.all([
+      refetchWorkspaceDetailIfPossible(),
+      refetchWorkspaceExternalDataIfPossible(),
+      step1DocumentsQuery.refetch(),
+      reportReadsQuery.refetch()
+    ]);
+  }
+
+  async function removeImport(source: ImportSource) {
+    const shouldRemove = window.confirm("Deseja remover o relatório importado desta fonte?");
+    if (!shouldRemove) return;
+    setStepError(null);
+    try {
+      if (isWorkspaceMode && hasValidActiveAnalysisId && activeAnalysisId) {
+        await resetCreditAnalysisOperationalData(activeAnalysisId, source);
+        clearImportState(source);
+        setStep(2);
+        await refetchAfterOperationalReset(activeAnalysisId);
+        return;
+      }
+      clearImportState(source);
+      persistWorkspaceStatePatch({ imports: { [source]: null } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao resetar dados operacionais.";
+      setStepError(message);
     }
   }
 
@@ -2624,7 +2604,6 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const submitBlockingError = isOperationalSubmitOnlyFlow
     ? (validateStep(1) ?? (toNumberInput(analysis.requestedLimit) <= 0 ? "Preencha Limite solicitado com valor maior que zero." : null))
     : (validateStep(1) ?? validateStep(2) ?? validateStep(3));
-  const workflowAvailableActions = workspaceDetailQuery.data?.analysis?.available_actions ?? [];
   const canSubmitForApproval = isWorkspaceMode && workflowAvailableActions.includes("submit_approval");
   const technicalDossierStatus = workspaceDetailQuery.data?.analysis?.technical_dossier_status ?? null;
   const hasCanonicalTechnicalDecision =
@@ -5541,5 +5520,4 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
     </section>
   );
 }
-
 

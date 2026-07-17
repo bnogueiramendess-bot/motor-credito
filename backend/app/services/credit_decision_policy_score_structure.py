@@ -607,24 +607,6 @@ def _find_agrisk_financial_payload_for_analysis(db: Session, analysis_id: int) -
             if linked_read.read_payload_json.get("report_type") == AGRISK_FINANCIAL_ANALYSIS:
                 return linked_read.read_payload_json
 
-    customer_document = getattr(analysis.customer, "document_number", None)
-    if not customer_document:
-        return None
-
-    reads = db.scalars(
-        select(CreditReportRead)
-        .where(
-            CreditReportRead.source_type == "agrisk",
-            CreditReportRead.customer_document_number == customer_document,
-            CreditReportRead.status.in_(["valid", "valid_with_warnings"]),
-        )
-        .order_by(CreditReportRead.created_at.desc(), CreditReportRead.id.desc())
-        .limit(20)
-    ).all()
-    for read in reads:
-        payload = read.read_payload_json if isinstance(read.read_payload_json, dict) else {}
-        if payload.get("report_type") == AGRISK_FINANCIAL_ANALYSIS:
-            return payload
     return None
 
 

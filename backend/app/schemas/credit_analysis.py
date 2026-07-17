@@ -414,6 +414,20 @@ class CreditAnalysisWorkspaceStateUpdateRequest(BaseModel):
     workspace_state: dict | None = None
 
 
+class CreditAnalysisOperationalDataResetRequest(BaseModel):
+    source: str = "all"
+
+
+class CreditAnalysisOperationalDataResetResponse(BaseModel):
+    status: str
+    reset_scope: str
+    report_links: dict = Field(default_factory=dict)
+    deleted_document_ids: list[int] = Field(default_factory=list)
+    unlinked_report_read_ids: list[int] = Field(default_factory=list)
+    current_journey_step: int | None = None
+    last_completed_journey_step: int | None = None
+
+
 class CreditAnalysisReportReadSummary(BaseModel):
     id: int
     credit_analysis_id: int | None = None

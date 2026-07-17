@@ -7,13 +7,33 @@ export const dynamic = "force-dynamic";
 
 type Context = { params: { readId: string } };
 
-export async function GET(_: Request, context: Context) {
+function resolveWorkspaceAnalysisIdFromReferer(request: Request): number | null {
+  const referer = request.headers.get("referer");
+  if (!referer) return null;
+
+  try {
+    const pathname = new URL(referer).pathname;
+    const match = pathname.match(/^\/analises\/(\d+)\/workspace(?:\/)?$/);
+    if (!match) return null;
+    const id = Number(match[1]);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function appendAnalysisId(path: string, analysisId: number | null): string {
+  return analysisId ? `${path}?analysis_id=${analysisId}` : path;
+}
+
+export async function GET(request: Request, context: Context) {
   const readId = Number(context.params.readId);
   if (!Number.isFinite(readId) || readId <= 0) {
     return NextResponse.json({ detail: "ID de leitura inválido." }, { status: 400 });
   }
   try {
-    const result = await fetchBackend<CofaceReportReadResponse>(`/credit-report-reads/coface/${readId}`);
+    const backendPath = appendAnalysisId(`/credit-report-reads/coface/${readId}`, resolveWorkspaceAnalysisIdFromReferer(request));
+    const result = await fetchBackend<CofaceReportReadResponse>(backendPath);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof BackendError) {

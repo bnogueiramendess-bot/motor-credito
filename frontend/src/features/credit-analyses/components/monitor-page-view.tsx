@@ -92,6 +92,23 @@ function getAgingLabel(item: CreditAnalysisMonitorItemDto): string {
   return `${item.stage_aging_days || item.aging_days} dia(s)`;
 }
 
+const WORKSPACE_OPEN_ACTIONS = new Set([
+  "start_analysis",
+  "continue_analysis",
+  "execute_analysis",
+  "submit_approval",
+  "view_dossier",
+  "view_result",
+  "approve",
+  "reject",
+  "request_changes",
+  "escalate_to_committee",
+]);
+
+function canOpenWorkspace(item: CreditAnalysisMonitorItemDto): boolean {
+  return item.available_actions.some((action) => WORKSPACE_OPEN_ACTIONS.has(action));
+}
+
 function resolveOpenRoute(analysisId: number): string {
   return getCreditAnalysisWorkspaceRoute(analysisId);
 }
@@ -392,7 +409,7 @@ export function MonitorPageView() {
             const responsible = resolveResponsible(item);
             const actions = secondaryActions(item);
             const isStartingThis = startAnalysisMutation.isPending && startingAnalysisId === item.analysis_id;
-            const canOpen = item.available_actions.length > 0;
+            const canOpen = canOpenWorkspace(item);
             return (
               <article key={item.analysis_id} className="relative min-w-0 overflow-visible rounded-[8px] border border-[#D7E1EC] bg-white shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
                 <span className={`block h-1.5 rounded-t-[8px] ${statusAccent(item)}`} />
@@ -467,7 +484,7 @@ export function MonitorPageView() {
                         <FileText className="h-4 w-4" /> Abrir solicitação
                       </Link>
                     ) : (
-                      <button type="button" disabled className="inline-flex h-10 min-w-0 flex-1 items-center justify-center rounded-[8px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-semibold text-[#94A3B8]">Acesso não autorizado</button>
+                      <button type="button" disabled title="A solicitação está em análise pela equipe de crédito." className="inline-flex h-10 min-w-0 flex-1 items-center justify-center rounded-[8px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 text-[12px] font-semibold text-[#94A3B8]">Abrir solicitação</button>
                     )}
 
                     <details className="relative">

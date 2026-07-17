@@ -170,7 +170,7 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
 
     def test_zero_amount_uses_dynamic_min_range(self) -> None:
         current = DummyCurrentUser(user=DummyUser(id=11, email="cfo@indorama.com", full_name="CFO"), permissions=set(), bu_ids={1})
-        analysis = DummyAnalysis(final_limit=Decimal("0.00"), suggested_limit=Decimal("0.00"), requested_limit=Decimal("0.00"))
+        analysis = DummyAnalysis(analysis_status=AnalysisStatus.IN_APPROVAL, final_limit=Decimal("0.00"), suggested_limit=Decimal("0.00"), requested_limit=Decimal("0.00"))
         with (
             patch("app.services.workflow_authorization.settings.credit_approval_matrix_enforcement_enabled", True),
             patch("app.services.workflow_authorization._list_user_workflow_role_codes", return_value=["CREDIT_FINANCE_HEAD"]),
@@ -263,7 +263,9 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
         content = workspace_path.read_text(encoding="utf-8")
         self.assertIn("function resolveWorkspaceInitialStep", content)
         self.assertNotIn("analysis_started_at ? 3 : 2", content)
+        self.assertNotIn("if (!isJourneyReadOnly) return;", content)
         self.assertEqual(content.count("triageCreditRequest({ cnpj"), 1)
+
 
 
 if __name__ == "__main__":

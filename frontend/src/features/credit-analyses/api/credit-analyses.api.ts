@@ -145,6 +145,13 @@ export async function updateCreditAnalysisWorkspaceState(
 ) {
   return apiClient.put(`/api/credit-analyses/${analysisId}/workspace-state`, payload);
 }
+
+export type OperationalDataResetSource = "all" | "agrisk" | "agrisk_financial" | "coface";
+
+export async function resetCreditAnalysisOperationalData(analysisId: number, source: OperationalDataResetSource = "all") {
+  assertValidAnalysisId(analysisId);
+  return apiClient.post(`/api/credit-analyses/${analysisId}/operational-data/reset`, { source });
+}
 export async function submitCreditAnalysisToCommittee(analysisId: number, justification: string) {
   return apiClient.post<WorkflowActionResponse, { justification: string }>(`/api/credit-analyses/${analysisId}/submit-to-committee`, { justification });
 }

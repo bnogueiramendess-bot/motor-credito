@@ -38,7 +38,7 @@ class DummyAnalysis:
     requested_limit: Decimal | None
     current_limit: Decimal | None = Decimal("0")
     final_decision: object | None = None
-    analysis_status: AnalysisStatus = AnalysisStatus.IN_PROGRESS
+    analysis_status: AnalysisStatus = AnalysisStatus.IN_APPROVAL
     motor_result: object | None = object()
     decision_memory_json: dict | None = None
 
@@ -149,6 +149,7 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
             final_limit=None,
             suggested_limit=Decimal("100000"),
             requested_limit=Decimal("100000"),
+            analysis_status=AnalysisStatus.IN_PROGRESS,
             motor_result=None,
         )
         actions = [
@@ -182,6 +183,7 @@ class WorkflowAuthorizationWave2TestCase(unittest.TestCase):
             final_limit=None,
             suggested_limit=Decimal("100000"),
             requested_limit=Decimal("100000"),
+            analysis_status=AnalysisStatus.IN_PROGRESS,
             motor_result=None,
         )
         pending = DummyAnalysis(

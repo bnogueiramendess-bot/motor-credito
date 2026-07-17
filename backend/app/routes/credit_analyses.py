@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import Numeric, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.security import CurrentUser, get_current_user, require_permissions
 from app.db.session import get_db
@@ -54,6 +55,8 @@ from app.schemas.credit_analysis import (
     CreditAnalysisApprovalFlowSummary,
     CreditAnalysisJourneyProgressUpdateRequest,
     CreditAnalysisWorkspaceStateUpdateRequest,
+    CreditAnalysisOperationalDataResetRequest,
+    CreditAnalysisOperationalDataResetResponse,
     CreditAnalysisReportReadSummary,
     CreditAnalysisQueueOption,
     CreditAnalysisQueueOptionsResponse,
@@ -92,7 +95,7 @@ from app.services.recommendation import classify_recommendation
 from app.services.ar_aging_import.normalizer import normalize_bu, normalize_cnpj, normalize_text_key
 from app.services.credit_policy_config import MIN_EARLY_REVIEW_JUSTIFICATION_LENGTH, REANALYSIS_COOLDOWN_DAYS
 from app.services.credit_report_readers.agrisk_types import get_agrisk_report_type_from_payload
-from app.services.report_links import collect_report_read_ids_from_links, resolve_analysis_document_id_for_read
+from app.services.report_links import collect_report_read_ids_from_links, normalize_agrisk_report_links, resolve_analysis_document_id_for_read
 from app.services.bu_scope import (
     assert_bu_in_scope,
     bu_name_in_scope,
@@ -381,8 +384,6 @@ def _resolve_operational_status(analysis: CreditAnalysis, external_entries: list
         return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CHANGES_REQUESTED:
         return "changes_requested"
-    if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
-        return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CREATED:
         return "pending"
     return "in_progress"
@@ -1112,8 +1113,6 @@ def _current_status_value(analysis: CreditAnalysis) -> str:
         return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CHANGES_REQUESTED:
         return "changes_requested"
-    if analysis.analysis_status == AnalysisStatus.IN_PROGRESS and analysis.motor_result is not None:
-        return "in_approval"
     if analysis.analysis_status == AnalysisStatus.CREATED:
         return "pending"
     return "in_progress"
@@ -1352,8 +1351,8 @@ def _get_journey_progress(analysis: CreditAnalysis) -> tuple[int | None, int | N
 
 
 def _set_journey_progress(analysis: CreditAnalysis, *, current_step: int | None, last_completed_step: int | None) -> None:
-    memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
-    progress = memory.get("journey_progress") if isinstance(memory.get("journey_progress"), dict) else {}
+    memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+    progress = dict(memory.get("journey_progress")) if isinstance(memory.get("journey_progress"), dict) else {}
     if current_step is not None:
         progress["current_journey_step"] = _clamp_journey_step(current_step)
     if last_completed_step is not None:
@@ -1380,10 +1379,129 @@ def _merge_workspace_state(analysis: CreditAnalysis, patch: dict) -> None:
     analysis.decision_memory_json = memory
 
 
+REPORT_IMPORT_DOCUMENT_TYPES = {"agrisk_report", "coface_report"}
+RESET_DERIVED_MEMORY_KEYS = {
+    "approval_matrix_preview",
+    "recommendation_classification",
+    "technical_dossier",
+    "technical_dossier_status",
+    "dossier",
+    "dossier_generated_at",
+}
+RESET_WORKSPACE_STATE_KEYS = {
+    "imports",
+    "manual",
+    "manual_panel",
+    "manual_financial_statements",
+    "manual_configured",
+}
+
+
+def _report_links_are_canonical(memory: dict) -> bool:
+    return isinstance(memory.get("report_links"), dict)
+
+
+def _clear_operational_workspace_state(memory: dict, source: str) -> None:
+    workspace_state = memory.get("workspace_state") if isinstance(memory.get("workspace_state"), dict) else None
+    if workspace_state is None:
+        return
+    updated_state = dict(workspace_state)
+    if source == "all":
+        for key in RESET_WORKSPACE_STATE_KEYS:
+            updated_state.pop(key, None)
+        memory["workspace_state"] = updated_state
+        return
+
+    imports = dict(updated_state.get("imports")) if isinstance(updated_state.get("imports"), dict) else {}
+    import_key = "agrisk_financial" if source == "agrisk_financial" else source
+    imports.pop(import_key, None)
+    updated_state["imports"] = imports
+    memory["workspace_state"] = updated_state
+
+
+def _collect_link_values(item: object, removed_read_ids: set[int], removed_document_ids: set[int]) -> None:
+    if not isinstance(item, dict):
+        return
+    read_id = item.get("read_id")
+    document_id = item.get("analysis_document_id")
+    if isinstance(read_id, int):
+        removed_read_ids.add(int(read_id))
+    if isinstance(document_id, int):
+        removed_document_ids.add(int(document_id))
+
+
+def _reset_report_links_for_scope(memory: dict, source: str) -> tuple[dict, set[int], set[int]]:
+    updated = dict(memory)
+    links = dict(updated.get("report_links")) if isinstance(updated.get("report_links"), dict) else {}
+    removed_read_ids: set[int] = set()
+    removed_document_ids: set[int] = set()
+
+    normalized_source = (source or "all").strip().lower()
+    if normalized_source not in {"all", "agrisk", "agrisk_financial", "coface"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Fonte de reset invalida.")
+
+    if normalized_source in {"all", "agrisk", "agrisk_financial"}:
+        agrisk_links = normalize_agrisk_report_links(links.get("agrisk"))
+        if normalized_source in {"all", "agrisk"}:
+            _collect_link_values(agrisk_links.pop("score_risk", None), removed_read_ids, removed_document_ids)
+        if normalized_source in {"all", "agrisk_financial"}:
+            _collect_link_values(agrisk_links.pop("financial_analysis", None), removed_read_ids, removed_document_ids)
+        if agrisk_links:
+            links["agrisk"] = agrisk_links
+        else:
+            links.pop("agrisk", None)
+
+    if normalized_source in {"all", "coface"}:
+        _collect_link_values(links.pop("coface", None), removed_read_ids, removed_document_ids)
+
+    updated["report_links"] = links
+    return updated, removed_read_ids, removed_document_ids
+
+
+def _delete_analysis_documents_by_ids(db: Session, analysis_id: int, document_ids: set[int]) -> list[int]:
+    if not document_ids:
+        return []
+    documents = list(
+        db.scalars(
+            select(AnalysisDocument).where(
+                AnalysisDocument.credit_analysis_id == analysis_id,
+                AnalysisDocument.id.in_(document_ids),
+            )
+        ).all()
+    )
+    deleted_ids: list[int] = []
+    for document in documents:
+        storage_path = _analysis_documents_storage_root() / str(analysis_id) / document.stored_filename
+        if storage_path.exists():
+            storage_path.unlink(missing_ok=True)
+        deleted_ids.append(document.id)
+        db.delete(document)
+    return deleted_ids
+
+
+def _delete_all_report_import_documents(db: Session, analysis_id: int) -> list[int]:
+    documents = list(
+        db.scalars(
+            select(AnalysisDocument).where(
+                AnalysisDocument.credit_analysis_id == analysis_id,
+                AnalysisDocument.document_type.in_(REPORT_IMPORT_DOCUMENT_TYPES),
+            )
+        ).all()
+    )
+    deleted_ids: list[int] = []
+    for document in documents:
+        storage_path = _analysis_documents_storage_root() / str(analysis_id) / document.stored_filename
+        if storage_path.exists():
+            storage_path.unlink(missing_ok=True)
+        deleted_ids.append(document.id)
+        db.delete(document)
+    return deleted_ids
+
+
 def _derive_journey_step_from_state(db: Session, analysis: CreditAnalysis) -> int:
     if analysis.final_decision is not None or analysis.analysis_status == AnalysisStatus.COMPLETED:
         return 4
-    if analysis.submitted_for_approval_at is not None or analysis.motor_result is not None:
+    if analysis.analysis_status == AnalysisStatus.IN_APPROVAL:
         return 4
 
     has_score = db.scalar(select(ScoreResult.id).where(ScoreResult.credit_analysis_id == analysis.id).limit(1)) is not None
@@ -1403,13 +1521,15 @@ def _resolve_persisted_journey_step(db: Session, analysis: CreditAnalysis) -> in
     persisted = current or _clamp_journey_step(last)
     if persisted is None:
         return derived
+    if derived == 4:
+        return 4
     return max(derived, persisted)
 
 
 def _attach_journey_progress_fields(db: Session, analysis: CreditAnalysis) -> None:
     current, last = _get_journey_progress(analysis)
     derived = _derive_journey_step_from_state(db, analysis)
-    resolved = max(current or 0, derived)
+    resolved = 4 if derived == 4 else max(current or 0, derived)
     setattr(analysis, "current_journey_step", resolved)
     setattr(analysis, "last_completed_journey_step", last if last is not None else max(1, resolved - 1))
 
@@ -1450,17 +1570,6 @@ def _extract_coface_coverage_limit(analysis: CreditAnalysis, db: Session, custom
     read_id = coface_link.get("read_id") if isinstance(coface_link.get("read_id"), int) else None
 
     read: CreditReportRead | None = db.get(CreditReportRead, int(read_id)) if read_id else None
-    if read is None and customer is not None and customer.document_number:
-        read = db.scalar(
-            select(CreditReportRead)
-            .where(
-                CreditReportRead.customer_document_number == customer.document_number,
-                CreditReportRead.source_type == "coface",
-                CreditReportRead.status.in_(["valid", "valid_with_warnings"]),
-            )
-            .order_by(CreditReportRead.id.desc())
-            .limit(1)
-        )
     if read is None or not isinstance(read.read_payload_json, dict):
         return None
 
@@ -1510,8 +1619,14 @@ def _resolve_current_approved_limit(db: Session, customer: Customer | None) -> D
 
 
 def _attach_recommendation_classification(db: Session, analysis: CreditAnalysis) -> None:
-    classification = _resolve_recommendation_classification(db, analysis)
     memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    if analysis.motor_result is None or analysis.decision_calculated_at is None:
+        if isinstance(memory.get("recommendation_classification"), dict):
+            updated_memory = dict(memory)
+            updated_memory.pop("recommendation_classification", None)
+            analysis.decision_memory_json = updated_memory
+        return
+    classification = _resolve_recommendation_classification(db, analysis)
     updated_memory = dict(memory)
     updated_memory["recommendation_classification"] = classification
     analysis.decision_memory_json = updated_memory
@@ -1554,7 +1669,6 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
         resolve_credit_workflow_action(db, current, action="return_to_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_dossier", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_result", analysis=analysis, business_unit=analysis_bu).allowed,
-        resolve_credit_workflow_action(db, current, action="view_tracking", analysis=analysis, business_unit=analysis_bu).allowed,
         resolve_credit_workflow_action(db, current, action="view_analysis", analysis=analysis, business_unit=analysis_bu).allowed,
     ]
     if any(visibility_checks):
@@ -1566,14 +1680,7 @@ def _enforce_technical_access_or_403(db: Session, current: CurrentUser, analysis
 
 
 def _enforce_detail_read_access_or_403(db: Session, current: CurrentUser, analysis: CreditAnalysis) -> None:
-    if _has_any_permission(current, "credit_request_view_bu", "scope:all_bu", "credit.requests.view", "clients.dossier.view"):
-        allowed_bu_names = get_user_allowed_business_units(db, current)
-        has_all_scope = user_has_all_bu_scope(current)
-        analysis_bu = resolve_analysis_business_unit(db, analysis)
-        assert_bu_in_scope(allowed_bu_names, analysis_bu, has_all_scope=has_all_scope)
-        return
     _enforce_technical_access_or_403(db, current, analysis)
-
 
 def _analysis_documents_storage_root() -> Path:
     root = Path(__file__).resolve().parents[2] / "data" / "analysis_documents"
@@ -1944,6 +2051,10 @@ def create_credit_analysis_draft(
             }
         },
     )
+    memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+    memory["report_links"] = {}
+    _clear_operational_workspace_state(memory, "all")
+    analysis.decision_memory_json = memory
     db.add(analysis)
     db.flush()
     transition = resolve_credit_workflow_transition(
@@ -2222,6 +2333,7 @@ def submit_credit_analysis_from_triage(
         analysis.current_stage_started_at = now_utc
         memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
         memory["triage_submission"] = triage_payload
+        memory["report_links"] = {}
         journey_progress = memory.get("journey_progress") if isinstance(memory.get("journey_progress"), dict) else {}
         journey_progress["current_journey_step"] = 2
         journey_progress["last_completed_journey_step"] = max(int(journey_progress.get("last_completed_journey_step", 1)), 1)
@@ -2249,6 +2361,7 @@ def submit_credit_analysis_from_triage(
                     "current_journey_step": 2,
                     "last_completed_journey_step": 1,
                 },
+                "report_links": {},
             },
         )
         db.add(analysis)
@@ -2624,16 +2737,6 @@ def list_credit_analysis_report_reads(
             ).all()
         )
 
-    customer = db.get(Customer, analysis.customer_id)
-    if customer is not None and not reads:
-        reads = list(
-            db.scalars(
-                select(CreditReportRead)
-                .where(CreditReportRead.customer_document_number == customer.document_number)
-                .order_by(CreditReportRead.created_at.desc(), CreditReportRead.id.desc())
-                .limit(20)
-            ).all()
-        )
     summaries: list[CreditAnalysisReportReadSummary] = []
     for entry in reads:
         report_type = (
@@ -2683,6 +2786,10 @@ def create_credit_analysis(
         assigned_at=now_utc,
         current_stage_started_at=now_utc,
     )
+    memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+    memory["report_links"] = {}
+    _clear_operational_workspace_state(memory, "all")
+    analysis.decision_memory_json = memory
     db.add(analysis)
     db.flush()
     transition = resolve_credit_workflow_transition(
@@ -3561,7 +3668,7 @@ def update_credit_analysis_journey_progress(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
     _enforce_technical_access_or_403(db, current, analysis)
 
-    if analysis.final_decision is not None or analysis.analysis_status == AnalysisStatus.COMPLETED or analysis.motor_result is not None:
+    if analysis.final_decision is not None or analysis.analysis_status in {AnalysisStatus.COMPLETED, AnalysisStatus.IN_APPROVAL}:
         _set_journey_progress(
             analysis,
             current_step=4,
@@ -3592,6 +3699,90 @@ def update_credit_analysis_journey_progress(
     db.refresh(analysis)
     _attach_journey_progress_fields(db, analysis)
     return analysis
+
+
+@router.post("/{analysis_id}/operational-data/reset", response_model=CreditAnalysisOperationalDataResetResponse, status_code=status.HTTP_200_OK)
+def reset_credit_analysis_operational_data(
+    analysis_id: int,
+    payload: CreditAnalysisOperationalDataResetRequest | None = None,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+) -> CreditAnalysisOperationalDataResetResponse:
+    _require_can_issue_credit_opinion_or_403(db, current)
+    analysis = db.get(CreditAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit analysis not found.")
+    _enforce_technical_access_or_403(db, current, analysis)
+
+    if analysis.final_decision is not None or analysis.analysis_status in {AnalysisStatus.IN_APPROVAL, AnalysisStatus.COMPLETED}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Reset de dados operacionais bloqueado para analises em aprovacao ou finalizadas.",
+        )
+
+    source = (payload.source if payload is not None else "all").strip().lower()
+    try:
+        memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+        memory, removed_read_ids, removed_document_ids = _reset_report_links_for_scope(memory, source)
+        for key in RESET_DERIVED_MEMORY_KEYS:
+            memory.pop(key, None)
+        _clear_operational_workspace_state(memory, source)
+        journey_progress = dict(memory.get("journey_progress")) if isinstance(memory.get("journey_progress"), dict) else {}
+        journey_progress["current_journey_step"] = 2
+        journey_progress["last_completed_journey_step"] = 1
+        memory["journey_progress"] = journey_progress
+
+        analysis.decision_memory_json = memory
+        analysis.motor_result = None
+        analysis.suggested_limit = None
+        analysis.decision_calculated_at = None
+        flag_modified(analysis, "decision_memory_json")
+
+        db.execute(delete(ScoreResult).where(ScoreResult.credit_analysis_id == analysis_id))
+        entry_ids = select(ExternalDataEntry.id).where(ExternalDataEntry.credit_analysis_id == analysis_id)
+        db.execute(delete(ExternalDataFile).where(ExternalDataFile.external_data_entry_id.in_(entry_ids)))
+        db.execute(delete(ExternalDataEntry).where(ExternalDataEntry.credit_analysis_id == analysis_id))
+
+        if source == "all":
+            deleted_document_ids = _delete_all_report_import_documents(db, analysis_id)
+        else:
+            deleted_document_ids = _delete_analysis_documents_by_ids(db, analysis_id, removed_document_ids)
+
+        db.add(
+            DecisionEvent(
+                credit_analysis_id=analysis_id,
+                event_type="operational_data_reset",
+                actor_type=ActorType.USER,
+                actor_name=getattr(current.user, "name", None) or getattr(current.user, "email", None) or "user",
+                description="Dados operacionais da analise reiniciados.",
+                event_payload_json={
+                    "source": source,
+                    "unlinked_report_read_ids": sorted(removed_read_ids),
+                    "deleted_document_ids": sorted(deleted_document_ids),
+                },
+            )
+        )
+        db.commit()
+        db.refresh(analysis)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Falha ao resetar dados operacionais da analise %s", analysis_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Falha ao resetar dados operacionais da analise.") from exc
+
+    current_step, last_completed = _get_journey_progress(analysis)
+    current_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
+    return CreditAnalysisOperationalDataResetResponse(
+        status="ok",
+        reset_scope=source,
+        report_links=current_memory.get("report_links") if isinstance(current_memory.get("report_links"), dict) else {},
+        deleted_document_ids=sorted(deleted_document_ids),
+        unlinked_report_read_ids=sorted(removed_read_ids),
+        current_journey_step=current_step,
+        last_completed_journey_step=last_completed,
+    )
 
 
 @router.put("/{analysis_id}/workspace-state", response_model=CreditAnalysisRead, status_code=status.HTTP_200_OK)

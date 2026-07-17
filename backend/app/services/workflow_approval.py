@@ -15,6 +15,7 @@ from app.models.workflow_approval_decision import WorkflowApprovalDecision
 from app.models.workflow_approval_step import WorkflowApprovalStep
 from app.models.workflow_role import WorkflowRole
 from app.services.approval_matrix import resolve_required_approval_roles
+from app.services.workflow_roles import DOA_APPROVAL_WORKFLOW_ROLE_TYPES
 
 APPROVAL_ROLE_ORDER = {
     "HEAD_FINANCE": 1,
@@ -75,7 +76,7 @@ def _roles_for_codes(db: Session, role_codes: list[str]) -> list[WorkflowRole]:
             select(WorkflowRole)
             .where(
                 WorkflowRole.code.in_(role_codes),
-                WorkflowRole.type == "governance",
+                WorkflowRole.type.in_(DOA_APPROVAL_WORKFLOW_ROLE_TYPES),
                 WorkflowRole.is_active.is_(True),
             )
             .order_by(WorkflowRole.code.asc())
@@ -95,7 +96,7 @@ def user_has_approval_step_role(db: Session, current: CurrentUser, step: Workflo
             .where(
                 UserWorkflowRole.user_id == current.user.id,
                 UserWorkflowRole.workflow_role_id == step.workflow_role_id,
-                WorkflowRole.type == "governance",
+                WorkflowRole.type.in_(DOA_APPROVAL_WORKFLOW_ROLE_TYPES),
                 WorkflowRole.is_active.is_(True),
             )
             .limit(1)
@@ -151,7 +152,7 @@ def create_workflow_approval_round(
                 .join(ApprovalMatrixRuleRole, ApprovalMatrixRuleRole.workflow_role_id == WorkflowRole.id)
                 .where(
                     ApprovalMatrixRuleRole.approval_matrix_rule_id == matrix_resolution.get("rule_id"),
-                    WorkflowRole.type == "governance",
+                    WorkflowRole.type.in_(DOA_APPROVAL_WORKFLOW_ROLE_TYPES),
                     WorkflowRole.is_active.is_(True),
                 )
             ).all()
@@ -270,7 +271,7 @@ def _activate_committee_step(db: Session, analysis: CreditAnalysis, *, base_step
     committee_role = db.scalar(
         select(WorkflowRole).where(
             WorkflowRole.code == "CREDIT_COMMITTEE",
-            WorkflowRole.type == "governance",
+            WorkflowRole.type.in_(DOA_APPROVAL_WORKFLOW_ROLE_TYPES),
             WorkflowRole.is_active.is_(True),
         )
     )

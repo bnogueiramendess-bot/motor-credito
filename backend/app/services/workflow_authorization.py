@@ -185,8 +185,6 @@ def _current_status_value(analysis: CreditAnalysis) -> str:
         return "completed"
     if status_value == "cancelled":
         return "cancelled"
-    if status_value == "in_progress" and getattr(analysis, "motor_result", None) is not None:
-        return "in_approval"
     if status_value == "created":
         return "pending"
     return "in_progress"

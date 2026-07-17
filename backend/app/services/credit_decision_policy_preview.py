@@ -44,17 +44,6 @@ def _extract_coface_coverage_limit(analysis: CreditAnalysis, db: Session, custom
     read_id = coface_link.get("read_id") if isinstance(coface_link.get("read_id"), int) else None
 
     read: CreditReportRead | None = db.get(CreditReportRead, int(read_id)) if read_id else None
-    if read is None and customer is not None and customer.document_number:
-        read = db.scalar(
-            select(CreditReportRead)
-            .where(
-                CreditReportRead.customer_document_number == customer.document_number,
-                CreditReportRead.source_type == "coface",
-                CreditReportRead.status.in_(["valid", "valid_with_warnings"]),
-            )
-            .order_by(CreditReportRead.id.desc())
-            .limit(1)
-        )
     if read is None or not isinstance(read.read_payload_json, dict):
         return None
 
