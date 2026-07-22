@@ -25,7 +25,10 @@ from app.services.bu_scope import (
     user_has_all_bu_scope,
 )
 from app.services.workflow_approval import get_active_approval_step, user_has_approval_step_role
-from app.services.workflow_roles import WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY
+from app.services.workflow_roles import (
+    LEGACY_APPROVAL_WORKFLOW_ROLE_CANONICAL_CODE_MAP,
+    WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY,
+)
 
 LEGACY_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
     "credit.request.create": ("credit.request.create", "credit_request_submit", "credit.requests.submit"),
@@ -286,6 +289,10 @@ def _role_codes_for_authorization(role_codes: list[str]) -> list[str]:
         if compatible_code is not None and compatible_code not in seen:
             expanded.append(compatible_code)
             seen.add(compatible_code)
+        for legacy_code, canonical_code in LEGACY_APPROVAL_WORKFLOW_ROLE_CANONICAL_CODE_MAP.items():
+            if canonical_code == code and legacy_code not in seen:
+                expanded.append(legacy_code)
+                seen.add(legacy_code)
     return expanded
 
 

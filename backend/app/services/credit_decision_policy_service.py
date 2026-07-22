@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.services.effective_credit_policy import get_effective_credit_policy
@@ -590,6 +590,50 @@ def delete_credit_decision_policy_draft(db: Session, policy_id: int, current_use
 
 
 
+
+def _acquire_seed_policy_lock(db: Session) -> None:
+    try:
+        dialect_name = db.get_bind().dialect.name
+    except Exception:
+        dialect_name = ""
+    if dialect_name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(9082026072001)"))
+
+
+def _find_existing_seed_safe_policy(db: Session) -> CreditDecisionPolicy | None:
+    resolution = get_effective_credit_policy(db)
+    if resolution.conflict:
+        ids = ", ".join(str(item["policy_id"]) for item in resolution.candidates)
+        raise CreditDecisionPolicyValidationError(
+            f"Conflito de politicas ativas/publicadas/vigentes: {ids}. O seed nao pode criar outra politica."
+        )
+    if resolution.policy is not None and resolution.published:
+        return resolution.policy
+
+    canonical = db.scalar(
+        select(CreditDecisionPolicy)
+        .where(
+            CreditDecisionPolicy.code == "coface_first",
+            CreditDecisionPolicy.version == 1,
+            CreditDecisionPolicy.status != "archived",
+        )
+        .order_by(CreditDecisionPolicy.id.asc())
+    )
+    if canonical is not None:
+        return canonical
+
+    active_canonical = db.scalar(
+        select(CreditDecisionPolicy)
+        .where(
+            CreditDecisionPolicy.code == "coface_first",
+            CreditDecisionPolicy.status == "active",
+        )
+        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
+    )
+    if active_canonical is not None:
+        return active_canonical
+
+    return None
 def _archive_dev_versioning_policy_conflicts(db: Session) -> None:
     now = datetime.now(timezone.utc)
     dev_policies = list(
@@ -662,16 +706,15 @@ def _ensure_seed_policy_governed_publication(db: Session, policy: CreditDecision
     )
 
 def ensure_active_credit_decision_policy_seed(db: Session) -> CreditDecisionPolicy:
+    _acquire_seed_policy_lock(db)
     _archive_dev_versioning_policy_conflicts(db)
-    active = db.scalar(
-        select(CreditDecisionPolicy)
-        .where(CreditDecisionPolicy.code == "coface_first", CreditDecisionPolicy.status == "active")
-        .order_by(CreditDecisionPolicy.version.desc(), CreditDecisionPolicy.id.desc())
-    )
-    if active is not None:
-        ensure_default_score_structure(db, active)
-        _ensure_seed_policy_governed_publication(db, active)
-        return active
+
+    existing = _find_existing_seed_safe_policy(db)
+    if existing is not None:
+        if existing.code == "coface_first" and existing.status == "active" and getattr(existing, "publication_status", "UNPUBLISHED") != "PUBLISHED":
+            ensure_default_score_structure(db, existing)
+            _ensure_seed_policy_governed_publication(db, existing)
+        return existing
 
     policy = CreditDecisionPolicy(
         code="coface_first",

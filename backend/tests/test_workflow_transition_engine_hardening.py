@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.models.enums import AnalysisStatus, FinalDecision
 from app.services.workflow_transition_engine import resolve_credit_workflow_transition
@@ -154,6 +154,78 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resolve_credit_workflow_transition(db, self.current, analysis, action="submit_approval", payload={"justification": "Submeter para aprovação"})
 
+
+    def test_submit_approval_creates_in_approval_state_and_persists_review_step(self) -> None:
+        analysis = DummyAnalysis(decision_memory_json={"journey_progress": {"current_journey_step": 3, "last_completed_journey_step": 2}})
+        db = DummyDb()
+        steps = [
+            type("Step", (), {"id": 101, "workflow_role_id": 11, "sequence_order": 1, "status": "ACTIVE"})(),
+            type("Step", (), {"id": 102, "workflow_role_id": 12, "sequence_order": 2, "status": "PENDING"})(),
+        ]
+        approval_round = type(
+            "ApprovalRound",
+            (),
+            {
+                "rule_id": 7,
+                "rule_name": "DOA Head Finance",
+                "rule_code": "DOA-0001",
+                "rule_range": "0..1000000",
+                "round_number": 1,
+                "active_step": steps[0],
+                "steps": steps,
+            },
+        )()
+        auth = type(
+            "AuthCtx",
+            (),
+            {
+                "allowed": True,
+                "denial_reason": None,
+                "applicable_doa_code": "DOA-0001",
+                "applicable_doa_range": "0..1000000",
+                "workflow_context": {"applicable_roles": ["HEAD_FINANCE"]},
+            },
+        )()
+        with (
+            patch("app.services.workflow_transition_engine.resolve_credit_workflow_action", return_value=auth),
+            patch("app.services.workflow_transition_engine.resolve_credit_workflow_available_actions", return_value=["view_tracking"]),
+            patch("app.services.workflow_transition_engine.get_active_approval_step", return_value=None),
+            patch("app.services.workflow_transition_engine.create_workflow_approval_round", return_value=approval_round),
+        ):
+            result = resolve_credit_workflow_transition(db, self.current, analysis, action="submit_approval", payload={})
+
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.next_status, "in_approval")
+        self.assertEqual(analysis.analysis_status, AnalysisStatus.IN_APPROVAL)
+        self.assertIsNotNone(analysis.submitted_for_approval_at)
+        self.assertEqual(analysis.decision_memory_json["journey_progress"], {"current_journey_step": 4, "last_completed_journey_step": 3})
+        self.assertEqual(result.workflow_context.get("doa_rule_id"), 7)
+        self.assertEqual(result.workflow_context.get("active_approval_step_id"), 101)
+
+    def test_submit_approval_does_not_duplicate_existing_active_flow(self) -> None:
+        analysis = DummyAnalysis()
+        db = DummyDb()
+        auth = type(
+            "AuthCtx",
+            (),
+            {
+                "allowed": True,
+                "denial_reason": None,
+                "applicable_doa_code": "DOA-0001",
+                "applicable_doa_range": "0..1000000",
+                "workflow_context": {"applicable_roles": ["HEAD_FINANCE"]},
+            },
+        )()
+        create_round = Mock()
+        with (
+            patch("app.services.workflow_transition_engine.resolve_credit_workflow_action", return_value=auth),
+            patch("app.services.workflow_transition_engine.get_active_approval_step", return_value=object()),
+            patch("app.services.workflow_transition_engine.create_workflow_approval_round", create_round),
+        ):
+            with self.assertRaises(ValueError):
+                resolve_credit_workflow_transition(db, self.current, analysis, action="submit_approval", payload={})
+        create_round.assert_not_called()
+
     def test_finalize_requires_final_state(self) -> None:
         analysis = DummyAnalysis(analysis_status=AnalysisStatus.IN_PROGRESS, final_decision=None, motor_result=None)
         db = DummyDb()
@@ -265,6 +337,45 @@ class WorkflowTransitionEngineHardeningTestCase(unittest.TestCase):
         self.assertNotIn("analysis_started_at ? 3 : 2", content)
         self.assertNotIn("if (!isJourneyReadOnly) return;", content)
         self.assertEqual(content.count("triageCreditRequest({ cnpj"), 1)
+
+    def test_review_submit_cta_uses_canonical_workflow_action(self) -> None:
+        workspace_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "analysis-journey" / "components" / "new-analysis-page-view.tsx"
+        content = workspace_path.read_text(encoding="utf-8")
+
+        self.assertIn('executeCreditAnalysisWorkflowAction(id, { action: "submit_approval" })', content)
+        self.assertIn("onClick={submitForApproval}", content)
+        self.assertIn("setStep(4);", content)
+        self.assertIn("const canSubmitForApproval =", content)
+        self.assertIn("backendAdvertisesSubmitApproval", content)
+        self.assertIn("!isApprovalExperience", content)
+
+    def test_workspace_step4_navigation_waits_for_persisted_journey_progress(self) -> None:
+        workspace_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "analysis-journey" / "components" / "new-analysis-page-view.tsx"
+        content = workspace_path.read_text(encoding="utf-8")
+
+        self.assertIn("await persistJourneyProgressMutation.mutateAsync", content)
+        self.assertNotIn("persistJourneyProgressMutation.mutate({\n          id: activeAnalysisId,\n          currentStep: targetStep,", content)
+
+    def test_approval_dossier_uses_shared_actions_and_hides_analyst_footer_in_approval(self) -> None:
+        workspace_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "analysis-journey" / "components" / "new-analysis-page-view.tsx"
+        card_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "credit-analyses" / "components" / "approval-workflow-card.tsx"
+        button_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "shared" / "components" / "ui" / "button.tsx"
+        workspace = workspace_path.read_text(encoding="utf-8")
+        card = card_path.read_text(encoding="utf-8")
+        button = button_path.read_text(encoding="utf-8")
+
+        self.assertIn("useApprovalWorkflowController(activeAnalysisId)", workspace)
+        self.assertIn("<ApprovalWorkflowActionBar", workspace)
+        self.assertIn("controller={approvalWorkflowController}", workspace)
+        self.assertIn("showAnalystSubmissionFooter", workspace)
+        self.assertIn("!isApprovalExperience", workspace)
+        self.assertIn(") : step !== 4 ? (", workspace)
+        self.assertIn("export function ApprovalWorkflowActionButtons", card)
+        self.assertGreaterEqual(card.count("<ApprovalWorkflowActionButtons"), 2)
+        self.assertIn('variant="success"', card)
+        self.assertNotIn("bg-[#E8B83A]", card)
+        self.assertIn("success:", button)
+        self.assertIn("warning:", button)
 
 
 

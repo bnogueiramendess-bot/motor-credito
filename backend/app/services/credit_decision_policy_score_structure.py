@@ -273,12 +273,17 @@ def get_current_score_policy(db: Session) -> tuple[CreditDecisionPolicy, str]:
         ).all()
     )
     effective_active_policies = [policy for policy in active_policies if _policy_is_effective_now(policy)]
-    if len(effective_active_policies) > 1:
-        ids = ", ".join(str(policy.id) for policy in effective_active_policies)
+    published_effective_policies = [
+        policy for policy in effective_active_policies if getattr(policy, "publication_status", "UNPUBLISHED") == "PUBLISHED"
+    ]
+    if len(published_effective_policies) > 1:
+        ids = ", ".join(str(policy.id) for policy in published_effective_policies)
         raise CreditDecisionPolicyScoreStructureNotFoundError(
-            f"Conflito de politicas ativas/vigentes para Score e Politica: {ids}."
+            f"Conflito de politicas ativas/publicadas/vigentes para Score e Politica: {ids}."
         )
-    if effective_active_policies:
+    if published_effective_policies:
+        return published_effective_policies[0], "active"
+    if len(effective_active_policies) == 1:
         return effective_active_policies[0], "active"
 
     archived = db.scalar(

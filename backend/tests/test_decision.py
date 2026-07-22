@@ -315,3 +315,45 @@ def test_calculate_and_apply_decision_low_score_rejects_when_coface_is_valid():
     assert updated_analysis.motor_result == MotorResult.REJECTED
     assert updated_analysis.suggested_limit == Decimal("0.00")
     assert "score_band_d" in updated_analysis.decision_memory_json["reasons"]
+
+
+def test_calculate_and_apply_decision_preserves_operational_memory_links():
+    analysis = SimpleNamespace(
+        id=84,
+        requested_limit=Decimal("1000000.00"),
+        annual_revenue_estimated=Decimal("123.00"),
+        decision_memory_json={
+            "triage_submission": {"business_unit": "Fertilizer", "requester_company_id": 42},
+            "journey_progress": {"current_journey_step": 3, "last_completed_journey_step": 2},
+            "workspace_state": {"tabs": {"active": "motor"}},
+            "report_links": {"coface": {"document_id": 9}},
+            "policy_snapshot": {"captured_at": "2026-07-20T10:00:00+00:00"},
+        },
+        decision_calculated_at=None,
+        motor_result=None,
+        suggested_limit=None,
+    )
+    score_result = _score_result(
+        band=ScoreBand.A,
+        source="manual_financial_statements",
+        net_revenue="4500000.00",
+    )
+    source_entry = _source_entry(declared_revenue=Decimal("999.00"), declared_indebtedness=None, has_restrictions=False)
+
+    db = MagicMock()
+    db.get.return_value = analysis
+    db.scalar.side_effect = [score_result, source_entry]
+
+    with (
+        patch("app.services.decision.ensure_active_policy", return_value=_policy_entity()),
+        patch("app.services.decision.build_runtime_policy_from_entity", return_value=_runtime_policy("0.20")),
+    ):
+        updated_analysis, _, _ = decision.calculate_and_apply_decision(db, 84)
+
+    memory = updated_analysis.decision_memory_json
+    assert memory["triage_submission"] == {"business_unit": "Fertilizer", "requester_company_id": 42}
+    assert memory["journey_progress"] == {"current_journey_step": 3, "last_completed_journey_step": 2}
+    assert memory["workspace_state"] == {"tabs": {"active": "motor"}}
+    assert memory["report_links"] == {"coface": {"document_id": 9}}
+    assert memory["policy_snapshot"] == {"captured_at": "2026-07-20T10:00:00+00:00"}
+    assert memory["motor_result"] == MotorResult.APPROVED.value

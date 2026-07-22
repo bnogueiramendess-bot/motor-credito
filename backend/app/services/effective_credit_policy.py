@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -157,7 +157,8 @@ def get_effective_credit_policy(
         ).all()
     )
     effective_policies = [policy for policy in active_policies if _is_effective(policy, effective_at)]
-    candidates = [_policy_candidate(policy) for policy in effective_policies]
+    published_effective_policies = [policy for policy in effective_policies if is_policy_published(policy)]
+    candidates = [_policy_candidate(policy) for policy in published_effective_policies]
 
     if not effective_policies:
         return EffectiveCreditPolicyResolution(
@@ -176,7 +177,7 @@ def get_effective_credit_policy(
             publication_event=None,
         )
 
-    if len(effective_policies) > 1:
+    if len(published_effective_policies) > 1:
         return EffectiveCreditPolicyResolution(
             policy=None,
             policy_id=None,
@@ -195,7 +196,7 @@ def get_effective_credit_policy(
 
     from app.services.credit_decision_policy_score_structure import validate_score_structure
 
-    policy = effective_policies[0]
+    policy = published_effective_policies[0] if published_effective_policies else effective_policies[0]
     publication_event = _policy_publication_record(policy)
     published = is_policy_published(policy)
     validation = validate_score_structure(db, policy.id)

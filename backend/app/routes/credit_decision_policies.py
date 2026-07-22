@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import CurrentUser, get_current_user, require_permissions
 from app.db.session import get_db
 from app.schemas.credit_decision_policy import (
@@ -58,6 +59,7 @@ from app.services.credit_decision_policy_service import (
     create_credit_decision_policy,
     create_credit_decision_policy_version,
     delete_credit_decision_policy_draft,
+    ensure_active_credit_decision_policy_seed,
     get_active_credit_decision_policy,
     get_credit_decision_policy,
     list_credit_decision_policies,
@@ -369,6 +371,10 @@ def get_current_policy_score_structure(
     try:
         return get_current_score_structure(db)
     except CreditDecisionPolicyScoreStructureNotFoundError as exc:
+        if settings.credit_decision_policy_seed_enabled and "No credit decision policy found" in str(exc):
+            ensure_active_credit_decision_policy_seed(db)
+            db.flush()
+            return get_current_score_structure(db)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 

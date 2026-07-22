@@ -3,7 +3,9 @@ from __future__ import annotations
 from decimal import Decimal
 import unittest
 import uuid
+from unittest.mock import Mock, patch
 
+from fastapi import HTTPException
 from sqlalchemy import delete, select
 
 from app.db.session import SessionLocal
@@ -19,6 +21,7 @@ from app.routes.credit_decision_policies import (
     PillarOneScoreSimulationRequest,
     PillarTwoScoreSimulationRequest,
     PillarFourScoreSimulationRequest,
+    CreditDecisionPolicyScoreStructureNotFoundError,
     PillarFiveScoreSimulationRequest,
     get_policy_score_structure,
     get_policy_score_validation,
@@ -166,6 +169,38 @@ class AdminCreditDecisionPolicyScoreEndpointsTestCase(unittest.TestCase):
         self.policy.config_json = config
         self._add_default_ranges_for_all_indicators()
         self.db.commit()
+
+    def test_current_score_structure_bootstraps_seed_when_missing_and_seed_enabled(self) -> None:
+        payload = {"policy": {"id": 999}, "pillars": []}
+        db = Mock()
+        with patch("app.routes.credit_decision_policies.settings") as settings_mock, patch(
+            "app.routes.credit_decision_policies.get_current_score_structure",
+            side_effect=[CreditDecisionPolicyScoreStructureNotFoundError("No credit decision policy found."), payload],
+        ) as get_current, patch(
+            "app.routes.credit_decision_policies.ensure_active_credit_decision_policy_seed"
+        ) as ensure_seed:
+            settings_mock.credit_decision_policy_seed_enabled = True
+
+            result = get_current_policy_score_structure(db=db, _=None)
+
+        self.assertEqual(result, payload)
+        ensure_seed.assert_called_once_with(db)
+        db.flush.assert_called_once()
+        self.assertEqual(get_current.call_count, 2)
+
+    def test_current_score_structure_keeps_404_when_seed_disabled(self) -> None:
+        db = Mock()
+        with patch("app.routes.credit_decision_policies.settings") as settings_mock, patch(
+            "app.routes.credit_decision_policies.get_current_score_structure",
+            side_effect=CreditDecisionPolicyScoreStructureNotFoundError("No credit decision policy found."),
+        ), patch("app.routes.credit_decision_policies.ensure_active_credit_decision_policy_seed") as ensure_seed:
+            settings_mock.credit_decision_policy_seed_enabled = False
+
+            with self.assertRaises(HTTPException) as ctx:
+                get_current_policy_score_structure(db=db, _=None)
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        ensure_seed.assert_not_called()
 
     def test_score_structure_endpoint_returns_real_policy_rows(self) -> None:
         structure = get_policy_score_structure(self.policy.id, self.db, None)

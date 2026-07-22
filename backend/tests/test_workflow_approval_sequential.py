@@ -4,6 +4,7 @@ import unittest
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from unittest.mock import patch
 
 from sqlalchemy import delete, select, text
 
@@ -261,6 +262,28 @@ class WorkflowApprovalSequentialTestCase(unittest.TestCase):
 
             decisions = list(db.scalars(select(WorkflowApprovalDecision).where(WorkflowApprovalDecision.credit_analysis_id == analysis_id)).all())
             self.assertEqual([decision.decision for decision in decisions], ["APPROVED", "APPROVED"])
+
+    def test_submit_without_eligible_approver_fails_without_partial_flow(self) -> None:
+        self._create_rule(["HEAD_FINANCE"])
+        analyst = self._current_user("no-approver-analyst@example.com", "CREDIT_ANALYST", {"credit.request.submit"})
+        analysis_id = self._create_calculated_analysis()
+
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            with patch("app.services.workflow_approval._has_eligible_user_for_role", return_value=False):
+                with self.assertRaises(ValueError) as error:
+                    resolve_credit_workflow_transition(db, analyst, analysis, action="submit_approval")
+            self.assertIn("Nao ha usuario elegivel", str(error.exception))
+            db.rollback()
+
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            steps = list(db.scalars(select(WorkflowApprovalStep).where(WorkflowApprovalStep.credit_analysis_id == analysis_id)).all())
+            self.assertEqual(steps, [])
+            self.assertEqual(analysis.analysis_status, AnalysisStatus.IN_PROGRESS)
+            self.assertIsNone(analysis.submitted_for_approval_at)
 
     def test_approval_flow_summary_exposes_round_step_progress_and_sla(self) -> None:
         self._create_rule(["HEAD_FINANCE", "CFO"])

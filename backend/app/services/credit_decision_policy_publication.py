@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.audit_log import AuditLog
@@ -15,6 +15,7 @@ from app.models.credit_decision_policy_governance_request_approval import (
 from app.models.user import User
 from app.models.user_workflow_role import UserWorkflowRole
 from app.services.credit_decision_policy_governance_workflow import (
+    PolicyGovernanceWorkflowConflictError,
     PolicyGovernanceWorkflowForbiddenError,
     PolicyGovernanceWorkflowNotFoundError,
     create_governance_request,
@@ -224,6 +225,61 @@ def validate_policy_publication_allowed(
     }
 
 
+
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _windows_overlap(
+    left_start: datetime,
+    left_end: datetime | None,
+    right_start: datetime,
+    right_end: datetime | None,
+) -> bool:
+    if left_end is not None and _as_aware_utc(left_end) <= _as_aware_utc(right_start):
+        return False
+    if right_end is not None and _as_aware_utc(right_end) <= _as_aware_utc(left_start):
+        return False
+    return True
+
+
+def _acquire_policy_publication_lock(db: Session) -> None:
+    try:
+        dialect_name = db.get_bind().dialect.name
+    except Exception:
+        dialect_name = ""
+    if dialect_name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(9082026072002)"))
+
+
+def validate_no_published_policy_overlap(db: Session, policy: CreditDecisionPolicy, *, effective_at: datetime) -> None:
+    target_start = _as_aware_utc(policy.effective_from or effective_at)
+    target_end = _as_aware_utc(policy.effective_to) if policy.effective_to is not None else None
+    published_active_policies = list(
+        db.scalars(
+            select(CreditDecisionPolicy).where(
+                CreditDecisionPolicy.id != policy.id,
+                CreditDecisionPolicy.code == policy.code,
+                CreditDecisionPolicy.status == "active",
+                CreditDecisionPolicy.publication_status == "PUBLISHED",
+            )
+        ).all()
+    )
+    conflicts = []
+    for existing in published_active_policies:
+        if existing.code != policy.code:
+            continue
+        existing_start = _as_aware_utc(existing.effective_from or existing.published_at or existing.created_at)
+        existing_end = _as_aware_utc(existing.effective_to) if existing.effective_to is not None else None
+        if _windows_overlap(target_start, target_end, existing_start, existing_end):
+            conflicts.append(existing.id)
+    if conflicts:
+        ids = ", ".join(str(item) for item in sorted(conflicts))
+        raise PolicyGovernanceWorkflowConflictError(
+            f"Publicacao bloquearia politica vigente sobreposta para o mesmo codigo/escopo: {ids}."
+        )
 def _execute_policy_action(
     db: Session,
     *,
@@ -244,8 +300,11 @@ def _execute_policy_action(
         raise PolicyGovernanceWorkflowForbiddenError(validation["reason"])
 
     if action_type == "policy_publish":
-        policy = activate_credit_decision_policy(db, policy_id, current_user)
+        _acquire_policy_publication_lock(db)
+        target_policy = get_credit_decision_policy(db, policy_id)
         published_at = datetime.now(timezone.utc)
+        validate_no_published_policy_overlap(db, target_policy, effective_at=published_at)
+        policy = activate_credit_decision_policy(db, policy_id, current_user)
         policy.publication_status = "PUBLISHED"
         policy.published_at = published_at
         policy.published_by_user_id = current_user.id

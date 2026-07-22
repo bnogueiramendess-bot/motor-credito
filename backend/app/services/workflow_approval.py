@@ -4,18 +4,19 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.security import CurrentUser
 from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
 from app.models.credit_analysis import CreditAnalysis
+from app.models.user import User
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_approval_decision import WorkflowApprovalDecision
 from app.models.workflow_approval_step import WorkflowApprovalStep
 from app.models.workflow_role import WorkflowRole
 from app.services.approval_matrix import resolve_required_approval_roles
-from app.services.workflow_roles import DOA_APPROVAL_WORKFLOW_ROLE_TYPES
+from app.services.workflow_roles import DOA_APPROVAL_WORKFLOW_ROLE_TYPES, canonical_workflow_role_code
 
 APPROVAL_ROLE_ORDER = {
     "HEAD_FINANCE": 1,
@@ -68,6 +69,10 @@ def _ordered_role_codes(role_codes: list[str]) -> list[str]:
     return sorted(dict.fromkeys(role_codes), key=lambda code: (APPROVAL_ROLE_ORDER.get(code, 100), code))
 
 
+def _canonical_role_codes(role_codes: list[str]) -> list[str]:
+    return [canonical_workflow_role_code(code) for code in role_codes]
+
+
 def _roles_for_codes(db: Session, role_codes: list[str]) -> list[WorkflowRole]:
     if not role_codes:
         return []
@@ -84,6 +89,21 @@ def _roles_for_codes(db: Session, role_codes: list[str]) -> list[WorkflowRole]:
     )
     by_code = {role.code: role for role in roles}
     return [by_code[code] for code in _ordered_role_codes(role_codes) if code in by_code]
+
+
+def _has_eligible_user_for_role(db: Session, role: WorkflowRole, *, business_unit_id: int | None) -> bool:
+    conditions = [
+        UserWorkflowRole.workflow_role_id == role.id,
+        User.is_active.is_(True),
+    ]
+    if business_unit_id is not None:
+        conditions.append(or_(UserWorkflowRole.business_unit_id.is_(None), UserWorkflowRole.business_unit_id == business_unit_id))
+    return db.scalar(
+        select(UserWorkflowRole.id)
+        .join(User, User.id == UserWorkflowRole.user_id)
+        .where(*conditions)
+        .limit(1)
+    ) is not None
 
 
 def user_has_approval_step_role(db: Session, current: CurrentUser, step: WorkflowApprovalStep | None) -> bool:
@@ -144,7 +164,7 @@ def create_workflow_approval_round(
         currency="BRL",
         business_unit_id=business_unit_id,
     )
-    role_codes = _ordered_role_codes(list(matrix_resolution.get("required_roles") or []))
+    role_codes = _ordered_role_codes(_canonical_role_codes(list(matrix_resolution.get("required_roles") or [])))
     if matrix_resolution.get("rule_id") is not None:
         all_rule_codes = list(
             db.scalars(
@@ -162,6 +182,13 @@ def create_workflow_approval_round(
     roles = _roles_for_codes(db, role_codes)
     if not roles:
         raise ValueError("A matriz DOA nao encontrou papeis de aprovacao configurados para esta analise.")
+    missing_user_roles = [role.code for role in roles if not _has_eligible_user_for_role(db, role, business_unit_id=business_unit_id)]
+    if missing_user_roles:
+        raise ValueError(
+            "Nao ha usuario elegivel vinculado aos papeis DOA exigidos para esta analise: "
+            + ", ".join(missing_user_roles)
+            + "."
+        )
 
     round_number = _next_round_number(db, analysis.id)
     steps: list[WorkflowApprovalStep] = []

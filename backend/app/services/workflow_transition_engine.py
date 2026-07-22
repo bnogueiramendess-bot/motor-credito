@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.security import CurrentUser
@@ -41,6 +41,24 @@ class WorkflowTransitionResult:
     workflow_context: dict
 
 
+
+
+def _acquire_analysis_submission_lock(db: Session, analysis_id: int) -> None:
+    try:
+        dialect_name = db.get_bind().dialect.name
+    except Exception:
+        dialect_name = ""
+    if dialect_name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": 908202607210000 + int(analysis_id)})
+
+
+def _set_journey_review_step(analysis: CreditAnalysis) -> None:
+    memory = dict(analysis.decision_memory_json) if isinstance(analysis.decision_memory_json, dict) else {}
+    progress = dict(memory.get("journey_progress")) if isinstance(memory.get("journey_progress"), dict) else {}
+    progress["current_journey_step"] = 4
+    progress["last_completed_journey_step"] = max(int(progress.get("last_completed_journey_step", 3)), 3)
+    memory["journey_progress"] = progress
+    analysis.decision_memory_json = memory
 
 
 def _record_committee_vote_if_open(db: Session, current: CurrentUser, analysis: CreditAnalysis, *, action: str, comment: str | None, voted_at: datetime) -> None:
@@ -235,8 +253,13 @@ def resolve_credit_workflow_transition(
         capture_analysis_policy_snapshot(db, analysis, captured_at=transition_at)
         timeline_event = "analysis_started"
     elif action in {"generate_preliminary_decision", "submit_for_approval", "submit_approval"}:
+        _acquire_analysis_submission_lock(db, analysis.id)
+        active_approval_step = get_active_approval_step(db, analysis.id)
+        if active_approval_step is not None or (previous_status == "in_approval" and analysis.submitted_for_approval_at is not None):
+            raise ValueError("Analise ja submetida para aprovacao; fluxo de aprovacao existente deve ser acompanhado.")
         if analysis.motor_result is None or analysis.decision_calculated_at is None:
             raise ValueError("A submissao para aprovacao exige dossie tecnico concluido.")
+        _set_journey_review_step(analysis)
         approval_round = create_workflow_approval_round(db, analysis)
         next_status = "in_approval"
         next_owner_user_id = None

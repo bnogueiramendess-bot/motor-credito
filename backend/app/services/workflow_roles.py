@@ -2,10 +2,13 @@
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import case, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, object_session
 
+from app.models.approval_matrix_rule import ApprovalMatrixRule
+from app.models.approval_matrix_rule_role import ApprovalMatrixRuleRole
+from app.models.business_unit import BusinessUnit
 from app.models.user import User
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
@@ -34,6 +37,29 @@ WORKFLOW_ROLE_AUTHORIZATION_COMPATIBILITY: dict[str, str] = {
 # so both governance and approval are accepted for DOA compatibility.
 DOA_APPROVAL_WORKFLOW_ROLE_TYPES: tuple[str, ...] = ("governance", "approval")
 COMMITTEE_COMPATIBILITY_WORKFLOW_ROLE_CODES: tuple[str, ...] = ("CREDIT_COMMITTEE",)
+NON_USER_ASSIGNABLE_WORKFLOW_ROLE_CODES: tuple[str, ...] = COMMITTEE_COMPATIBILITY_WORKFLOW_ROLE_CODES
+LEGACY_APPROVAL_WORKFLOW_ROLE_CANONICAL_CODE_MAP: dict[str, str] = {
+    "CREDIT_CEO": "CEO",
+    "CREDIT_GROUP_CFO": "CFO",
+    "CREDIT_FINANCE_HEAD": "HEAD_FINANCE",
+    "CREDIT_FINANCE_DIRECTOR": "CFO",
+    "CREDIT_COMMERCIAL_HEAD": "HEAD_COMMERCIAL",
+}
+LEGACY_APPROVAL_WORKFLOW_ROLE_CODES: tuple[str, ...] = tuple(LEGACY_APPROVAL_WORKFLOW_ROLE_CANONICAL_CODE_MAP)
+LEGACY_WORKFLOW_ROLE_CODES: tuple[str, ...] = LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODES + LEGACY_APPROVAL_WORKFLOW_ROLE_CODES
+USER_ASSIGNABLE_OPERATIONAL_WORKFLOW_ROLE_CODES: tuple[str, ...] = ACTIVE_OPERATIONAL_WORKFLOW_ROLE_CODES
+USER_ASSIGNABLE_WORKFLOW_ROLE_ORDER: dict[str, int] = {
+    "CREDIT_REQUESTER": 10,
+    "CREDIT_ANALYST": 20,
+    "CREDIT_CONSULTANT": 30,
+    "HEAD_FINANCE": 110,
+    "HEAD_COMMERCIAL": 120,
+    "HEAD_OPERATIONS": 130,
+    "CFO": 140,
+    "GROUP_CFO": 150,
+    "CEO": 160,
+    "LEGAL": 170,
+}
 
 WORKFLOW_ROLE_CATALOG: list[dict[str, str]] = [
     {
@@ -147,8 +173,9 @@ def ensure_workflow_roles_seed(db: Session) -> None:
             existing.name = item["name"]
             existing.description = item["description"]
             existing.type = item["type"]
-            existing.is_active = True
-        for legacy_code in LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODES:
+            if item["code"] not in LEGACY_APPROVAL_WORKFLOW_ROLE_CANONICAL_CODE_MAP:
+                existing.is_active = True
+        for legacy_code in LEGACY_WORKFLOW_ROLE_CODES:
             existing = db.scalar(select(WorkflowRole).where(WorkflowRole.code == legacy_code))
             if existing is not None:
                 existing.is_active = False
@@ -191,3 +218,40 @@ def user_has_any_workflow_role(user: User, codes: list[str]) -> bool:
         .limit(1)
     )
     return found is not None
+
+
+def canonical_workflow_role_code(code: str) -> str:
+    normalized = code.strip().upper()
+    return LEGACY_APPROVAL_WORKFLOW_ROLE_CANONICAL_CODE_MAP.get(normalized, normalized)
+
+
+def list_user_assignable_workflow_roles(db: Session, *, company_id: int) -> list[WorkflowRole]:
+    """Return roles that may be assigned from user administration."""
+
+    order_case = case(USER_ASSIGNABLE_WORKFLOW_ROLE_ORDER, value=WorkflowRole.code, else_=999)
+    doa_role_ids = (
+        select(ApprovalMatrixRuleRole.workflow_role_id)
+        .join(ApprovalMatrixRule, ApprovalMatrixRule.id == ApprovalMatrixRuleRole.approval_matrix_rule_id)
+        .outerjoin(BusinessUnit, BusinessUnit.id == ApprovalMatrixRule.business_unit_id)
+        .where(
+            ApprovalMatrixRule.is_active.is_(True),
+            ApprovalMatrixRule.requires_committee.is_(False),
+            or_(ApprovalMatrixRule.business_unit_id.is_(None), BusinessUnit.company_id == company_id),
+        )
+    )
+    return list(
+        db.scalars(
+            select(WorkflowRole)
+            .where(
+                WorkflowRole.is_active.is_(True),
+                WorkflowRole.code.not_in(LEGACY_WORKFLOW_ROLE_CODES),
+                WorkflowRole.code.not_in(NON_USER_ASSIGNABLE_WORKFLOW_ROLE_CODES),
+                or_(
+                    WorkflowRole.code.in_(USER_ASSIGNABLE_OPERATIONAL_WORKFLOW_ROLE_CODES),
+                    WorkflowRole.id.in_(doa_role_ids),
+                ),
+            )
+            .order_by(WorkflowRole.type.asc(), order_case.asc(), WorkflowRole.name.asc(), WorkflowRole.code.asc())
+        ).all()
+    )
+

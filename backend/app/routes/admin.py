@@ -84,7 +84,9 @@ from app.services.operational_reset import (
 from app.services.security import generate_raw_token, hash_password, hash_token
 from app.services.workflow_roles import (
     LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODES,
+    canonical_workflow_role_code,
     ensure_workflow_roles_seed,
+    list_user_assignable_workflow_roles,
 )
 from app.services.approval_matrix import (
     create_approval_matrix_rule,
@@ -498,18 +500,12 @@ def _replace_user_workflow_roles(
     if not _table_exists(db, "workflow_roles") or not _table_exists(db, "user_workflow_roles"):
         return
     role_by_code = {
-        role.code: role
-        for role in db.scalars(
-            select(WorkflowRole).where(
-                WorkflowRole.is_active.is_(True),
-                WorkflowRole.code.not_in(LEGACY_OPERATIONAL_WORKFLOW_ROLE_CODE_SET),
-            )
-        ).all()
+        role.code: role for role in list_user_assignable_workflow_roles(db, company_id=company_id)
     }
     normalized_assignments: list[tuple[WorkflowRole, int | None]] = []
     seen_pairs: set[tuple[int, int | None]] = set()
     for assignment in assignments:
-        role_code = assignment.code.strip().upper()
+        role_code = canonical_workflow_role_code(assignment.code)
         role = role_by_code.get(role_code)
         if role is None:
             raise HTTPException(
@@ -1332,6 +1328,23 @@ def list_workflow_roles(
                 .order_by(WorkflowRole.type.asc(), WorkflowRole.name.asc())
             ).all()
         )
+    except SQLAlchemyError:
+        db.rollback()
+        return []
+
+
+@router.get("/users/workflow-role-options", response_model=list[WorkflowRoleRead])
+def list_user_workflow_role_options(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_permissions(["users:view"])),
+) -> list[WorkflowRole]:
+    if not _table_exists(db, "workflow_roles"):
+        return []
+    ensure_workflow_roles_seed(db)
+    ensure_approval_matrix_seed(db)
+    try:
+        db.commit()
+        return list_user_assignable_workflow_roles(db, company_id=current.user.company_id)
     except SQLAlchemyError:
         db.rollback()
         return []

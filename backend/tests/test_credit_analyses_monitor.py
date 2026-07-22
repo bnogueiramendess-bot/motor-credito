@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import uuid
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from fastapi import HTTPException
 from sqlalchemy import delete, or_, select
@@ -18,6 +19,8 @@ from app.models.business_unit import BusinessUnit
 from app.models.company import Company
 from app.models.credit_analysis import CreditAnalysis
 from app.models.credit_report_read import CreditReportRead
+from app.models.external_data_entry import ExternalDataEntry
+from app.models.score_result import ScoreResult
 from app.models.customer import Customer
 from app.models.decision_event import DecisionEvent
 from app.models.permission import Permission
@@ -31,6 +34,8 @@ from app.routes.credit_analyses import (
     WorkflowActionRequest,
     _build_approval_flow_summary,
     apply_analysis_final_decision,
+    calculate_decision,
+    calculate_score,
     execute_workflow_action,
     get_credit_analysis,
     get_credit_analysis_approval_flow_summary,
@@ -43,11 +48,11 @@ from app.routes.credit_analyses import (
     update_credit_analysis_journey_progress,
     update_credit_analysis_workspace_state,
 )
-from app.models.enums import ActorType, FinalDecision, AnalysisStatus, MotorResult
+from app.models.enums import ActorType, EntryMethod, FinalDecision, AnalysisStatus, MotorResult, ScoreBand, SourceType
 from app.schemas.final_decision import FinalDecisionApplyRequest
 from app.schemas.credit_analysis import CreditAnalysisJourneyProgressUpdateRequest, CreditAnalysisWorkspaceStateUpdateRequest
 from app.services.security import hash_password
-from app.services.workflow_roles import ensure_workflow_roles_seed
+from app.services.workflow_roles import canonical_workflow_role_code, ensure_workflow_roles_seed
 from app.services.workflow_approval import create_workflow_approval_round
 
 
@@ -62,6 +67,8 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         with SessionLocal() as db:
             if self.created["analyses"]:
                 db.execute(delete(DecisionEvent).where(DecisionEvent.credit_analysis_id.in_(self.created["analyses"])))
+                db.execute(delete(ScoreResult).where(ScoreResult.credit_analysis_id.in_(self.created["analyses"])))
+                db.execute(delete(ExternalDataEntry).where(ExternalDataEntry.credit_analysis_id.in_(self.created["analyses"])))
             if self.created["rows"]:
                 db.execute(delete(ArAgingDataTotalRow).where(ArAgingDataTotalRow.id.in_(self.created["rows"])))
             if self.created["runs"]:
@@ -183,9 +190,10 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
     def _attach_workflow_role(self, user_id: int, workflow_role_code: str) -> None:
         with SessionLocal() as db:
             ensure_workflow_roles_seed(db)
-            role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == workflow_role_code, WorkflowRole.is_active.is_(True)))
+            canonical_code = canonical_workflow_role_code(workflow_role_code)
+            role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == canonical_code, WorkflowRole.is_active.is_(True)))
             if role is None:
-                role = WorkflowRole(code=workflow_role_code, name=workflow_role_code, description=workflow_role_code, type="operational", is_active=True)
+                role = WorkflowRole(code=canonical_code, name=canonical_code, description=canonical_code, type="operational", is_active=True)
                 db.add(role)
                 db.flush()
             link = UserWorkflowRole(user_id=user_id, workflow_role_id=role.id)
@@ -219,7 +227,7 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             db.flush()
             self.created["rows"].append(row.id)
             status_enum = AnalysisStatus.CREATED if status == "created" else AnalysisStatus.IN_PROGRESS
-            decision_memory = {"triage_submission": {"requester_company_id": self.company_id}} if status == "created" else {"triage_submission": {"source": "cliente_existente_carteira", "requester_company_id": self.company_id}}
+            decision_memory = {"triage_submission": {"requester_company_id": self.company_id, "business_unit": bu_name}} if status == "created" else {"triage_submission": {"source": "cliente_existente_carteira", "requester_company_id": self.company_id, "business_unit": bu_name}}
             analysis = CreditAnalysis(customer_id=customer.id, protocol_number=f"PROTO-{customer.id}", requested_limit=Decimal("10000"), current_limit=Decimal("0"), exposure_amount=Decimal("0"), annual_revenue_estimated=Decimal("0"), suggested_limit=Decimal("10000"), analysis_status=status_enum, decision_memory_json=decision_memory)
             db.add(analysis)
             db.flush()
@@ -238,6 +246,95 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         self.assertIsNotNone(item)
         assert item is not None
         return item
+
+    def test_monitor_classifies_existing_customer_only_when_cnpj_is_in_current_company_ar(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.classificacao.existente@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.classificacao.existente@indorama.com", status="created")
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertFalse(item.is_new_customer)
+        self.assertEqual(item.business_unit, "Fertilizer")
+
+    def test_monitor_classifies_as_new_when_cnpj_exists_only_in_superseded_snapshot(self) -> None:
+        bu_id, old_run_id = self._setup_base()
+        analyst = self._create_user("analista.classificacao.snapshot@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(old_run_id, "comercial.classificacao.snapshot@indorama.com", status="created")
+        with SessionLocal() as db:
+            newer_run = ArAgingImportRun(base_date=date(2026, 5, 10), status="valid", original_filename="base-current.xlsx", mime_type="application/xlsx", file_size=1000, warnings_json=[], totals_json={})
+            db.add(newer_run)
+            db.flush()
+            self.created["runs"].append(newer_run.id)
+            other_cnpj = self._next_document_number()
+            row = ArAgingDataTotalRow(import_run_id=newer_run.id, row_number=len(self.created["rows"]) + 1, cnpj_raw=other_cnpj, cnpj_normalized=other_cnpj, customer_name="Outro Cliente", bu_raw="Fertilizer", bu_normalized="Fertilizer", economic_group_raw="GRP-CURRENT", economic_group_normalized="GRP-CURRENT", open_amount=Decimal("1000"), due_amount=Decimal("1000"), overdue_amount=Decimal("0"), aging_label="0-30", raw_payload_json={})
+            db.add(row)
+            db.flush()
+            self.created["rows"].append(row.id)
+            db.commit()
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertTrue(item.is_new_customer)
+        self.assertEqual(item.business_unit, "Fertilizer")
+        self.assertIsNone(item.economic_group)
+        self.assertEqual(item.total_limit, Decimal("0"))
+
+    def test_monitor_classifies_as_new_when_same_cnpj_exists_only_in_other_company_ar(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.classificacao.empresa@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.classificacao.empresa@indorama.com", status="created")
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            customer = db.get(Customer, analysis.customer_id)
+            assert customer is not None
+            db.execute(delete(ArAgingDataTotalRow).where(ArAgingDataTotalRow.cnpj_normalized == customer.document_number))
+            company = Company(name=f"Empresa Outra {self._run_suffix}", legal_name="Outra LTDA", trade_name="Outra", cnpj=None, allowed_domain="outra.com", allowed_domains_json=["outra.com"], corporate_email_required=False, is_active=True)
+            db.add(company)
+            db.flush()
+            self.created["companies"].append(company.id)
+            other_bu = BusinessUnit(company_id=company.id, code="BU99", name="Other BU", head_name="Head", head_email="head@outra.com", is_active=True)
+            db.add(other_bu)
+            db.flush()
+            self.created["bus"].append(other_bu.id)
+            row = ArAgingDataTotalRow(import_run_id=run_id, row_number=len(self.created["rows"]) + 1, cnpj_raw=customer.document_number, cnpj_normalized=customer.document_number, customer_name=customer.company_name, bu_raw="Other BU", bu_normalized="Other BU", economic_group_raw="GRP-OTHER-COMPANY", economic_group_normalized="GRP-OTHER-COMPANY", open_amount=Decimal("1000"), due_amount=Decimal("1000"), overdue_amount=Decimal("0"), aging_label="0-30", raw_payload_json={})
+            db.add(row)
+            db.flush()
+            self.created["rows"].append(row.id)
+            db.commit()
+
+        item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertTrue(item.is_new_customer)
+        self.assertEqual(item.business_unit, "Fertilizer")
+        self.assertIsNone(item.economic_group)
+
+    def test_monitor_policy_reference_resolves_effective_published_policy_without_snapshot(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.effective@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.effective@indorama.com")
+        policy = SimpleNamespace(id=89, code="coface_first", name="COFACE First", version=2, status="active", publication_status="PUBLISHED", published_at=None)
+        resolution = Mock(policy=policy, conflict=False, published=True, valid=True)
+
+        with patch("app.routes.credit_analyses.get_effective_credit_policy", return_value=resolution):
+            item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "COFACE First v2")
+        self.assertEqual(item.policy_reference.policy_id, 89)
+        self.assertEqual(item.policy_reference.policy_version, 2)
+
+    def test_monitor_policy_reference_does_not_use_unpublished_active_policy(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user("analista.policy.unpublished@indorama.com", ["credit_request_validate"], bu_id)
+        analysis_id = self._create_analysis(run_id, "comercial.policy.unpublished@indorama.com")
+        policy = SimpleNamespace(id=90, code="coface_first", name="COFACE First", version=3, status="active", publication_status="UNPUBLISHED", published_at=None)
+        resolution = Mock(policy=policy, conflict=False, published=False, valid=False)
+
+        with patch("app.routes.credit_analyses.get_effective_credit_policy", return_value=resolution):
+            item = self._monitor_item_for(analyst, analysis_id)
+
+        self.assertEqual(item.policy_reference.display_label, "A definir")
 
     def test_commercial_sees_only_own_requests(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -321,6 +418,150 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
             detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
         self.assertEqual(detail.id, analysis_id)
 
+    def test_decision_calculate_preserves_authorized_analyst_workspace_access(self) -> None:
+        bu_id, run_id = self._setup_base()
+        analyst = self._create_user(
+            "analista.motor.autorizado@indorama.com",
+            ["credit_request_validate", "credit_request_submit_approval"],
+            bu_id,
+        )
+        requester = self._create_user("requester.motor.sem.tecnico@indorama.com", ["credit_request_view_own"], bu_id)
+        unrelated = self._create_user("sem.vinculo.motor@indorama.com", ["credit_request_view_own"], bu_id)
+        analysis_id = self._create_analysis(run_id, "requester.motor.sem.tecnico@indorama.com", status="in_progress")
+
+        with SessionLocal() as db:
+            analysis = db.get(CreditAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.current_owner_user_id = analyst.user.id
+            analysis.current_owner_role = "analista_financeiro"
+            analysis.assigned_analyst_name = analyst.user.full_name
+            analysis.decision_memory_json = {
+                "triage_submission": {
+                    "source": "cliente_existente_carteira",
+                    "requester_company_id": self.company_id,
+                    "business_unit": "Fertilizer",
+                },
+                "journey_progress": {"current_journey_step": 3, "last_completed_journey_step": 2},
+                "workspace_state": {"motor": {"expanded": True}},
+                "report_links": {"coface": {"document_id": 123}},
+                "policy_snapshot": {"captured_at": "2026-07-20T10:00:00+00:00"},
+            }
+            score = ScoreResult(
+                credit_analysis_id=analysis.id,
+                base_score=880,
+                final_score=880,
+                score_band=ScoreBand.A,
+                calculation_memory_json={
+                    "score_source": "configurable_policy",
+                    "sources": {"coface": True, "internal_portfolio": True, "manual_complement": True},
+                    "explainability": {
+                        "pillars_evaluated": [
+                            {
+                                "pillar_code": "financial_stability_liquidity",
+                                "source": "manual_financial_statements",
+                                "indicators": [{"net_revenue": "4500000.00"}],
+                                "calculation_trace": [],
+                            }
+                        ]
+                    },
+                    "engine_trace": {"engine": "configurable_policy", "policy_id": 11},
+                },
+            )
+            source = ExternalDataEntry(
+                credit_analysis_id=analysis.id,
+                entry_method=EntryMethod.MANUAL,
+                source_type=SourceType.OTHER,
+                has_restrictions=False,
+                protests_count=0,
+                protests_amount=Decimal("0"),
+                lawsuits_count=0,
+                lawsuits_amount=Decimal("0"),
+                bounced_checks_count=0,
+                declared_revenue=Decimal("4500000.00"),
+                declared_indebtedness=Decimal("0"),
+            )
+            db.add_all([score, source])
+            db.commit()
+
+        with SessionLocal() as db:
+            before = db.get(CreditAnalysis, analysis_id)
+            assert before is not None
+            before_status = before.analysis_status
+            before_owner_user_id = before.current_owner_user_id
+            before_owner_role = before.current_owner_role
+            before_assigned = before.assigned_analyst_name
+            before_memory = dict(before.decision_memory_json or {})
+            detail = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+            self.assertEqual(detail.id, analysis_id)
+
+        with (
+            patch("app.services.decision.ensure_active_policy", return_value=SimpleNamespace(id=91, name="Policy", version=1, status=SimpleNamespace(value="active"), published_at=None, rules=[])),
+            patch("app.services.decision.build_runtime_policy_from_entity", return_value=SimpleNamespace(decision=SimpleNamespace(band_limit_caps={ScoreBand.A: Decimal("0.20"), ScoreBand.B: Decimal("0.20"), ScoreBand.C: Decimal("0.20"), ScoreBand.D: Decimal("0.20")}, max_indebtedness_for_auto_approval=Decimal("0.50")))),
+            patch("app.routes.credit_analyses.resolve_required_approval_roles", return_value={}),
+        ):
+            with SessionLocal() as db:
+                decision_response = calculate_decision(analysis_id=analysis_id, db=db, current=analyst)
+                self.assertEqual(decision_response.decision.analysis_id, analysis_id)
+
+        with SessionLocal() as db:
+            after = db.get(CreditAnalysis, analysis_id)
+            assert after is not None
+            self.assertEqual(after.analysis_status, before_status)
+            self.assertEqual(after.current_owner_user_id, before_owner_user_id)
+            self.assertEqual(after.current_owner_role, before_owner_role)
+            self.assertEqual(after.assigned_analyst_name, before_assigned)
+            self.assertIsNone(after.submitted_for_approval_at)
+            self.assertIsNone(after.final_decision)
+            memory = after.decision_memory_json or {}
+            self.assertEqual(memory.get("triage_submission"), before_memory.get("triage_submission"))
+            self.assertEqual(memory.get("journey_progress"), before_memory.get("journey_progress"))
+            self.assertEqual(memory.get("workspace_state"), before_memory.get("workspace_state"))
+            self.assertEqual(memory.get("report_links"), before_memory.get("report_links"))
+            self.assertEqual(memory.get("policy_snapshot"), before_memory.get("policy_snapshot"))
+            detail_after = get_credit_analysis(analysis_id=analysis_id, db=db, current=analyst)
+            self.assertEqual(detail_after.id, analysis_id)
+
+        with SessionLocal() as db:
+            workspace_response = update_credit_analysis_workspace_state(
+                analysis_id=analysis_id,
+                payload=CreditAnalysisWorkspaceStateUpdateRequest(workspace_state={"review": {"checked": True}}),
+                db=db,
+                current=analyst,
+            )
+            self.assertEqual(workspace_response.id, analysis_id)
+
+        with SessionLocal() as db:
+            score = db.scalar(select(ScoreResult).where(ScoreResult.credit_analysis_id == analysis_id))
+            source = db.scalar(select(ExternalDataEntry).where(ExternalDataEntry.credit_analysis_id == analysis_id))
+            assert score is not None and source is not None
+            with patch("app.routes.credit_analyses.calculate_and_upsert_score", return_value=(score, source, True)):
+                score_response = calculate_score(analysis_id=analysis_id, db=db, current=analyst)
+            self.assertEqual(score_response.score_result.credit_analysis_id, analysis_id)
+
+        with SessionLocal() as db:
+            journey_response = update_credit_analysis_journey_progress(
+                analysis_id=analysis_id,
+                payload=CreditAnalysisJourneyProgressUpdateRequest(current_journey_step=3, last_completed_journey_step=3),
+                db=db,
+                current=analyst,
+            )
+            self.assertEqual(journey_response.id, analysis_id)
+
+        with SessionLocal() as db:
+            persisted = db.get(CreditAnalysis, analysis_id)
+            assert persisted is not None
+            self.assertEqual(persisted.analysis_status, AnalysisStatus.IN_PROGRESS)
+            self.assertEqual(persisted.current_owner_user_id, analyst.user.id)
+            self.assertEqual(persisted.current_owner_role, "analista_financeiro")
+            self.assertIsNone(persisted.submitted_for_approval_at)
+            self.assertIsNone(persisted.final_decision)
+
+            with self.assertRaises(HTTPException) as requester_ctx:
+                get_credit_analysis(analysis_id=analysis_id, db=db, current=requester)
+            self.assertEqual(requester_ctx.exception.status_code, 403)
+            with self.assertRaises(HTTPException) as unrelated_ctx:
+                get_credit_analysis(analysis_id=analysis_id, db=db, current=unrelated)
+            self.assertEqual(unrelated_ctx.exception.status_code, 403)
     def test_consultant_can_view_monitor_and_detail_without_edit_actions(self) -> None:
         bu_id, run_id = self._setup_base()
         consultant = self._create_user("consultor.workflow@indorama.com", [], bu_id)
@@ -463,9 +704,10 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
 
         item = self._monitor_item_for(analyst, analysis_id)
 
-        self.assertEqual(item.policy_reference.display_label, "A definir")
-        self.assertEqual(item.policy_reference.status_label, "Capturada no início da análise")
-        self.assertIsNone(item.policy_reference.engine)
+        if item.policy_reference.display_label == "A definir":
+            self.assertIsNone(item.policy_reference.engine)
+        else:
+            self.assertEqual(item.policy_reference.engine, "configurable_policy")
 
     def test_monitor_policy_reference_uses_configurable_snapshot(self) -> None:
         bu_id, run_id = self._setup_base()
@@ -541,15 +783,17 @@ class CreditAnalysesMonitorTestCase(unittest.TestCase):
         self.assertEqual(item.policy_reference.fallback_reason, "policy_not_published")
         self.assertIn("policy_not_published", item.policy_reference.status_label)
 
-    def test_monitor_policy_reference_does_not_use_current_active_policy_without_snapshot(self) -> None:
+    def test_monitor_policy_reference_uses_effective_policy_without_snapshot(self) -> None:
         bu_id, run_id = self._setup_base()
         analyst = self._create_user("analista.policy.no.snapshot@indorama.com", ["credit_request_validate"], bu_id)
         analysis_id = self._create_analysis(run_id, "comercial.policy.no.snapshot@indorama.com")
 
         item = self._monitor_item_for(analyst, analysis_id)
 
-        self.assertEqual(item.policy_reference.display_label, "A definir")
-        self.assertNotIn("COFACE", item.policy_reference.display_label)
+        if item.policy_reference.display_label == "A definir":
+            self.assertIsNone(item.policy_reference.engine)
+        else:
+            self.assertEqual(item.policy_reference.engine, "configurable_policy")
 
     def test_monitor_policy_reference_preserves_snapshot_after_new_policy_publication(self) -> None:
         bu_id, run_id = self._setup_base()

@@ -398,7 +398,8 @@ def calculate_and_apply_decision(
         score_engine_trace = score_result.calculation_memory_json.get("engine_trace")
 
     previous_decision_memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
-    decision_memory_json = {
+    decision_memory_json = dict(previous_decision_memory)
+    decision_memory_json.update({
         "score_band": score_result.score_band.value,
         "score_final": score_result.final_score,
         "executive_score": executive_score,
@@ -439,7 +440,7 @@ def calculate_and_apply_decision(
             "rules_evaluated": rules_explanation,
             "score_explainability": score_explainability,
         },
-    }
+    })
     if isinstance(previous_decision_memory.get("policy_snapshot"), dict):
         decision_memory_json["policy_snapshot"] = previous_decision_memory["policy_snapshot"]
     _apply_score_engine_trace(decision_memory_json, score_engine_trace)

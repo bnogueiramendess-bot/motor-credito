@@ -34,6 +34,7 @@ from app.models.user import User
 from app.models.role import Role
 from app.models.user_workflow_role import UserWorkflowRole
 from app.models.workflow_role import WorkflowRole
+from app.services.workflow_roles import canonical_workflow_role_code
 from app.models.workflow_approval_decision import WorkflowApprovalDecision
 from app.models.workflow_approval_step import WorkflowApprovalStep
 from app.models.user_business_unit_scope import UserBusinessUnitScope
@@ -118,6 +119,8 @@ from app.services.approval_matrix import resolve_required_approval_roles
 from app.services.workflow_transition_engine import resolve_credit_workflow_transition
 from app.services.workflow_approval import list_latest_approval_steps
 from app.services.credit_decision_policy_publication import list_policy_approval_queue_items
+from app.services.effective_credit_policy import get_effective_credit_policy
+from app.services.monitor_customer_portfolio import resolve_monitor_customer_portfolio
 from app.services.committee_sessions import (
     CommitteeSessionError,
     CommitteeSessionPermissionError,
@@ -672,12 +675,14 @@ def _build_approval_flow_summary(
         "analysis_approval_step_approved": "approved",
     }
     def role_label_from_code(code: str) -> str:
-        role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == code, WorkflowRole.is_active.is_(True)))
+        lookup_code = canonical_workflow_role_code(code)
+        role = db.scalar(select(WorkflowRole).where(WorkflowRole.code == lookup_code, WorkflowRole.is_active.is_(True)))
         if role and role.name and role.name.strip():
             return role.name.strip()
         return code
 
     def resolve_users_for_role(role_code: str) -> list[dict]:
+        lookup_code = canonical_workflow_role_code(role_code)
         if not business_unit:
             bu_id = None
         else:
@@ -694,7 +699,7 @@ def _build_approval_flow_summary(
             .join(WorkflowRole, WorkflowRole.id == UserWorkflowRole.workflow_role_id)
             .join(Role, Role.id == User.role_id)
             .where(
-                WorkflowRole.code == role_code,
+                WorkflowRole.code == lookup_code,
                 WorkflowRole.is_active.is_(True),
                 User.company_id == current.user.company_id,
                 User.is_active.is_(True),
@@ -1305,7 +1310,30 @@ def _policy_reference_from_payload(payload: dict, *, source: str) -> CreditAnaly
     return _policy_reference_unidentified()
 
 
-def _resolve_policy_reference(analysis: CreditAnalysis) -> CreditAnalysisPolicyReference:
+def _policy_reference_from_effective_policy(db: Session, analysis: CreditAnalysis) -> CreditAnalysisPolicyReference:
+    resolution = get_effective_credit_policy(db, company_id=None, analysis_date=getattr(analysis, "created_at", None))
+    if resolution.policy is None or resolution.conflict or not resolution.published or not resolution.valid:
+        return CreditAnalysisPolicyReference(
+            engine=None,
+            display_label="A definir",
+            status_label="Sem política ativa e publicada aplicável.",
+        )
+    return _policy_reference_from_payload(
+        {
+            "engine": "configurable_policy",
+            "policy_id": resolution.policy.id,
+            "policy_code": resolution.policy.code,
+            "policy_name": resolution.policy.name,
+            "policy_version": resolution.policy.version,
+            "policy_status": resolution.policy.status,
+            "publication_status": resolution.policy.publication_status,
+            "captured_at": resolution.policy.published_at.isoformat() if resolution.policy.published_at else None,
+        },
+        source="effective_policy",
+    )
+
+
+def _resolve_policy_reference(db: Session, analysis: CreditAnalysis) -> CreditAnalysisPolicyReference:
     memory = analysis.decision_memory_json if isinstance(analysis.decision_memory_json, dict) else {}
     snapshot = memory.get("policy_snapshot")
     if isinstance(snapshot, dict):
@@ -1324,14 +1352,7 @@ def _resolve_policy_reference(analysis: CreditAnalysis) -> CreditAnalysisPolicyR
             payload["fallback_reason"] = memory.get("fallback_reason")
         return _policy_reference_from_payload(payload, source="score_source")
 
-    if analysis.analysis_status == AnalysisStatus.CREATED and analysis.analysis_started_at is None:
-        return CreditAnalysisPolicyReference(
-            engine=None,
-            display_label="A definir",
-            status_label="Capturada no início da análise",
-        )
-
-    return _policy_reference_unidentified()
+    return _policy_reference_from_effective_policy(db, analysis)
 
 
 def _clamp_journey_step(step: int | None) -> int | None:
@@ -3113,45 +3134,12 @@ def list_credit_analyses_monitor(
     for analysis, customer in rows:
         if _is_step1_draft(analysis):
             continue
-        latest_run_id = db.scalar(
-            select(ArAgingDataTotalRow.import_run_id)
-            .join(ArAgingImportRun, ArAgingImportRun.id == ArAgingDataTotalRow.import_run_id)
-            .where(
-                ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
-                ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
-            )
-            .order_by(ArAgingDataTotalRow.import_run_id.desc())
-            .limit(1)
+        portfolio = resolve_monitor_customer_portfolio(
+            db,
+            cnpj=customer.document_number,
+            company_id=current.user.company_id,
         )
-        if latest_run_id is None:
-            portfolio = (None, None, Decimal("0"))
-        else:
-            portfolio_base = db.execute(
-                select(
-                    func.max(ArAgingDataTotalRow.bu_normalized),
-                    func.max(ArAgingDataTotalRow.economic_group_normalized),
-                ).where(
-                    ArAgingDataTotalRow.import_run_id == latest_run_id,
-                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
-                )
-            ).one()
-            group_keys_subquery = (
-                select(ArAgingDataTotalRow.economic_group_normalized)
-                .where(
-                    ArAgingDataTotalRow.import_run_id == latest_run_id,
-                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
-                    ArAgingDataTotalRow.economic_group_normalized.is_not(None),
-                )
-                .distinct()
-            )
-            approved_credit_total = db.scalar(
-                select(func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0)).where(
-                    ArAgingGroupConsolidatedRow.import_run_id == latest_run_id,
-                    ArAgingGroupConsolidatedRow.economic_group_normalized.in_(group_keys_subquery),
-                )
-            )
-            portfolio = (portfolio_base[0], portfolio_base[1], approved_credit_total or Decimal("0"))
-        bu_name = portfolio[0]
+        bu_name = portfolio.business_unit
 
         triage_data = {}
         if isinstance(analysis.decision_memory_json, dict):
@@ -3182,7 +3170,7 @@ def list_credit_analyses_monitor(
             requester_name = requester_email
 
         is_early = bool(triage_data.get("is_early_review_request"))
-        is_new_customer = not bool(bu_name)
+        is_new_customer = not portfolio.is_existing_customer
         has_recent = bool(triage_data.get("has_recent_analysis"))
         available_actions = resolve_credit_workflow_available_actions(
             db,
@@ -3213,7 +3201,7 @@ def list_credit_analyses_monitor(
             protocol=analysis.protocol_number,
             customer_name=customer.company_name,
             cnpj=customer.document_number,
-            economic_group=portfolio[1],
+            economic_group=portfolio.economic_group,
             business_unit=bu_name,
             requester_name=requester_name,
             assigned_analyst_name=analysis.assigned_analyst_name,
@@ -3233,7 +3221,7 @@ def list_credit_analyses_monitor(
             recommended_limit=_resolve_recommended_limit_from_memory(analysis),
             financial_impact=_resolve_financial_impact(analysis),
             suggested_limit=analysis.suggested_limit,
-            total_limit=portfolio[2] or Decimal("0"),
+            total_limit=portfolio.approved_credit_total,
             approved_limit=analysis.final_limit,
             is_new_customer=is_new_customer,
             is_early_review_request=is_early,
@@ -3243,7 +3231,7 @@ def list_credit_analyses_monitor(
             aging_days=aging_days,
             stage_aging_days=stage_aging_days,
             next_responsible_role=next_role,
-            policy_reference=_resolve_policy_reference(analysis),
+            policy_reference=_resolve_policy_reference(db, analysis),
             available_actions=sorted(set(available_actions)),
         )
         items.append(item)
@@ -3363,45 +3351,12 @@ def list_credit_analyses_approval_queue(
         if not classification_snapshot:
             _attach_recommendation_classification(db, analysis)
 
-        latest_run_id = db.scalar(
-            select(ArAgingDataTotalRow.import_run_id)
-            .join(ArAgingImportRun, ArAgingImportRun.id == ArAgingDataTotalRow.import_run_id)
-            .where(
-                ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
-                ArAgingImportRun.status.in_(["valid", "valid_with_warnings"]),
-            )
-            .order_by(ArAgingDataTotalRow.import_run_id.desc())
-            .limit(1)
+        portfolio = resolve_monitor_customer_portfolio(
+            db,
+            cnpj=customer.document_number,
+            company_id=current.user.company_id,
         )
-        if latest_run_id is None:
-            portfolio = (None, None, Decimal("0"))
-        else:
-            portfolio_base = db.execute(
-                select(
-                    func.max(ArAgingDataTotalRow.bu_normalized),
-                    func.max(ArAgingDataTotalRow.economic_group_normalized),
-                ).where(
-                    ArAgingDataTotalRow.import_run_id == latest_run_id,
-                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
-                )
-            ).one()
-            group_keys_subquery = (
-                select(ArAgingDataTotalRow.economic_group_normalized)
-                .where(
-                    ArAgingDataTotalRow.import_run_id == latest_run_id,
-                    ArAgingDataTotalRow.cnpj_normalized == customer.document_number,
-                    ArAgingDataTotalRow.economic_group_normalized.is_not(None),
-                )
-                .distinct()
-            )
-            approved_credit_total = db.scalar(
-                select(func.coalesce(func.sum(ArAgingGroupConsolidatedRow.approved_credit_amount), 0)).where(
-                    ArAgingGroupConsolidatedRow.import_run_id == latest_run_id,
-                    ArAgingGroupConsolidatedRow.economic_group_normalized.in_(group_keys_subquery),
-                )
-            )
-            portfolio = (portfolio_base[0], portfolio_base[1], approved_credit_total or Decimal("0"))
-        bu_name = portfolio[0]
+        bu_name = portfolio.business_unit
         triage_data = {}
         if isinstance(analysis.decision_memory_json, dict):
             triage_data = (analysis.decision_memory_json.get("triage_submission") or {}) if isinstance(analysis.decision_memory_json.get("triage_submission"), dict) else {}
@@ -3483,7 +3438,7 @@ def list_credit_analyses_approval_queue(
             protocol=analysis.protocol_number,
             customer_name=customer.company_name,
             cnpj=customer.document_number,
-            economic_group=portfolio[1],
+            economic_group=portfolio.economic_group,
             business_unit=bu_name,
             requester_name=requester_name,
             assigned_analyst_name=analyst_name,
@@ -3499,9 +3454,9 @@ def list_credit_analyses_approval_queue(
             recommended_limit=_resolve_recommended_limit_from_memory(analysis),
             financial_impact=_resolve_financial_impact(analysis),
             suggested_limit=analysis.suggested_limit,
-            total_limit=portfolio[2] or Decimal("0"),
+            total_limit=portfolio.approved_credit_total,
             approved_limit=analysis.final_limit,
-            is_new_customer=not bool(bu_name),
+            is_new_customer=not portfolio.is_existing_customer,
             is_early_review_request=bool(triage_data.get("is_early_review_request")),
             has_recent_analysis=bool(triage_data.get("has_recent_analysis")),
             created_at=analysis.created_at,
@@ -3518,7 +3473,7 @@ def list_credit_analyses_approval_queue(
             approval_escalated_to_committee=approval_summary.approval_escalated_to_committee,
             approval_sla_label=approval_summary.approval_sla_label,
             approval_started_at=approval_summary.approval_started_at,
-            policy_reference=_resolve_policy_reference(analysis),
+            policy_reference=_resolve_policy_reference(db, analysis),
             available_actions=available_actions,
         )
         items.append(item)
@@ -4295,6 +4250,7 @@ def apply_analysis_final_decision(
             },
         )
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if not transition.allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=transition.workflow_context.get("denial_reason") or "Sem permissao.")
@@ -4418,6 +4374,7 @@ def execute_workflow_action(
             payload={"justification": payload.justification},
         )
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if not transition.allowed:
         denial_type = transition.workflow_context.get("denial_type")
