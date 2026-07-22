@@ -363,6 +363,10 @@ export async function listWorkflowRoles() {
   return apiClient.get<WorkflowRoleDto[]>("/api/admin/workflow-roles");
 }
 
+export async function listUserWorkflowRoleOptions() {
+  return apiClient.get<WorkflowRoleDto[]>("/api/admin/users/workflow-role-options");
+}
+
 export async function updateAdminUser(id: number, payload: UpdateAdminUserPayload) {
   return apiClient.patch<AdminUserDto, UpdateAdminUserPayload>(`/api/admin/users/${id}`, payload);
 }

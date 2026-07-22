@@ -12,7 +12,9 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
         ghost: "hover:bg-accent hover:text-accent-foreground",
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        success: "bg-emerald-600 text-white hover:bg-emerald-700 focus-visible:ring-emerald-600 disabled:bg-emerald-200 disabled:text-emerald-950",
+        warning: "bg-amber-700 text-white hover:bg-amber-800 focus-visible:ring-amber-700 disabled:bg-amber-200 disabled:text-amber-950"
       },
       size: {
         default: "h-10 px-4 py-2",

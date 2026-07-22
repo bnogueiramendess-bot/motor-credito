@@ -10,7 +10,7 @@ import { useInviteAdminUserMutation } from "@/features/admin/hooks/use-invite-ad
 import { useRegenerateAdminUserInviteTokenMutation } from "@/features/admin/hooks/use-regenerate-admin-user-invite-token-mutation";
 import { useUpdateAdminUserMutation } from "@/features/admin/hooks/use-update-admin-user-mutation";
 import { useUpdateAdminUserStatusMutation } from "@/features/admin/hooks/use-update-admin-user-status-mutation";
-import { useWorkflowRolesQuery } from "@/features/admin/hooks/use-workflow-roles-query";
+import { useUserWorkflowRoleOptionsQuery } from "@/features/admin/hooks/use-user-workflow-role-options-query";
 import { ApiError } from "@/shared/lib/http/http-client";
 import { cn } from "@/shared/lib/utils";
 
@@ -30,7 +30,7 @@ export function AdminUsersPageView() {
   const updateUserMutation = useUpdateAdminUserMutation();
   const updateUserStatusMutation = useUpdateAdminUserStatusMutation();
   const regenerateTokenMutation = useRegenerateAdminUserInviteTokenMutation();
-  const workflowRolesQuery = useWorkflowRolesQuery();
+  const workflowRolesQuery = useUserWorkflowRoleOptionsQuery();
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -62,6 +62,10 @@ export function AdminUsersPageView() {
       governance: (workflowRolesQuery.data ?? []).filter((role) => role.type === "governance" || role.type === "approval"),
       approval: []
     }),
+    [workflowRolesQuery.data]
+  );
+  const workflowRoleOptionCodes = useMemo(
+    () => new Set((workflowRolesQuery.data ?? []).map((role) => role.code)),
     [workflowRolesQuery.data]
   );
   const workflowRoleTypeByCode = useMemo(() => {
@@ -222,7 +226,13 @@ export function AdminUsersPageView() {
     setEmail(user.email);
     setPhone(user.phone ?? "");
     setSelectedBuIds(user.business_unit_ids);
-    setSelectedWorkflowRoleCodes(user.workflow_role_codes.filter((code) => !DISCONTINUED_OPERATIONAL_WORKFLOW_ROLE_CODES.has(code)));
+    setSelectedWorkflowRoleCodes(
+      user.workflow_role_codes.filter(
+        (code) =>
+          !DISCONTINUED_OPERATIONAL_WORKFLOW_ROLE_CODES.has(code) &&
+          (workflowRoleOptionCodes.size === 0 || workflowRoleOptionCodes.has(code))
+      )
+    );
     setIsAdministrator(user.is_administrator);
     setCanImportArAging(user.can_import_ar_aging);
     setOpenDrawer(true);

@@ -10,7 +10,7 @@ import { checkExistingCreditAnalysis, createCommercialReference, createCreditAna
 import { AgriskImportStatus, AgriskReportReadResponse, AgriskReportType, AnalysisDocumentDto, AnalysisJourneySubmitRequest, AnalysisReportReadSummaryDto, CofaceReportReadResponse, CommercialReference, CreditAnalysisDraftRecoveryResponse, CreditAnalysisExistingCheckResponse, CreditAnalysisTriageSubmitRequest, CreditAnalysisTriageResponse, UploadFileMetadataInput } from "@/features/analysis-journey/api/contracts";
 import { InstitutionalScoreCard } from "@/features/analysis-journey/components/institutional-score-card";
 import { RecommendationInsightsCard } from "@/features/analysis-journey/components/recommendation-insights-card";
-import { ApprovalWorkflowCard } from "@/features/credit-analyses/components/approval-workflow-card";
+import { ApprovalWorkflowActionBar, ApprovalWorkflowCard, useApprovalWorkflowController } from "@/features/credit-analyses/components/approval-workflow-card";
 import { getCreditAnalysisWorkspaceRoute } from "@/features/credit-analyses/utils/routes";
 import { calculateCreditAnalysisDecision, calculateCreditAnalysisScore, executeCreditAnalysisWorkflowAction, getCreditAnalysisDetail, resetCreditAnalysisOperationalData, startCreditAnalysis, updateCreditAnalysisJourneyProgress, updateCreditAnalysisWorkspaceState } from "@/features/credit-analyses/api/credit-analyses.api";
 import type { ScorePillarItemDto, ScorePillarsDto } from "@/features/credit-analyses/api/contracts";
@@ -1295,6 +1295,8 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       setApprovalSubmissionSuccessModalOpen(true);
     },
     onError: (error: Error) => {
+      setStep(4);
+      setApprovalSubmissionSuccessModalOpen(false);
       const message = error.message || "";
       if (message.includes("403")) {
         setStepError("Você não possui autorização para enviar esta solicitação para aprovação.");
@@ -1911,7 +1913,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
       }
       if (isWorkspaceMode && activeAnalysisId) {
         const lastCompleted = Math.max(1, targetStep - 1);
-        persistJourneyProgressMutation.mutate({ id: activeAnalysisId, currentStep: targetStep, lastCompletedStep: lastCompleted });
+        await persistJourneyProgressMutation.mutateAsync({ id: activeAnalysisId, currentStep: targetStep, lastCompletedStep: lastCompleted });
       }
       return { advanced: true };
     } catch (error) {
@@ -2604,7 +2606,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const submitBlockingError = isOperationalSubmitOnlyFlow
     ? (validateStep(1) ?? (toNumberInput(analysis.requestedLimit) <= 0 ? "Preencha Limite solicitado com valor maior que zero." : null))
     : (validateStep(1) ?? validateStep(2) ?? validateStep(3));
-  const canSubmitForApproval = isWorkspaceMode && workflowAvailableActions.includes("submit_approval");
+  const backendAdvertisesSubmitApproval = workflowAvailableActions.includes("submit_approval") || workflowAvailableActions.includes("submit_for_approval");
   const technicalDossierStatus = workspaceDetailQuery.data?.analysis?.technical_dossier_status ?? null;
   const hasCanonicalTechnicalDecision =
     technicalDossierStatus?.is_completed === true &&
@@ -2613,7 +2615,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const shouldShowTechnicalPendingGuidance =
     isWorkspaceMode &&
     step === 4 &&
-    !canSubmitForApproval &&
+    !backendAdvertisesSubmitApproval &&
     Boolean(technicalDossierStatus) &&
     technicalDossierStatus?.is_completed === false;
   const isTechnicalDossierCalculationPending = calculateTechnicalDossierMutation.isPending || isStep3AdvancePending;
@@ -2964,6 +2966,27 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
   const approvalFlowSummary = workspaceDetailQuery.data?.approval_flow_summary ?? null;
   const approvalFlowState = approvalFlowSummary?.flow_state ?? approvalFlowSummary?.approval_flow_state ?? "not_submitted";
   const dossierApprovalActions = Array.from(new Set([...(workspaceDetailQuery.data?.analysis?.available_actions ?? []), ...(approvalFlowSummary?.available_actions ?? [])]));
+  const approvalWorkflowController = useApprovalWorkflowController(activeAnalysisId);
+  const hasActiveApprovalStep = Boolean(
+    approvalFlowSummary?.current_approval_step ||
+    approvalFlowSummary?.approval_progress?.some((item) => ["active", "in_committee"].includes(item.status.toLowerCase()))
+  );
+  const hasSubmittedForApproval = Boolean(workspaceDetailQuery.data?.analysis?.submitted_for_approval_at || approvalFlowSummary?.submitted_for_approval_at);
+  const isApprovalExperience =
+    internalOperationalStatus === "in_approval" ||
+    approvalFlowState === "in_approval" ||
+    hasActiveApprovalStep ||
+    hasSubmittedForApproval;
+  const canSubmitForApproval =
+    isWorkspaceMode &&
+    step === 4 &&
+    hasValidActiveAnalysisId &&
+    backendAdvertisesSubmitApproval &&
+    !isApprovalExperience;
+  const showAnalystSubmissionFooter =
+    step === 4 &&
+    !isOperationalSubmitOnlyFlow &&
+    (!isWorkspaceMode || (!isApprovalExperience && (backendAdvertisesSubmitApproval || technicalDossierStatus?.is_completed === false)));
   const executiveExposureFullyCovered = executiveNetInternalExposure !== null && executiveNetInternalExposure === 0;
   const executiveExposureHasResidual = executiveNetInternalExposure !== null && executiveNetInternalExposure > 0;
   const executiveInternalSuggestedLimit = backendFinalSuggestedLimit;
@@ -4891,6 +4914,13 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </div>
             </div>
           </section>
+          <ApprovalWorkflowActionBar
+            summary={approvalFlowSummary}
+            availableActions={dossierApprovalActions}
+            mode="decision"
+            controller={approvalWorkflowController}
+            analysisStatus={internalOperationalStatus}
+          />
           <div className="mt-5 grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1.68fr)_minmax(320px,0.78fr)]">
             <div className="self-start space-y-3">
               {(() => {
@@ -5200,7 +5230,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 </div>
               </article>
               {approvalFlowSummary && activeAnalysisId ? (
-                <ApprovalWorkflowCard analysisId={activeAnalysisId} summary={approvalFlowSummary} availableActions={dossierApprovalActions} />
+                <ApprovalWorkflowCard analysisId={activeAnalysisId} summary={approvalFlowSummary} availableActions={dossierApprovalActions} controller={approvalWorkflowController} />
               ) : null}
               <article className="flex min-h-[214px] self-start flex-col rounded-[22px] border border-[#e5edf6] bg-[linear-gradient(180deg,#ffffff_0%,#f9fbff_100%)] px-5 py-5 shadow-[0_6px_14px_rgba(10,29,64,.04)]">
                 <div>
@@ -5329,7 +5359,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             </div>
           ) : null}
         </div>
-      ) : step === 4 && !isOperationalSubmitOnlyFlow ?(
+      ) : showAnalystSubmissionFooter ?(
         <div className="mt-2 border-t border-[#D7E1EC] bg-white px-7 py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-[11px] text-[#8FA3B4]">
@@ -5344,16 +5374,14 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
                 Voltar
               </button>
               {isWorkspaceMode ? (
-                canSubmitForApproval ? (
-                  <button
-                    type="button"
-                    onClick={submitForApproval}
-                    disabled={isSubmitPending}
-                    className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
-                  >
-                    {isSubmitPending ? "Enviando..." : "Enviar para aprovação"}
-                  </button>
-                ) : null
+                <button
+                  type="button"
+                  onClick={submitForApproval}
+                  disabled={!canSubmitForApproval || isSubmitPending}
+                  className="rounded-[8px] bg-[#1EBD6A] px-6 py-2 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:bg-[#D7E1EC] disabled:text-[#8FA3B4]"
+                >
+                  {isSubmitPending ? "Enviando..." : "Submeter para aprovação"}
+                </button>
               ) : (
                 <button
                   type="button"
@@ -5380,7 +5408,7 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
             </div>
           ) : null}
         </div>
-      ) : (
+      ) : step !== 4 ? (
         <div className="flex items-center justify-between rounded-[10px] border border-[#e2e5eb] bg-white p-3">
           <button type="button" onClick={() => setStep((prev) => Math.max(1, prev - 1))} disabled={step === 1} className="rounded-[6px] border border-[#d1d5db] px-3 py-2 text-[12px] text-[#374151] disabled:opacity-50">
             Voltar
@@ -5401,18 +5429,16 @@ export function NewAnalysisPageView({ mode = "create", analysisId }: NewAnalysis
               </button>
             )
           ) : isWorkspaceMode ? (
-            canSubmitForApproval ? (
-              <button type="button" onClick={submitForApproval} disabled={isSubmitPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
-                {isSubmitPending ? "Enviando..." : "Enviar para aprovação"}
-              </button>
-            ) : null
+            <button type="button" onClick={submitForApproval} disabled={!canSubmitForApproval || isSubmitPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
+              {isSubmitPending ? "Enviando..." : "Submeter para aprovação"}
+            </button>
           ) : (
             <button type="button" onClick={submit} disabled={isSubmitPending} className="rounded-[6px] bg-[#059669] px-3 py-2 text-[12px] font-medium text-white disabled:opacity-50">
               {isSubmitPending ?"Enviando..." : "Submeter solicitação"}
             </button>
           )}
         </div>
-      )}
+      ) : null}
       </div>
       {approvalSubmissionSuccessModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-md [animation:overlayFadeIn_.18s_ease-out]">

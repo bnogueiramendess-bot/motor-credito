@@ -1,6 +1,7 @@
 export const adminQueryKeys = {
   users: ["admin", "users"] as const,
   workflowRoles: ["admin", "workflow-roles"] as const,
+  userWorkflowRoleOptions: ["admin", "user-workflow-role-options"] as const,
   approvalMatrix: ["admin", "approval-matrix"] as const,
   approvalMatrixNextCode: ["admin", "approval-matrix-next-code"] as const,
   approvalMatrixOptions: ["admin", "approval-matrix-options"] as const,
